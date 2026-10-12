@@ -21,6 +21,12 @@ pub struct EventLine {
     pub active_modifiers: Vec<&'static str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub button: Option<&'static str>,
+    /// ScreenForge extension on key events: text caret position (global points) right after
+    /// the key, when the focused app exposes it through Accessibility.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub caret_x: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub caret_y: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub character: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -283,9 +289,13 @@ mod imp {
                 _ => {}
             }
             let is_mouse = ev.x.is_some();
+            // on key-up the character is in place, so the caret sits where typing continues
+            let caret = if ev.kind == "keyUp" && self.session.is_some() { crate::caret::caret_position() } else { None };
             self.write(EventLine {
                 active_modifiers: ev.modifiers,
                 button: ev.button,
+                caret_x: caret.map(|c| c.0),
+                caret_y: caret.map(|c| c.1),
                 character: ev.character,
                 cursor_id: is_mouse.then(|| self.cursor_id.clone()),
                 is_a_repeat: ev.is_repeat,
@@ -312,6 +322,8 @@ mod imp {
             self.write(EventLine {
                 active_modifiers: Vec::new(),
                 button,
+                caret_x: None,
+                caret_y: None,
                 character: None,
                 cursor_id: Some(self.cursor_id.clone()),
                 is_a_repeat: None,
@@ -495,6 +507,8 @@ mod tests {
         f.push(&EventLine {
             active_modifiers: vec!["shift"],
             button: None,
+            caret_x: None,
+            caret_y: None,
             character: None,
             cursor_id: Some("arrow".into()),
             is_a_repeat: None,
@@ -508,6 +522,8 @@ mod tests {
         f.push(&EventLine {
             active_modifiers: vec![],
             button: Some("left"),
+            caret_x: None,
+            caret_y: None,
             character: None,
             cursor_id: Some("arrow".into()),
             is_a_repeat: None,

@@ -31,6 +31,8 @@ pub enum Permission {
     ScreenRecording,
     InputMonitoring,
     Microphone,
+    /// Optional: lets automatic zooms follow the text caret while typing.
+    Accessibility,
 }
 
 #[cfg(target_os = "macos")]
@@ -176,12 +178,25 @@ pub fn request_microphone() -> PermissionStatus {
     imp::request_microphone()
 }
 
+/// Accessibility permission (`AXIsProcessTrusted`), used to read the text caret while typing.
+pub fn accessibility() -> PermissionStatus {
+    if !cfg!(target_os = "macos") {
+        return PermissionStatus::Unsupported;
+    }
+    if crate::caret::accessibility_trusted() { PermissionStatus::Granted } else { PermissionStatus::NotDetermined }
+}
+/// Prompt for Accessibility (macOS shows its own dialog that links to System Settings).
+pub fn request_accessibility() -> PermissionStatus {
+    if crate::caret::request_accessibility() { PermissionStatus::Granted } else { PermissionStatus::Denied }
+}
+
 /// Open System Settings on the privacy pane for `permission`.
 pub fn open_settings(permission: Permission) -> std::io::Result<()> {
     let anchor = match permission {
         Permission::ScreenRecording => "Privacy_ScreenCapture",
         Permission::InputMonitoring => "Privacy_ListenEvent",
         Permission::Microphone => "Privacy_Microphone",
+        Permission::Accessibility => "Privacy_Accessibility",
     };
     let url = format!("x-apple.systempreferences:com.apple.preference.security?{anchor}");
     if cfg!(target_os = "macos") {

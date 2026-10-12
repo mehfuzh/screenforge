@@ -35,6 +35,7 @@
 //! [`Error::Unsupported`] there. Camera (`webcam`) recording is not implemented yet.
 
 pub mod audio;
+pub mod caret;
 pub mod clock;
 pub mod config;
 pub mod cursor;

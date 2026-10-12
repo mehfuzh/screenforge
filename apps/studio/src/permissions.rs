@@ -1,5 +1,5 @@
 //! First-launch permissions window: asks for Screen Recording (required), Input Monitoring
-//! (cursor and clicks) and Microphone, like Screen Studio's onboarding. Shown in its own
+//! (cursor and clicks), Microphone and Accessibility (zooms follow typing), like Screen Studio's onboarding. Shown in its own
 //! viewport centred on the screen because the picker window is only a thin bar.
 
 use egui::{vec2, Align2, Color32, CornerRadius, FontId, RichText, Stroke};
@@ -12,10 +12,12 @@ pub struct PermissionsSetup {
     last_poll: f64,
     /// Fixed once so the window does not move after the first frame.
     pos: Option<egui::Pos2>,
-    status: [PermissionStatus; 3],
+    status: [PermissionStatus; 4],
+    /// The Accessibility prompt was shown once; later clicks open System Settings.
+    ax_prompted: bool,
 }
 
-const SIZE: egui::Vec2 = vec2(460.0, 566.0);
+const SIZE: egui::Vec2 = vec2(460.0, 660.0);
 
 impl PermissionsSetup {
     /// True when a recording could not work yet.
@@ -28,15 +30,15 @@ impl PermissionsSetup {
         if !p::screen_recording().is_granted() {
             let _ = p::request_screen_recording();
         }
-        PermissionsSetup { last_poll: 0.0, pos: None, status: Self::poll() }
+        PermissionsSetup { last_poll: 0.0, pos: None, status: Self::poll(), ax_prompted: false }
     }
 
-    fn poll() -> [PermissionStatus; 3] {
+    fn poll() -> [PermissionStatus; 4] {
         // SF_SHOW_PERMISSIONS=denied: UI test for the not-granted layout
         if std::env::var("SF_SHOW_PERMISSIONS").as_deref() == Ok("denied") {
-            return [PermissionStatus::Denied, PermissionStatus::Denied, PermissionStatus::NotDetermined];
+            return [PermissionStatus::Denied, PermissionStatus::Denied, PermissionStatus::NotDetermined, PermissionStatus::NotDetermined];
         }
-        [p::screen_recording(), p::input_monitoring(), p::microphone()]
+        [p::screen_recording(), p::input_monitoring(), p::microphone(), p::accessibility()]
     }
 
     /// Returns true when the window should close.
@@ -70,6 +72,7 @@ impl PermissionsSetup {
                     (Permission::ScreenRecording, widgets::Icon::Display, "Screen Recording", "Required to capture the display or a window.", self.status[0]),
                     (Permission::InputMonitoring, widgets::Icon::Cursor, "Input Monitoring", "Cursor, clicks and keystrokes: smooth cursor and automatic zooms.", self.status[1]),
                     (Permission::Microphone, widgets::Icon::Mic, "Microphone", "Optional. Record your voice with the screen.", self.status[2]),
+                    (Permission::Accessibility, widgets::Icon::Keyboard, "Accessibility", "Optional. Automatic zooms follow the text you type.", self.status[3]),
                 ];
                 for (perm, icon, title, desc, status) in rows {
                     let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 84.0), egui::Sense::hover());
@@ -96,6 +99,12 @@ impl PermissionsSetup {
                                     (Permission::ScreenRecording, PermissionStatus::NotDetermined) => p::request_screen_recording(),
                                     (Permission::InputMonitoring, PermissionStatus::NotDetermined) => p::request_input_monitoring(),
                                     (Permission::Microphone, PermissionStatus::NotDetermined) => p::request_microphone(),
+                                    // first click: macOS's own prompt (it links to System Settings)
+                                    (Permission::Accessibility, _) if !self.ax_prompted => {
+                                        self.ax_prompted = true;
+                                        let _ = p::request_accessibility();
+                                        PermissionStatus::Granted
+                                    }
                                     _ => status,
                                 };
                                 if !after.is_granted() {

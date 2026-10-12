@@ -193,6 +193,11 @@ pub struct InputEvent {
     pub character: Option<String>,
     pub key_code: Option<u32>,
     pub is_a_repeat: Option<bool>,
+    /// ScreenForge extension on key events: text caret position (global points) after the key.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub caret_x: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub caret_y: Option<f64>,
     #[serde(flatten)]
     pub extra: Extra,
 }

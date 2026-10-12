@@ -37,6 +37,16 @@ pub struct CursorTrack {
     pub clicks: Vec<ClickSample>,
     /// Source-time ms of key-down events (for "hide while typing").
     pub key_downs: Vec<f64>,
+    /// Text caret positions recorded while typing (crop-relative, like `samples`), so zooms
+    /// can follow what is being typed rather than where the mouse was left.
+    pub carets: Vec<CaretSample>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CaretSample {
+    pub time_ms: f64,
+    pub x: f64,
+    pub y: f64,
 }
 
 impl CursorTrack {
@@ -104,7 +114,14 @@ impl CursorTrack {
             })
             .collect();
         let key_downs = keys.iter().filter(|k| k.kind == "keyDown").map(|k| k.process_time_ms - process_time_start_ms).collect();
-        CursorTrack { samples, cursor_ids: ids, clicks: click_samples, key_downs }
+        let mut carets: Vec<CaretSample> = keys
+            .iter()
+            .filter_map(|k| Some(CaretSample { time_ms: k.process_time_ms - process_time_start_ms, x: k.caret_x? - bounds.x, y: k.caret_y? - bounds.y }))
+            // keep carets on the recorded area only (typing in another window is not on screen)
+            .filter(|c| c.x >= 0.0 && c.y >= 0.0 && c.x <= bounds.width && c.y <= bounds.height)
+            .collect();
+        carets.sort_by(|a, b| a.time_ms.total_cmp(&b.time_ms));
+        CursorTrack { samples, cursor_ids: ids, clicks: click_samples, key_downs, carets }
     }
 
     /// Raw position at `t`: the last sample at or before `t` (Screen Studio holds the last

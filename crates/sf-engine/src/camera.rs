@@ -58,15 +58,26 @@ pub fn click_groups(track: &CursorTrack, start_ms: f64, end_ms: f64, crop_size_p
     let samples = &track.samples;
     let lo = samples.partition_point(|s| s.time_ms < start_ms).saturating_sub(1);
     let hi = samples.partition_point(|s| s.time_ms < end_ms);
-    if lo >= hi {
+    if lo >= hi && !track.carets.iter().any(|c| c.time_ms >= start_ms && c.time_ms < end_ms) {
         return vec![];
     }
     // decimate to >= 10 ms like Screen Studio
     let mut events: Vec<CursorSample> = Vec::new();
-    for s in &samples[lo..hi] {
+    for s in samples.get(lo..hi).unwrap_or(&[]) {
         if events.last().map(|l| s.time_ms - l.time_ms >= 10.0).unwrap_or(true) {
             events.push(*s);
         }
+    }
+    // typing: the caret counts as a position too, so the camera follows the text being typed
+    let carets: Vec<CursorSample> = track
+        .carets
+        .iter()
+        .filter(|c| c.time_ms >= start_ms && c.time_ms < end_ms)
+        .map(|c| CursorSample { x: c.x, y: c.y, cursor_id_index: 0, time_ms: c.time_ms })
+        .collect();
+    if !carets.is_empty() {
+        events.extend(carets);
+        events.sort_by(|a, b| a.time_ms.total_cmp(&b.time_ms));
     }
     let max_w = max_extent01[0] * crop_size_px[0];
     let max_h = max_extent01[1] * crop_size_px[1];
@@ -203,5 +214,24 @@ impl CameraSolver {
 impl From<Point> for ClickGroup {
     fn from(p: Point) -> Self {
         ClickGroup { start_ms: 0.0, end_ms: 0.0, center01: [p.x, p.y] }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::cursor::CaretSample;
+
+    #[test]
+    fn typing_moves_focus_to_the_caret() {
+        let mut t = CursorTrack::default();
+        // mouse parked top-left, then typing at the bottom-right of a 1000×1000 crop
+        t.samples.push(CursorSample { x: 100.0, y: 100.0, cursor_id_index: 0, time_ms: 0.0 });
+        for i in 0..20 {
+            t.carets.push(CaretSample { time_ms: 1000.0 + i as f64 * 150.0, x: 800.0 + i as f64 * 5.0, y: 850.0 });
+        }
+        let g = click_groups(&t, 0.0, 5000.0, [1000.0, 1000.0], [0.25, 0.25]);
+        let last = g.last().unwrap();
+        assert!(last.center01[0] > 0.75 && last.center01[1] > 0.8, "{g:?}");
     }
 }

@@ -319,6 +319,14 @@ impl Picker {
                 }
             }
             ui.separator();
+            if sf_recording::permissions::accessibility().is_granted() {
+                ui.label(RichText::new("Zooms follow typing: on").small().color(theme::p().text_dim));
+            } else if ui.button("Let zooms follow typing…").on_hover_text("Allow Accessibility so automatic zooms follow the text caret while you type").clicked() {
+                if sf_recording::permissions::request_accessibility() != sf_recording::PermissionStatus::Granted {
+                    let _ = sf_recording::permissions::open_settings(sf_recording::Permission::Accessibility);
+                }
+            }
+            ui.separator();
             if ui.button("Quit ScreenForge").clicked() {
                 action = Some(PickerAction::Quit);
             }
