@@ -240,19 +240,36 @@ fn wallpaper_categories(list: &[String]) -> Vec<String> {
 }
 
 fn general_ui(ed: &mut Editor, ui: &mut egui::Ui) {
-    widgets::title(ui, "Speed");
     const RECORDING_SPEEDS: [f64; 6] = [1.0, 1.5, 2.0, 3.0, 4.0, 8.0];
     let labels: Vec<String> = RECORDING_SPEEDS.iter().map(|s| format!("{s}×")).collect();
     let refs: Vec<&str> = labels.iter().map(String::as_str).collect();
-    let cur = ed.recording_speed();
-    let idx = cur.and_then(|c| RECORDING_SPEEDS.iter().position(|s| (s - c).abs() < 1e-3)).unwrap_or(usize::MAX);
-    if let Some(i) = widgets::pills(ui, idx, &refs) {
-        ed.set_recording_speed(RECORDING_SPEEDS[i]);
+    // a selected clip gets the speed on its own; otherwise the whole recording does
+    let selected = ed.selected_slice.filter(|i| *i < ed.session.pkg.project.scenes[0].slices.len());
+    match selected {
+        Some(i) => {
+            widgets::title(ui, &format!("Speed · clip {}", i + 1));
+            let cur = 1.0 / ed.session.pkg.project.scenes[0].slices[i].time_scale.max(1e-6);
+            let idx = RECORDING_SPEEDS.iter().position(|s| (s - cur).abs() < 1e-3).unwrap_or(usize::MAX);
+            if let Some(k) = widgets::pills(ui, idx, &refs) {
+                let sp = RECORDING_SPEEDS[k];
+                ed.edit(move |p| p.scenes[0].slices = sf_engine::timeline::edit::set_speed(&p.scenes[0].slices, i, sp));
+                ed.set_status(&format!("Clip {} speed {sp}×", i + 1));
+            }
+            widgets::hint(ui, "Applies to the selected clip only. Click an empty part of the timeline to change the whole recording.");
+        }
+        None => {
+            widgets::title(ui, "Speed · whole recording");
+            let cur = ed.recording_speed();
+            let idx = cur.and_then(|c| RECORDING_SPEEDS.iter().position(|s| (s - c).abs() < 1e-3)).unwrap_or(usize::MAX);
+            if let Some(k) = widgets::pills(ui, idx, &refs) {
+                ed.set_recording_speed(RECORDING_SPEEDS[k]);
+            }
+            widgets::hint(ui, match cur {
+                None => "Clips have different speeds; picking one sets all of them. Select a clip to change only that one.",
+                Some(_) => "Speeds up every clip, audio included (pitch preserved). Select a clip to change only that one.",
+            });
+        }
     }
-    widgets::hint(ui, match cur {
-        None => "Clips have different speeds; picking one sets all of them.",
-        Some(_) => "Speeds up the whole recording, audio included (pitch preserved). Individual clips can still be changed on the timeline.",
-    });
     ui.add_space(6.0);
     widgets::title(ui, "Background");
     let kinds = ["system", "gradient", "color", "image", "unsplash"];
