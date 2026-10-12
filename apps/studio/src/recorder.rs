@@ -59,7 +59,8 @@ fn is_helper_app(name: &str, bundle_id: &str) -> bool {
 }
 
 /// Bring an application to the front (window picking), then re-read the window's bounds.
-pub fn activate_and_locate(pid: i32, window_id: u32) -> Option<sf_project::schema::common::Rect> {
+/// Bring the app with `pid` to the front.
+pub fn activate_app(pid: i32) {
     #[cfg(target_os = "macos")]
     {
         use objc2_app_kit::{NSApplicationActivationOptions, NSRunningApplication};
@@ -67,6 +68,15 @@ pub fn activate_and_locate(pid: i32, window_id: u32) -> Option<sf_project::schem
             #[allow(deprecated)]
             app.activateWithOptions(NSApplicationActivationOptions::ActivateAllWindows);
         }
+    }
+    #[cfg(not(target_os = "macos"))]
+    let _ = pid;
+}
+
+pub fn activate_and_locate(pid: i32, window_id: u32) -> Option<sf_project::schema::common::Rect> {
+    #[cfg(target_os = "macos")]
+    {
+        activate_app(pid);
         // give the Space switch / un-minimise a moment, then read the fresh bounds
         for _ in 0..8 {
             std::thread::sleep(std::time::Duration::from_millis(120));
@@ -112,6 +122,9 @@ pub struct RecordingScreen {
     /// The countdown is shown over the middle of the selected window/area (moved to the
     /// bottom of the screen once recording starts).
     pub hud_centred: bool,
+    /// App to give the keyboard back to once recording starts (the countdown takes focus so
+    /// Esc cancels it).
+    pub return_to_pid: Option<i32>,
 }
 
 pub enum RecordingOutcome {
@@ -129,7 +142,7 @@ impl RecordingScreen {
         let name = format!("{} {stamp}", target_name(&req));
         let dir = recordings_folder().join(name);
         let total_ms = req.countdown_ms;
-        RecordingScreen { req, phase: Phase::Countdown { until: Instant::now() + std::time::Duration::from_millis(total_ms), total_ms }, output_dir: dir, error: None, hud_centred: false }
+        RecordingScreen { req, phase: Phase::Countdown { until: Instant::now() + std::time::Duration::from_millis(total_ms), total_ms }, output_dir: dir, error: None, hud_centred: false, return_to_pid: None }
     }
 
     fn start_recorder(&mut self) -> Result<()> {
@@ -207,8 +220,7 @@ impl RecordingScreen {
         let caption = egui::Rect::from_center_size(pos2(c.x, c.y + r + 26.0), vec2(220.0, 26.0));
         p.rect_filled(caption, CornerRadius::same(10), shade);
         p.text(caption.center(), Align2::CENTER_CENTER, format!("{what} · Esc to cancel"), FontId::proportional(12.5), ink);
-        let cancel = egui::Rect::from_center_size(pos2(c.x, c.y + r + 56.0), vec2(84.0, 26.0));
-        if ui.put(cancel, egui::Button::new(RichText::new("Cancel").size(13.0).color(ink)).corner_radius(CornerRadius::same(4)).fill(shade).stroke(Stroke::new(1.0, ink.gamma_multiply(0.6)))).clicked() || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+        if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
             return RecordingOutcome::Cancelled(None);
         }
         RecordingOutcome::Continue

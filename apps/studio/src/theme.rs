@@ -1,6 +1,6 @@
 //! Visual theme matching Screen Studio's editor (rounded cards, purple accent, amber clips), in a
-//! dark (Dracula) and a light (Solarized Light) variant; dark is the default, the user can pick
-//! light or follow the system appearance.
+//! Osaka Jade (the default), Dracula dark and Solarized Light; the user can also follow the
+//! system appearance.
 
 use egui::{Color32, CornerRadius, FontFamily, FontId, Stroke, TextStyle, Visuals};
 
@@ -112,7 +112,52 @@ pub const LIGHT: Palette = Palette {
     thumb_empty: Color32::from_rgb(0xe4, 0xdd, 0xc8),
 };
 
-static PALETTE: std::sync::RwLock<Palette> = std::sync::RwLock::new(DARK);
+pub const OSAKA_JADE: Palette = Palette {
+    dark: true,
+    // Osaka Jade: deep green-black with jade and teal accents
+    bg: Color32::from_rgb(0x11, 0x1c, 0x18),
+    card: Color32::from_rgb(0x17, 0x26, 0x20),
+    card_2: Color32::from_rgb(0x1f, 0x33, 0x2a),
+    card_3: Color32::from_rgb(0x2a, 0x42, 0x36),
+    border: Color32::from_rgb(0x23, 0x37, 0x2b),
+    text: Color32::from_rgb(0xf6, 0xf5, 0xdd),
+    text_dim: Color32::from_rgb(0xc1, 0xc4, 0x97),
+    text_faint: Color32::from_rgb(0x6b, 0x83, 0x72),
+    accent: Color32::from_rgb(0x2d, 0xd5, 0xb7),
+    accent_hover: Color32::from_rgb(0x8c, 0xd3, 0xcb),
+    clip: Color32::from_rgb(0x54, 0x9e, 0x6a),
+    clip_selected: Color32::from_rgb(0x63, 0xb0, 0x7a),
+    clip_text: Color32::from_rgb(0x11, 0x1c, 0x18),
+    clip_line: Color32::from_rgba_premultiplied(0, 0, 0, 40),
+    marker: Color32::from_rgb(0xe5, 0xc7, 0x36),
+    zoom: Color32::from_rgb(0xd2, 0x68, 0x9c),
+    zoom_selected: Color32::from_rgb(0xdb, 0x7f, 0xae),
+    track_empty: Color32::from_rgb(0x14, 0x21, 0x1b),
+    playhead: Color32::from_rgb(0xf6, 0xf5, 0xdd),
+    ruler_text: Color32::from_rgb(0x6b, 0x83, 0x72),
+    danger: Color32::from_rgb(0xff, 0x53, 0x45),
+    meter: Color32::from_rgb(0x63, 0xb0, 0x7a),
+    glass: Color32::from_rgba_premultiplied(8, 14, 12, 112),
+    glass_solid: Color32::from_rgba_premultiplied(18, 30, 25, 216),
+    glass_border: Color32::from_rgba_premultiplied(34, 34, 34, 34),
+    on_glass: Color32::from_rgb(0xf6, 0xf5, 0xdd),
+    glass_button: Color32::from_rgb(0xf6, 0xf5, 0xdd),
+    glass_button_fg: Color32::from_rgb(0x11, 0x1c, 0x18),
+    thumb_empty: Color32::from_rgb(0x1f, 0x33, 0x2a),
+};
+
+static PALETTE: std::sync::RwLock<Palette> = std::sync::RwLock::new(OSAKA_JADE);
+/// Palette used when egui's theme is dark (Dracula or Osaka Jade).
+static DARK_PALETTE: std::sync::RwLock<Palette> = std::sync::RwLock::new(OSAKA_JADE);
+
+/// Choose which dark palette the dark appearance uses; call `sync` afterwards.
+pub fn set_dark_palette(pal: Palette) {
+    *DARK_PALETTE.write().unwrap_or_else(|e| e.into_inner()) = pal;
+}
+
+fn wanted(ctx: &egui::Context) -> Palette {
+    if ctx.theme() == egui::Theme::Dark { *DARK_PALETTE.read().unwrap_or_else(|e| e.into_inner()) } else { LIGHT }
+}
 
 /// The active palette.
 pub fn p() -> Palette {
@@ -131,8 +176,7 @@ pub fn glass_alpha(alpha: u8) -> Color32 {
 
 /// Re-apply the palette when egui's theme (system or user preference) changed. Returns true when it did.
 pub fn sync(ctx: &egui::Context) -> bool {
-    let want_dark = ctx.theme() == egui::Theme::Dark;
-    if want_dark == is_dark() {
+    if wanted(ctx) == p() {
         return false;
     }
     apply(ctx);
@@ -145,8 +189,8 @@ pub const RADIUS_SM: u8 = 7;
 /// Apply the palette matching `ctx.theme()` to egui's visuals and style.
 #[allow(non_snake_case)]
 pub fn apply(ctx: &egui::Context) {
-    let dark = ctx.theme() == egui::Theme::Dark;
-    let pal = if dark { DARK } else { LIGHT };
+    let pal = wanted(ctx);
+    let dark = pal.dark;
     *PALETTE.write().unwrap_or_else(|e| e.into_inner()) = pal;
     let Palette { bg: BG, card: CARD, card_2: CARD_2, card_3: CARD_3, text: TEXT, text_dim: TEXT_DIM, accent: ACCENT, accent_hover: ACCENT_HOVER, .. } = pal;
     let mut v = if dark { Visuals::dark() } else { Visuals::light() };

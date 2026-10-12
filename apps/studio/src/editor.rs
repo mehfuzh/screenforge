@@ -468,7 +468,7 @@ impl Editor {
                 }
                 widgets::roadmap(ui, |ui| widgets::icon_button(ui, widgets::Icon::Trash, 18.0, "Remove project"));
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if widgets::accent_button(ui, "Export").clicked() {
+                    if widgets::accent_icon_button(ui, widgets::Icon::Export, "Export (⌘E)").clicked() {
                         self.export.open = true;
                     }
                     ui.add_space(6.0);

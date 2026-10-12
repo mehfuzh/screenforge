@@ -65,15 +65,17 @@ impl WindowSelect {
                         let lr = Rect::from_center_size(pos2(sel.center().x, (sel.max.y + 22.0).min(full.max.y - 16.0)), vec2(lw, 26.0));
                         p.rect_filled(lr, CornerRadius::same(7), Color32::from_rgba_unmultiplied(0x1b, 0x1b, 0x27, 0xf0));
                         p.text(lr.center(), Align2::CENTER_CENTER, label, FontId::proportional(13.0), Color32::WHITE);
-                        // a clear call to action in the middle of the window (clicking anywhere on it also records)
+                        // a clear call to action in the middle of the window, styled like the
+                        // recording bar (clicking anywhere on the window also records)
                         let pal = crate::theme::p();
                         let br = Rect::from_center_size(sel.center(), vec2(176.0, 46.0));
                         let over = ui.input(|i| i.pointer.hover_pos()).is_some_and(|pt| br.contains(pt));
-                        p.rect_filled(br.expand(1.0), CornerRadius::same(10), Color32::from_black_alpha(60));
-                        p.rect_filled(br, CornerRadius::same(10), if over { pal.accent_hover } else { pal.accent });
+                        p.rect(br, CornerRadius::same(10), pal.glass_solid, Stroke::new(1.0, pal.glass_border), egui::StrokeKind::Inside);
+                        if over {
+                            p.rect_filled(br, CornerRadius::same(10), crate::theme::glass_alpha(30));
+                        }
                         p.circle_filled(pos2(br.min.x + 30.0, br.center().y), 7.0, pal.danger);
-                        p.circle_stroke(pos2(br.min.x + 30.0, br.center().y), 7.0, Stroke::new(1.5, Color32::WHITE));
-                        p.text(pos2(br.min.x + 48.0, br.center().y), Align2::LEFT_CENTER, "Record window", FontId::proportional(15.0), pal.bg);
+                        p.text(pos2(br.min.x + 48.0, br.center().y), Align2::LEFT_CENTER, "Record window", FontId::proportional(15.0), pal.on_glass);
                     }
                     None => {
                         p.rect_filled(full, 0.0, dim);

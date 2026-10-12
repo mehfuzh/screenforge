@@ -163,6 +163,16 @@ pub fn accent_button(ui: &mut Ui, text: &str) -> Response {
     ui.add(egui::Button::new(RichText::new(text).size(14.0).strong().color(Color32::WHITE)).fill(fill).corner_radius(CornerRadius::same(BUTTON_RADIUS)).min_size(vec2(0.0, BUTTON_H)))
 }
 
+/// Square accent button holding an icon (same height and corners as `accent_button`).
+pub fn accent_icon_button(ui: &mut Ui, icon: Icon, tip: &str) -> Response {
+    let (rect, resp) = ui.allocate_exact_size(vec2(BUTTON_H + 4.0, BUTTON_H), Sense::click());
+    let pal = theme::p();
+    let fill = if !ui.is_enabled() { pal.card_3 } else if resp.hovered() { pal.accent_hover } else { pal.accent };
+    ui.painter().rect_filled(rect, CornerRadius::same(BUTTON_RADIUS), fill);
+    paint_icon(ui.painter(), Rect::from_center_size(rect.center(), vec2(16.0, 16.0)), icon, pal.clip_text);
+    resp.on_hover_text(tip)
+}
+
 /// Secondary action: card fill, normal text, same size as `accent_button`.
 pub fn secondary_button(ui: &mut Ui, text: &str) -> Response {
     ui.add(egui::Button::new(RichText::new(text).size(14.0).color(theme::p().text)).fill(theme::p().card_2).corner_radius(CornerRadius::same(BUTTON_RADIUS)).min_size(vec2(0.0, BUTTON_H)))
@@ -240,6 +250,8 @@ pub enum Icon {
     Command,
     Waveform,
     Scissors,
+    /// Arrow rising out of a tray (export / share).
+    Export,
 }
 
 /// Microphone icon whose capsule fills from the bottom with the live input `level` (0..1).
@@ -418,6 +430,16 @@ pub fn paint_icon(p: &egui::Painter, rect: Rect, icon: Icon, color: Color32) {
                 p.circle_filled(pos2(c.x + x * r, c.y - 0.2 * r), 1.2, color);
             }
             line((-0.45, 0.25), (0.45, 0.25));
+        }
+        Icon::Export => {
+            // open tray
+            line((-0.8, 0.0), (-0.8, 0.85));
+            line((-0.8, 0.85), (0.8, 0.85));
+            line((0.8, 0.85), (0.8, 0.0));
+            // arrow up out of it
+            line((0.0, 0.4), (0.0, -0.9));
+            line((0.0, -0.9), (-0.38, -0.52));
+            line((0.0, -0.9), (0.38, -0.52));
         }
         Icon::Folder => {
             p.rect_stroke(rr(-0.9, -0.5, 0.9, 0.7), 2.5, s, egui::StrokeKind::Middle);

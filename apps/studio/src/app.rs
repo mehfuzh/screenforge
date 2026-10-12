@@ -97,7 +97,7 @@ impl App {
         let rs = cc.wgpu_render_state.as_ref().expect("wgpu renderer required");
         let gpu = Gpu::from_parts(Arc::new(rs.device.clone()), Arc::new(rs.queue.clone()));
         let prefs = Prefs::load();
-        cc.egui_ctx.set_theme(prefs.appearance.preference());
+        prefs.appearance.apply(&cc.egui_ctx);
         crate::theme::apply(&cc.egui_ctx);
         let mut picker = Picker::default();
         picker.inputs = crate::recorder::discover_inputs();
@@ -165,7 +165,7 @@ impl App {
     }
 
     /// Size of the film-leader countdown window, centred over what is being recorded.
-    pub const COUNTDOWN_SIZE: [f32; 2] = [260.0, 310.0];
+    pub const COUNTDOWN_SIZE: [f32; 2] = [260.0, 280.0];
 
     /// Put the countdown over the middle of the selected window or area (where its Record
     /// button was), or the middle of the screen for a display recording.
@@ -180,6 +180,8 @@ impl App {
             // the dial's centre (130 px from the top) lands on the centre of the target
             ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition([(cx - w / 2.0).max(0.0), (cy - 130.0).max(0.0)].into()));
         }
+        // keyboard focus, so Esc cancels the countdown
+        ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
     }
 
     fn tray_tick(&mut self, ctx: &egui::Context, open_request: &mut Option<PathBuf>) {
@@ -325,6 +327,9 @@ impl eframe::App for App {
                 if r.hud_centred && matches!(r.phase, crate::recorder::Phase::Recording(_)) {
                     r.hud_centred = false;
                     Self::place_picker(ctx, 520.0, 110.0);
+                    if let Some(pid) = r.return_to_pid.take() {
+                        crate::recorder::activate_app(pid);
+                    }
                 }
             }
             Screen::Editor(ed) if ed.export.open && !ed.export.is_busy() => {
@@ -478,8 +483,7 @@ impl eframe::App for App {
             Some(PickerAction::SetAppearance(a)) => {
                 self.prefs.appearance = a;
                 self.prefs.save();
-                ctx.set_theme(a.preference());
-                crate::theme::sync(ctx);
+                a.apply(ctx);
             }
             Some(PickerAction::RemoveProject(p)) => {
                 let name = p.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
@@ -511,6 +515,7 @@ impl eframe::App for App {
                     if centred { Self::place_countdown(ctx, Some(&bounds)) } else { Self::place_picker(ctx, 520.0, 110.0) }
                     let mut screen = RecordingScreen::new(req);
                     screen.hud_centred = centred;
+                    screen.return_to_pid = centred.then_some(w.pid);
                     self.screen = Screen::Recording(screen);
                     crate::vibrancy::set(None, 0.0, 0.0);
                 }
