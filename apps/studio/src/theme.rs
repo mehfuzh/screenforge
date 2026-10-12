@@ -123,8 +123,9 @@ pub const OSAKA_JADE: Palette = Palette {
     text: Color32::from_rgb(0xf6, 0xf5, 0xdd),
     text_dim: Color32::from_rgb(0xc1, 0xc4, 0x97),
     text_faint: Color32::from_rgb(0x6b, 0x83, 0x72),
-    accent: Color32::from_rgb(0x2d, 0xd5, 0xb7),
-    accent_hover: Color32::from_rgb(0x8c, 0xd3, 0xcb),
+    // muted jade: the theme's bright teal (#2dd5b7) glared on buttons
+    accent: Color32::from_rgb(0x3a, 0x93, 0x7e),
+    accent_hover: Color32::from_rgb(0x4b, 0xa8, 0x91),
     clip: Color32::from_rgb(0x54, 0x9e, 0x6a),
     clip_selected: Color32::from_rgb(0x63, 0xb0, 0x7a),
     clip_text: Color32::from_rgb(0x11, 0x1c, 0x18),
