@@ -194,15 +194,14 @@ impl ExportDialog {
         }
     }
 
-    /// Settings dialog over the editor.
-    pub fn ui(&mut self, ed: &mut Editor, ctx: &egui::Context) {
-        self.poll(ctx);
-        if !self.open {
+    /// Export settings, drawn into the compact export window (the editor is hidden while it
+    /// is open). Escape or the window's close button dismisses it.
+    pub fn settings_ui(&mut self, ed: &mut Editor, ui: &mut egui::Ui) {
+        if ui.input(|i| i.viewport().close_requested()) {
+            ui.ctx().send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            self.open = false;
             return;
         }
-        let mut open = self.open;
-        egui::Window::new("Export").title_bar(false).collapsible(false).resizable(false).open(&mut open).anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0]).frame(egui::Frame::window(&ctx.global_style()).inner_margin(22.0)).show(ctx, |ui| {
-            ui.set_width(440.0);
             ui.label(RichText::new("Export").size(18.0).strong());
             ui.add_space(4.0);
             let left = sf_license::free_exports_left();
@@ -224,8 +223,9 @@ impl ExportDialog {
                 }
                 ui.add_space(4.0);
                 ui.label("Email used at checkout");
-                ui.add(egui::TextEdit::singleline(&mut self.email).hint_text("you@example.com").desired_width(f32::INFINITY));
-                ui.add_space(4.0);
+                ui.add_space(2.0);
+                widgets::text_field(ui, &mut self.email, "you@example.com");
+                ui.add_space(8.0);
                 ui.horizontal(|ui| {
                     let busy = self.activation.is_some();
                     if ui.add_enabled_ui(!busy, |ui| widgets::secondary_button(ui, if busy { "Activating…" } else { "Activate" })).inner.clicked() {
@@ -325,8 +325,6 @@ impl ExportDialog {
                     }
                 });
             });
-        });
-        self.open = open && self.open;
     }
 
     fn start(&mut self, ed: &mut Editor, out: PathBuf) {

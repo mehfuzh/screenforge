@@ -168,6 +168,34 @@ pub fn secondary_button(ui: &mut Ui, text: &str) -> Response {
     ui.add(egui::Button::new(RichText::new(text).size(14.0).color(theme::p().text)).fill(theme::p().card_2).corner_radius(CornerRadius::same(BUTTON_RADIUS)).min_size(vec2(0.0, BUTTON_H)))
 }
 
+/// Single-line text field: roomy (38 px) with 4 px corners like the buttons, padded text and a
+/// quiet border that turns accent while focused.
+pub fn text_field(ui: &mut Ui, text: &mut String, hint: &str) -> Response {
+    let pal = theme::p();
+    let id = ui.next_auto_id().with("text_field");
+    let focused = ui.memory(|m| m.has_focus(id));
+    egui::Frame::NONE
+        .fill(pal.bg)
+        .stroke(Stroke::new(1.0, if focused { pal.accent } else { pal.border }))
+        .corner_radius(CornerRadius::same(BUTTON_RADIUS))
+        .inner_margin(egui::Margin::symmetric(12, 0))
+        .show(ui, |ui| {
+            ui.add_sized(
+                vec2(ui.available_width(), 36.0),
+                egui::TextEdit::singleline(text)
+                    .id(id)
+                    .hint_text(RichText::new(hint).color(pal.text_faint))
+                    .font(egui::FontId::proportional(14.0))
+                    .text_color(pal.text)
+                    .frame(egui::Frame::NONE)
+                    .vertical_align(egui::Align::Center)
+                    .margin(egui::Margin::ZERO)
+                    .min_size(vec2(0.0, 36.0)),
+            )
+        })
+        .inner
+}
+
 /// Paint a rounded card background behind `rect`.
 pub fn card(painter: &egui::Painter, rect: Rect) {
     painter.rect(rect, CornerRadius::same(theme::RADIUS as u8 + 4), theme::p().card, Stroke::new(1.0, theme::p().border), egui::StrokeKind::Inside);

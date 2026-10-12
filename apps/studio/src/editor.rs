@@ -571,9 +571,8 @@ impl Editor {
             widgets::roadmap(&mut rail_ui, |ui| widgets::rail_icon(ui, widgets::Icon::Mask, false, "Mask"));
         });
 
-        let mut ex = std::mem::take(&mut self.export);
-        ex.ui(self, ctx);
-        self.export = ex;
+        // the export settings open in their own compact window (see App::ui)
+        self.export.poll(ctx);
 
         go_home
     }

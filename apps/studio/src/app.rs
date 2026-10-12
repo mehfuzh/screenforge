@@ -22,6 +22,8 @@ pub struct App {
     pub error: Option<String>,
     pub prefs: Prefs,
     window_mode: WindowMode,
+    /// Height the export settings window last needed.
+    export_settings_h: f32,
     picker_height: f32,
     placed_once: bool,
     tray: Option<crate::tray::Tray>,
@@ -47,9 +49,13 @@ enum WindowMode {
     Editor,
     /// Compact progress window while an export runs (the editor is hidden meanwhile).
     Exporting,
+    /// Export settings in a window of their own; the editor is hidden until it closes.
+    ExportSettings,
 }
 
 pub const EXPORT_WINDOW_SIZE: [f32; 2] = [480.0, 210.0];
+/// Width of the export settings window (its height follows the content).
+pub const EXPORT_SETTINGS_W: f32 = 484.0;
 
 #[derive(Default, serde::Serialize, serde::Deserialize)]
 pub struct Prefs {
@@ -96,7 +102,7 @@ impl App {
         let mut picker = Picker::default();
         picker.inputs = crate::recorder::discover_inputs();
         let perm_setup = (crate::permissions::PermissionsSetup::needed() || std::env::var_os("SF_SHOW_PERMISSIONS").is_some()).then(crate::permissions::PermissionsSetup::start);
-        let mut app = App { gpu, screen: Screen::Picker(picker), error: None, prefs, window_mode: WindowMode::Picker, picker_height: crate::picker::BAR_WINDOW_H, placed_once: false, tray: None, tray_tried: false, area_select: None, window_select: None, titlebar_fix: 0, perm_setup, confirm_close: None, fresh_open: None, pending_open: std::env::args().nth(1).map(PathBuf::from).filter(|p| p.is_dir() || p.extension().is_some_and(|e| e == "screenstudio")) };
+        let mut app = App { gpu, screen: Screen::Picker(picker), error: None, prefs, window_mode: WindowMode::Picker, export_settings_h: 560.0, picker_height: crate::picker::BAR_WINDOW_H, placed_once: false, tray: None, tray_tried: false, area_select: None, window_select: None, titlebar_fix: 0, perm_setup, confirm_close: None, fresh_open: None, pending_open: std::env::args().nth(1).map(PathBuf::from).filter(|p| p.is_dir() || p.extension().is_some_and(|e| e == "screenstudio")) };
         if let Some(p) = std::env::args().nth(1) {
             app.open_project(PathBuf::from(p), &cc.egui_ctx, rs);
         }
@@ -130,6 +136,13 @@ impl App {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Resizable(false));
                 ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize([w, h].into()));
                 ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition([((mon.x - w) / 2.0).max(0.0), ((mon.y - h) / 2.0).max(0.0)].into()));
+            }
+            WindowMode::ExportSettings => {
+                let mon = ctx.input(|i| i.viewport().monitor_size).unwrap_or(egui::vec2(1920.0, 1080.0));
+                let (w, h) = (EXPORT_SETTINGS_W, self.export_settings_h);
+                ctx.send_viewport_cmd(egui::ViewportCommand::Resizable(false));
+                ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize([w, h].into()));
+                ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition([((mon.x - w) / 2.0).max(0.0), ((mon.y - h) / 2.0 - 40.0).max(0.0)].into()));
             }
             WindowMode::Picker => {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Decorations(false));
@@ -246,7 +259,7 @@ impl eframe::App for App {
     fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
         match self.window_mode {
             WindowMode::Picker => [0.0, 0.0, 0.0, 0.0],
-            WindowMode::Editor | WindowMode::Exporting => {
+            WindowMode::Editor | WindowMode::Exporting | WindowMode::ExportSettings => {
                 let c = crate::theme::p().bg;
                 [c.r() as f32 / 255.0, c.g() as f32 / 255.0, c.b() as f32 / 255.0, 1.0]
             }
@@ -314,7 +327,22 @@ impl eframe::App for App {
                     Self::place_picker(ctx, 520.0, 110.0);
                 }
             }
-            Screen::Editor(ed) if ed.export.is_busy() || self.window_mode == WindowMode::Exporting => {
+            Screen::Editor(ed) if ed.export.open && !ed.export.is_busy() => {
+                want_mode = Some(WindowMode::ExportSettings);
+                let mut ex = std::mem::take(&mut ed.export);
+                let resp = egui::Frame::NONE.fill(crate::theme::p().bg).inner_margin(egui::Margin { left: 22, right: 22, top: 34, bottom: 18 }).show(ui, |ui| {
+                    ui.set_width(EXPORT_SETTINGS_W - 44.0);
+                    ex.settings_ui(ed, ui);
+                });
+                ed.export = ex;
+                // the window follows the content (the license form can expand)
+                let need = resp.response.rect.height().ceil();
+                if self.window_mode == WindowMode::ExportSettings && (need - self.export_settings_h).abs() > 1.0 {
+                    self.export_settings_h = need;
+                    ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize([EXPORT_SETTINGS_W, need].into()));
+                }
+            }
+            Screen::Editor(ed) if ed.export.is_busy() || matches!(self.window_mode, WindowMode::Exporting | WindowMode::ExportSettings) => {
                 ed.export.poll(ctx);
                 if ed.export.is_busy() {
                     want_mode = Some(WindowMode::Exporting);
