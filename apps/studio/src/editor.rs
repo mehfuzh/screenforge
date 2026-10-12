@@ -361,7 +361,12 @@ impl Editor {
 
     pub fn split_at_playhead(&mut self) {
         let t = self.playhead_ms;
-        if let Some(id) = self.selected_audio.clone() {
+        // Split the selected audio clip only when the playhead is over it; otherwise cut the video.
+        let audio_hit = self.selected_audio.clone().filter(|id| {
+            use sf_project::SceneAudioExt;
+            self.session.pkg.project.scenes[0].audio_clips().is_some_and(|cs| cs.iter().any(|c| &c.id == id && c.contains_output(t)))
+        });
+        if let Some(id) = audio_hit {
             self.edit(move |p| {
                 use sf_project::SceneAudioExt;
                 let scene = &mut p.scenes[0];

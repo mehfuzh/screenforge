@@ -278,6 +278,7 @@ impl TimelineWidget {
                 if body.clicked() {
                     ed.selected_slice = Some(index);
                     ed.selected_zoom = None;
+                    ed.selected_audio = None;
                     seek_to = Some(ms_of(p.x));
                 }
                 if body.drag_started() || body.dragged() {
@@ -286,6 +287,7 @@ impl TimelineWidget {
                 if body.secondary_clicked() {
                     ed.selected_slice = Some(index);
                     ed.selected_zoom = None;
+                    ed.selected_audio = None;
                     self.ctx_ms = ms_of(p.x);
                 }
             }
