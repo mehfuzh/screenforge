@@ -180,7 +180,7 @@ pub struct Picker {
 
 impl Default for Picker {
     fn default() -> Self {
-        Picker { thumbs: None, inputs: Inputs::default(), mode: None, camera: None, microphone: None, mic_meter: None, bar_w: PILL_SIZE.x, system_audio: false, countdown_ms: 3000, status: None, show_recent: false, recent_rect: egui::Rect::NOTHING, wanted_height: BAR_WINDOW_H }
+        Picker { thumbs: None, inputs: Inputs::default(), mode: None, camera: None, microphone: None, mic_meter: None, bar_w: PILL_SIZE.x, system_audio: false, countdown_ms: 5000, status: None, show_recent: false, recent_rect: egui::Rect::NOTHING, wanted_height: BAR_WINDOW_H }
     }
 }
 
