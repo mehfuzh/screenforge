@@ -137,6 +137,42 @@ impl Editor {
         self.audio.load(&self.session);
     }
 
+    /// Set every clip (and detached audio) to `speed`. The timeline zoom is scaled so the bar
+    /// keeps its on-screen width; clips show the speed as a label instead of shrinking.
+    pub fn set_recording_speed(&mut self, speed: f64) {
+        use sf_project::SceneAudioExt;
+        let speed = speed.clamp(0.25, 16.0);
+        let before = self.duration_ms().max(1.0);
+        self.edit(move |p| {
+            let scene = &mut p.scenes[0];
+            let n = scene.slices.len();
+            let mut slices = scene.slices.clone();
+            for i in 0..n {
+                slices = sf_engine::timeline::edit::set_speed(&slices, i, speed);
+            }
+            scene.slices = slices;
+            if let Some(mut cs) = scene.audio_clips() {
+                for c in cs.iter_mut() {
+                    let ratio = c.speed / speed; // keep clips at the same relative place
+                    c.output_start_ms *= ratio;
+                    c.speed = speed;
+                }
+                scene.set_audio_clips(Some(cs));
+            }
+        });
+        let after = self.duration_ms().max(1.0);
+        self.timeline.px_per_sec = (self.timeline.px_per_sec * (before / after) as f32).clamp(5.0, 400.0);
+        self.timeline.scroll_x *= (before / after) as f32;
+        self.set_status(&format!("Speed {speed}× for the whole recording"));
+    }
+
+    /// The speed shared by all clips, or None when they differ.
+    pub fn recording_speed(&self) -> Option<f64> {
+        let slices = &self.session.pkg.project.scenes[0].slices;
+        let first = slices.first().map(|s| 1.0 / s.time_scale.max(1e-6))?;
+        slices.iter().all(|s| (1.0 / s.time_scale.max(1e-6) - first).abs() < 1e-3).then_some(first)
+    }
+
     /// Change one audio clip's speed (independent of the video clip speeds).
     pub fn set_audio_clip_speed(&mut self, id: &str, speed: f64) {
         use sf_project::SceneAudioExt;

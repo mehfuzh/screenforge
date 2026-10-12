@@ -240,6 +240,20 @@ fn wallpaper_categories(list: &[String]) -> Vec<String> {
 }
 
 fn general_ui(ed: &mut Editor, ui: &mut egui::Ui) {
+    widgets::title(ui, "Speed");
+    const RECORDING_SPEEDS: [f64; 6] = [1.0, 1.5, 2.0, 3.0, 4.0, 8.0];
+    let labels: Vec<String> = RECORDING_SPEEDS.iter().map(|s| format!("{s}×")).collect();
+    let refs: Vec<&str> = labels.iter().map(String::as_str).collect();
+    let cur = ed.recording_speed();
+    let idx = cur.and_then(|c| RECORDING_SPEEDS.iter().position(|s| (s - c).abs() < 1e-3)).unwrap_or(usize::MAX);
+    if let Some(i) = widgets::pills(ui, idx, &refs) {
+        ed.set_recording_speed(RECORDING_SPEEDS[i]);
+    }
+    widgets::hint(ui, match cur {
+        None => "Clips have different speeds; picking one sets all of them.",
+        Some(_) => "Speeds up the whole recording, audio included (pitch preserved). Individual clips can still be changed on the timeline.",
+    });
+    ui.add_space(6.0);
     widgets::title(ui, "Background");
     let kinds = ["system", "gradient", "color", "image", "unsplash"];
     let kind = ed.session.pkg.project.config.styles.background.kind.clone();

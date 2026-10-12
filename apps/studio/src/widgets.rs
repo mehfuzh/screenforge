@@ -63,7 +63,13 @@ pub fn pills(ui: &mut Ui, selected: usize, labels: &[&str]) -> Option<usize> {
         ui.spacing_mut().item_spacing.x = 6.0;
         for (i, l) in labels.iter().enumerate() {
             let sel = i == selected;
-            let b = egui::Button::new(RichText::new(*l).size(13.0).color(if sel { theme::p().text } else { theme::p().text_dim })).fill(if sel { theme::p().card_3 } else { Color32::TRANSPARENT }).corner_radius(CornerRadius::same(8)).min_size(vec2(0.0, 32.0));
+            // outlined chips; the selected one is filled with an accent border
+            let stroke = if sel { Stroke::new(1.5, theme::p().accent_hover) } else { Stroke::new(1.0, theme::p().border) };
+            let b = egui::Button::new(RichText::new(*l).size(13.0).color(if sel { theme::p().text } else { theme::p().text_dim }))
+                .fill(if sel { theme::p().card_3 } else { Color32::TRANSPARENT })
+                .stroke(stroke)
+                .corner_radius(CornerRadius::same(BUTTON_RADIUS))
+                .min_size(vec2(44.0, 30.0));
             if ui.add(b).clicked() && !sel {
                 out = Some(i);
             }
