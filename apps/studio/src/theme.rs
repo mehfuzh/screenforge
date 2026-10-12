@@ -29,6 +29,8 @@ pub struct Palette {
     pub playhead: Color32,
     pub ruler_text: Color32,
     pub danger: Color32,
+    /// Live input level (the microphone icon fills with it).
+    pub meter: Color32,
     /// Floating bars (picker, recording HUD, recent panel): tint over vibrancy, solid fallback, border.
     pub glass: Color32,
     pub glass_solid: Color32,
@@ -66,6 +68,7 @@ pub const DARK: Palette = Palette {
     playhead: Color32::from_rgb(0xf8, 0xf8, 0xf2),
     ruler_text: Color32::from_rgb(0x62, 0x72, 0xa4),
     danger: Color32::from_rgb(0xff, 0x55, 0x55),
+    meter: Color32::from_rgb(0x50, 0xfa, 0x7b),
     glass: Color32::from_rgba_premultiplied(18, 18, 24, 112),
     glass_solid: Color32::from_rgba_premultiplied(34, 36, 46, 216),
     glass_border: Color32::from_rgba_premultiplied(34, 34, 34, 34),
@@ -99,6 +102,7 @@ pub const LIGHT: Palette = Palette {
     playhead: Color32::from_rgb(0x07, 0x36, 0x42),
     ruler_text: Color32::from_rgb(0x83, 0x94, 0x96),
     danger: Color32::from_rgb(0xdc, 0x32, 0x2f),
+    meter: Color32::from_rgb(0x2e, 0x9e, 0x4f),
     glass: Color32::from_rgba_premultiplied(127, 123, 114, 128),
     glass_solid: Color32::from_rgba_premultiplied(228, 222, 205, 230),
     glass_border: Color32::from_rgba_premultiplied(1, 6, 8, 30),

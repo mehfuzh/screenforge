@@ -109,6 +109,9 @@ pub struct RecordingScreen {
     pub phase: Phase,
     pub output_dir: PathBuf,
     pub error: Option<String>,
+    /// The countdown is shown over the middle of the selected window/area (moved to the
+    /// bottom of the screen once recording starts).
+    pub hud_centred: bool,
 }
 
 pub enum RecordingOutcome {
@@ -126,7 +129,7 @@ impl RecordingScreen {
         let name = format!("{} {stamp}", target_name(&req));
         let dir = recordings_folder().join(name);
         let total_ms = req.countdown_ms;
-        RecordingScreen { req, phase: Phase::Countdown { until: Instant::now() + std::time::Duration::from_millis(total_ms), total_ms }, output_dir: dir, error: None }
+        RecordingScreen { req, phase: Phase::Countdown { until: Instant::now() + std::time::Duration::from_millis(total_ms), total_ms }, output_dir: dir, error: None, hud_centred: false }
     }
 
     fn start_recorder(&mut self) -> Result<()> {
@@ -158,9 +161,66 @@ impl RecordingScreen {
         Ok(())
     }
 
+    /// Film-leader countdown: a dial with a sweeping hand and a big number, drawn over the
+    /// middle of what is about to be recorded.
+    fn leader_ui(&mut self, ui: &mut Ui, ctx: &egui::Context, until: Instant, total_ms: u64) -> RecordingOutcome {
+        let left = until.saturating_duration_since(Instant::now());
+        if left.is_zero() || total_ms == 0 {
+            if let Err(e) = self.start_recorder() {
+                return RecordingOutcome::Cancelled(Some(format!("{e:#}")));
+            }
+            return RecordingOutcome::Continue;
+        }
+        ctx.request_repaint();
+        let pal = theme::p();
+        let full = ui.max_rect();
+        let p = ui.painter().clone();
+        let c = pos2(full.center().x, full.top() + 130.0);
+        let r = 112.0;
+        let secs = left.as_secs_f64().ceil() as u64;
+        // fraction of the current second already gone: the hand sweeps once per number
+        let frac = 1.0 - (left.as_secs_f64() - (secs as f64 - 1.0)) as f32;
+        let ink = pal.on_glass;
+
+        p.circle_filled(c, r, pal.glass_solid);
+        // swept sector, clockwise from 12 o'clock
+        let tau = std::f32::consts::TAU;
+        let at = |a: f32, rad: f32| pos2(c.x + rad * (a - tau / 4.0).cos(), c.y + rad * (a - tau / 4.0).sin());
+        let steps = 64;
+        let end = frac.clamp(0.0, 1.0) * tau;
+        for i in 0..steps {
+            let a0 = end * i as f32 / steps as f32;
+            let a1 = end * (i + 1) as f32 / steps as f32;
+            p.add(egui::Shape::convex_polygon(vec![c, at(a0, r - 4.0), at(a1, r - 4.0)], ink.gamma_multiply(0.14), Stroke::NONE));
+        }
+        // crosshair and rings, like a film leader
+        let faint = Stroke::new(1.0, ink.gamma_multiply(0.35));
+        p.line_segment([pos2(c.x - r, c.y), pos2(c.x + r, c.y)], faint);
+        p.line_segment([pos2(c.x, c.y - r), pos2(c.x, c.y + r)], faint);
+        p.circle_stroke(c, r * 0.72, faint);
+        p.circle_stroke(c, r, Stroke::new(3.0, ink.gamma_multiply(0.9)));
+        p.line_segment([c, at(end, r - 4.0)], Stroke::new(2.5, pal.danger));
+        p.text(c, Align2::CENTER_CENTER, secs.to_string(), FontId::proportional(104.0), ink);
+
+        let what = match self.req.mode { Mode::Window => "Recording window", Mode::Area => "Recording area", _ => "Recording screen" };
+        let caption = egui::Rect::from_center_size(pos2(c.x, c.y + r + 26.0), vec2(220.0, 26.0));
+        p.rect_filled(caption, CornerRadius::same(10), pal.glass_solid);
+        p.text(caption.center(), Align2::CENTER_CENTER, format!("{what} · Esc to cancel"), FontId::proportional(12.5), ink);
+        let cancel = egui::Rect::from_center_size(pos2(c.x, c.y + r + 56.0), vec2(84.0, 26.0));
+        if ui.put(cancel, egui::Button::new(RichText::new("Cancel").size(13.0)).corner_radius(CornerRadius::same(4)).fill(pal.card_3)).clicked() || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+            return RecordingOutcome::Cancelled(None);
+        }
+        RecordingOutcome::Continue
+    }
+
     /// Draw the countdown / HUD into the floating window. Returns what to do next.
     pub fn ui(&mut self, ui: &mut Ui, ctx: &egui::Context) -> RecordingOutcome {
         let full = ui.max_rect();
+        if self.hud_centred {
+            if let Phase::Countdown { until, total_ms } = self.phase {
+                return self.leader_ui(ui, ctx, until, total_ms);
+            }
+        }
         let recording = matches!(self.phase, Phase::Recording(_));
         let pill_w = if recording { 330.0 } else { 420.0 };
         let pill = egui::Rect::from_center_size(pos2(full.center().x, full.bottom() - 10.0 - 29.0), vec2(pill_w, 58.0));
@@ -184,7 +244,7 @@ impl RecordingScreen {
                 painter.circle_filled(badge, 7.0, theme::p().danger);
                 painter.text(pos2(pill.left() + 92.0, pill.center().y), Align2::CENTER_CENTER, secs.to_string(), FontId::proportional(30.0), theme::p().on_glass);
                 painter.text(pos2(pill.left() + 124.0, pill.center().y - 9.0), Align2::LEFT_CENTER, "Recording starts in", FontId::proportional(13.0), theme::p().text);
-                painter.text(pos2(pill.left() + 124.0, pill.center().y + 9.0), Align2::LEFT_CENTER, match self.req.mode { Mode::Area | Mode::Window => "Selected area", _ => "Entire display" }, FontId::proportional(11.5), theme::p().text_dim);
+                painter.text(pos2(pill.left() + 124.0, pill.center().y + 9.0), Align2::LEFT_CENTER, match self.req.mode { Mode::Window => "Selected window", Mode::Area => "Selected area", _ => "Entire display" }, FontId::proportional(11.5), theme::p().text_dim);
                 let cancel = egui::Rect::from_center_size(pos2(pill.right() - 56.0, pill.center().y), vec2(84.0, 32.0));
                 if ui.put(cancel, egui::Button::new(RichText::new("Cancel").size(13.5)).corner_radius(CornerRadius::same(9)).fill(theme::p().card_3)).clicked() || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
                     return RecordingOutcome::Cancelled(None);

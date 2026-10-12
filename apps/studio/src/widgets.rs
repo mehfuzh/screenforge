@@ -214,6 +214,17 @@ pub enum Icon {
     Scissors,
 }
 
+/// Microphone icon whose capsule fills from the bottom with the live input `level` (0..1).
+pub fn paint_mic_level(p: &egui::Painter, rect: Rect, level: f32, color: Color32, fill: Color32) {
+    let c = rect.center();
+    let r = rect.width().min(rect.height()) / 2.0;
+    let capsule = Rect::from_min_max(pos2(c.x - 0.3 * r, c.y - 0.9 * r), pos2(c.x + 0.3 * r, c.y + 0.2 * r));
+    let top = capsule.bottom() - capsule.height() * level.clamp(0.0, 1.0);
+    p.with_clip_rect(Rect::from_min_max(pos2(capsule.left() - 2.0, top), pos2(capsule.right() + 2.0, capsule.bottom() + 2.0)))
+        .rect_filled(capsule, 6.0, fill);
+    paint_icon(p, rect, Icon::Mic, color);
+}
+
 pub fn paint_icon(p: &egui::Painter, rect: Rect, icon: Icon, color: Color32) {
     let s = Stroke::new(1.6, color);
     let c = rect.center();

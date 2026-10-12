@@ -164,8 +164,10 @@ pub struct Picker {
     pub mode: Option<Mode>,
     pub camera: Option<String>,
     pub microphone: Option<String>,
-    /// Live level of the selected microphone (shown as bars on the picker).
+    /// Live level of the selected microphone (fills the microphone icon on the picker).
     mic_meter: Option<crate::mic_meter::MicMeter>,
+    /// Bar width that fits its contents (measured each frame; long device names widen it).
+    bar_w: f32,
     pub system_audio: bool,
     pub countdown_ms: u64,
     pub status: Option<String>,
@@ -178,7 +180,7 @@ pub struct Picker {
 
 impl Default for Picker {
     fn default() -> Self {
-        Picker { thumbs: None, inputs: Inputs::default(), mode: None, camera: None, microphone: None, mic_meter: None, system_audio: false, countdown_ms: 3000, status: None, show_recent: false, recent_rect: egui::Rect::NOTHING, wanted_height: BAR_WINDOW_H }
+        Picker { thumbs: None, inputs: Inputs::default(), mode: None, camera: None, microphone: None, mic_meter: None, bar_w: PILL_SIZE.x, system_audio: false, countdown_ms: 3000, status: None, show_recent: false, recent_rect: egui::Rect::NOTHING, wanted_height: BAR_WINDOW_H }
     }
 }
 
@@ -205,7 +207,7 @@ impl Picker {
         let full = ui.max_rect();
         // transparent window anchored to the bottom of the screen: the pill sits at the
         // bottom, menus and the recent-projects panel open upwards
-        let pill = egui::Rect::from_center_size(pos2(full.center().x, full.bottom() - PILL_MARGIN - PILL_SIZE.y / 2.0), PILL_SIZE);
+        let pill = egui::Rect::from_center_size(pos2(full.center().x, full.bottom() - PILL_MARGIN - PILL_SIZE.y / 2.0), vec2(self.bar_w.min(full.width() - 2.0 * PILL_MARGIN), PILL_SIZE.y));
         crate::vibrancy::set(Some([pill.left(), pill.top(), pill.width(), pill.height()]), full.height(), PILL_RADIUS);
         let pal = theme::p();
         let tint = if crate::vibrancy::is_active() { pal.glass } else { pal.glass_solid };
@@ -295,7 +297,13 @@ impl Picker {
         }
         // settings
         let gear = widgets::icon_text_button(ui, Some(widgets::Icon::Gear), "", true);
-        egui::Popup::menu(&gear).align(egui::RectAlign::TOP_END).show(|ui| {
+        // fit the bar to what it holds (14 px inner margin each side)
+        let fit = (gear.rect.right() - pill.left() + 14.0).ceil();
+        if (fit - self.bar_w).abs() > 0.5 {
+            self.bar_w = fit;
+            ui.ctx().request_repaint();
+        }
+        bar_menu(&gear, egui::RectAlign::TOP_END, |ui| {
             ui.set_min_width(240.0);
             ui.label(RichText::new("Recording countdown").small().color(theme::p().text_dim));
             for (ms, l) in [(0u64, "None"), (3000, "3 seconds"), (5000, "5 seconds"), (10000, "10 seconds")] {
@@ -433,14 +441,16 @@ fn input_menu(ui: &mut Ui, icon: widgets::Icon, label: &str, active: bool, add: 
     input_menu_level(ui, icon, label, active, None, add)
 }
 
-/// `input_menu` with an optional live level (0..1) drawn as four bars after the icon.
+/// `input_menu` with an optional live level (0..1) that fills the icon.
 fn input_menu_level(ui: &mut Ui, icon: widgets::Icon, label: &str, active: bool, level: Option<f32>, add: impl FnOnce(&mut Ui)) {
     let pal = theme::p();
     let font = FontId::proportional(13.0);
-    let galley = ui.fonts_mut(|f| f.layout_no_wrap(label.to_string(), font.clone(), pal.on_glass));
-    let text_w = galley.size().x.min(150.0);
-    let meter_w = if level.is_some() { 22.0 } else { 0.0 };
-    let w = 12.0 + 16.0 + 8.0 + meter_w + text_w + 6.0 + 10.0 + 10.0;
+    // long device names end in "…" instead of being cut mid-letter
+    let mut job = egui::text::LayoutJob::simple_singleline(label.to_string(), font.clone(), pal.on_glass);
+    job.wrap = egui::text::TextWrapping { max_width: 170.0, max_rows: 1, break_anywhere: true, overflow_character: Some('…') };
+    let galley = ui.fonts_mut(|f| f.layout_job(job));
+    let text_w = galley.size().x;
+    let w = 12.0 + 16.0 + 8.0 + text_w + 6.0 + 10.0 + 10.0;
     let (rect, resp) = ui.allocate_exact_size(vec2(w, 34.0), Sense::click());
     let p = ui.painter();
     let open = egui::Popup::is_id_open(ui.ctx(), egui::Popup::default_response_id(&resp));
@@ -448,22 +458,47 @@ fn input_menu_level(ui: &mut Ui, icon: widgets::Icon, label: &str, active: bool,
         p.rect_filled(rect, CornerRadius::same(2), theme::glass_alpha(36));
     }
     let icon_color = if active { pal.accent_hover } else { pal.on_glass };
-    widgets::paint_icon(p, egui::Rect::from_center_size(pos2(rect.left() + 12.0 + 8.0, rect.center().y), vec2(16.0, 16.0)), icon, icon_color);
-    if let Some(l) = level {
-        // four bars, lit from the left as the level rises
-        let x0 = rect.left() + 12.0 + 16.0 + 6.0;
-        for i in 0..4 {
-            let lit = l > (i as f32 + 0.5) / 4.0;
-            let h = 5.0 + i as f32 * 3.0;
-            let bar = egui::Rect::from_min_size(pos2(x0 + i as f32 * 4.0, rect.center().y + 7.0 - h), vec2(2.5, h));
-            p.rect_filled(bar, CornerRadius::same(1), if lit { pal.accent_hover } else { theme::glass_alpha(60) });
-        }
+    let icon_rect = egui::Rect::from_center_size(pos2(rect.left() + 12.0 + 8.0, rect.center().y), vec2(16.0, 16.0));
+    match level {
+        // the microphone itself fills green as you talk
+        Some(l) => widgets::paint_mic_level(p, icon_rect, l, icon_color, pal.meter),
+        None => widgets::paint_icon(p, icon_rect, icon, icon_color),
     }
-    let text_rect = egui::Rect::from_min_size(pos2(rect.left() + 12.0 + 16.0 + 8.0 + meter_w, rect.center().y - galley.size().y / 2.0), vec2(text_w, galley.size().y));
+    let text_rect = egui::Rect::from_min_size(pos2(rect.left() + 12.0 + 16.0 + 8.0, rect.center().y - galley.size().y / 2.0), vec2(text_w, galley.size().y));
     p.with_clip_rect(text_rect.expand2(vec2(0.0, 4.0))).galley(text_rect.min, galley, pal.on_glass);
     widgets::paint_icon(p, egui::Rect::from_center_size(pos2(rect.right() - 10.0 - 5.0, rect.center().y + 1.0), vec2(10.0, 10.0)), widgets::Icon::ChevronDown, pal.text_dim);
-    egui::Popup::menu(&resp).align(egui::RectAlign::TOP_START).show(|ui| {
+    bar_menu(&resp, egui::RectAlign::TOP_START, |ui| {
         ui.set_min_width(260.0);
+        add(ui);
+    });
+}
+
+/// Popup menu styled like the bar: glass panel with 10 px corners, rows with 2 px corners, a
+/// faint highlight on hover and accent text (not a filled block) for the current choice.
+fn bar_menu(resp: &egui::Response, align: egui::RectAlign, add: impl FnOnce(&mut Ui)) {
+    let pal = theme::p();
+    let frame = egui::Frame::NONE
+        .fill(pal.glass_solid)
+        .stroke(Stroke::new(1.0, pal.glass_border))
+        .corner_radius(CornerRadius::same(PILL_RADIUS as u8))
+        .inner_margin(egui::Margin::same(6));
+    egui::Popup::menu(resp).align(align).frame(frame).show(|ui| {
+        let st = ui.style_mut();
+        st.spacing.button_padding = vec2(10.0, 6.0);
+        st.spacing.item_spacing.y = 2.0;
+        let v = &mut st.visuals;
+        v.selection.bg_fill = theme::glass_alpha(22);
+        v.selection.stroke = Stroke::new(1.0, pal.accent_hover);
+        for w in [&mut v.widgets.inactive, &mut v.widgets.hovered, &mut v.widgets.active] {
+            w.corner_radius = CornerRadius::same(2);
+            w.bg_stroke = Stroke::NONE;
+            w.expansion = 0.0;
+        }
+        v.widgets.hovered.weak_bg_fill = theme::glass_alpha(36);
+        v.widgets.hovered.bg_fill = theme::glass_alpha(36);
+        v.widgets.active.weak_bg_fill = theme::glass_alpha(48);
+        v.widgets.inactive.fg_stroke = Stroke::new(1.0, pal.on_glass);
+        v.widgets.hovered.fg_stroke = Stroke::new(1.0, pal.on_glass);
         add(ui);
     });
 }

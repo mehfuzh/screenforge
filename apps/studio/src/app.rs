@@ -82,7 +82,7 @@ impl Prefs {
 pub const EDITOR_SIZE: [f32; 2] = [1440.0, 900.0];
 /// Gap between the picker bar and the bottom of the screen (clears the Dock).
 pub const PICKER_BOTTOM_GAP: f32 = 96.0;
-pub const PICKER_SIZE: [f32; 2] = [1000.0, crate::picker::BAR_WINDOW_H];
+pub const PICKER_SIZE: [f32; 2] = [1200.0, crate::picker::BAR_WINDOW_H];
 
 impl App {
     pub fn new(cc: &CreationContext<'_>) -> Self {
@@ -148,6 +148,24 @@ impl App {
             let x = ((mon.x - width) / 2.0).max(0.0);
             let y = (mon.y - height - PICKER_BOTTOM_GAP).max(0.0);
             ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition([x, y].into()));
+        }
+    }
+
+    /// Size of the film-leader countdown window, centred over what is being recorded.
+    pub const COUNTDOWN_SIZE: [f32; 2] = [260.0, 310.0];
+
+    /// Put the countdown over the middle of the selected window or area (where its Record
+    /// button was), or the middle of the screen for a display recording.
+    fn place_countdown(ctx: &egui::Context, area: Option<&sf_project::schema::common::Rect>) {
+        let [w, h] = Self::COUNTDOWN_SIZE;
+        ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize([w, h].into()));
+        let centre = match area {
+            Some(a) => Some(((a.x + a.width / 2.0) as f32, (a.y + a.height / 2.0) as f32)),
+            None => ctx.input(|i| i.viewport().monitor_size).map(|m| (m.x / 2.0, m.y / 2.0)),
+        };
+        if let Some((cx, cy)) = centre {
+            // the dial's centre (130 px from the top) lands on the centre of the target
+            ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition([(cx - w / 2.0).max(0.0), (cy - 130.0).max(0.0)].into()));
         }
     }
 
@@ -290,6 +308,11 @@ impl eframe::App for App {
                     ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
                 }
                 outcome = Some(r.ui(ui, ctx));
+                // the countdown sat over the selection; the recording HUD goes back to the bottom
+                if r.hud_centred && matches!(r.phase, crate::recorder::Phase::Recording(_)) {
+                    r.hud_centred = false;
+                    Self::place_picker(ctx, 520.0, 110.0);
+                }
             }
             Screen::Editor(ed) if ed.export.is_busy() || self.window_mode == WindowMode::Exporting => {
                 ed.export.poll(ctx);
@@ -389,9 +412,12 @@ impl eframe::App for App {
                 if let Some(msg) = crate::recorder::check_permissions(&mut req) {
                     self.error = Some(msg);
                 } else {
-                    self.screen = Screen::Recording(RecordingScreen::new(req));
+                    let centred = req.countdown_ms > 0;
+                    if centred { Self::place_countdown(ctx, None) } else { Self::place_picker(ctx, 520.0, 110.0) }
+                    let mut screen = RecordingScreen::new(req);
+                    screen.hud_centred = centred;
+                    self.screen = Screen::Recording(screen);
                     crate::vibrancy::set(None, 0.0, 0.0);
-                    Self::place_picker(ctx, 520.0, 110.0);
                 }
             }
             Some(PickerAction::SelectArea(mut req)) => {
@@ -453,9 +479,12 @@ impl eframe::App for App {
                     let bounds = crate::recorder::activate_and_locate(w.pid, w.id).unwrap_or(w.bounds);
                     req.area = Some(bounds);
                     req.window_id = Some(w.id.to_string());
-                    self.screen = Screen::Recording(RecordingScreen::new(req));
+                    let centred = req.countdown_ms > 0;
+                    if centred { Self::place_countdown(ctx, Some(&bounds)) } else { Self::place_picker(ctx, 520.0, 110.0) }
+                    let mut screen = RecordingScreen::new(req);
+                    screen.hud_centred = centred;
+                    self.screen = Screen::Recording(screen);
                     crate::vibrancy::set(None, 0.0, 0.0);
-                    Self::place_picker(ctx, 520.0, 110.0);
                 }
             }
         }
@@ -465,10 +494,14 @@ impl eframe::App for App {
                 crate::area_select::AreaOutcome::Cancelled => self.area_select = None,
                 crate::area_select::AreaOutcome::Done(r) => {
                     let (_, mut req) = self.area_select.take().unwrap();
-                    req.area = Some(sf_project::schema::common::Rect { x: r.min.x as f64, y: r.min.y as f64, width: r.width() as f64, height: r.height() as f64 });
-                    self.screen = Screen::Recording(RecordingScreen::new(req));
+                    let area = sf_project::schema::common::Rect { x: r.min.x as f64, y: r.min.y as f64, width: r.width() as f64, height: r.height() as f64 };
+                    req.area = Some(area);
+                    let centred = req.countdown_ms > 0;
+                    if centred { Self::place_countdown(ctx, Some(&area)) } else { Self::place_picker(ctx, 520.0, 110.0) }
+                    let mut screen = RecordingScreen::new(req);
+                    screen.hud_centred = centred;
+                    self.screen = Screen::Recording(screen);
                     crate::vibrancy::set(None, 0.0, 0.0);
-                    Self::place_picker(ctx, 520.0, 110.0);
                 }
             }
         }

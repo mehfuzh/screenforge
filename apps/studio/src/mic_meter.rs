@@ -1,5 +1,5 @@
 //! Live microphone level for the picker: opens the selected input device with cpal and keeps
-//! a smoothed peak level (0..1) the UI can draw as bars while you talk.
+//! a smoothed peak level (0..1) the UI can draw while you talk.
 
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
@@ -46,7 +46,7 @@ impl MicMeter {
         Some(MicMeter { device_name: name.to_string(), level, _stream: stream })
     }
 
-    /// Smoothed level mapped to 0..1 on a dB scale (-50 dB .. 0 dB), so speech fills the bars.
+    /// Smoothed level mapped to 0..1 on a dB scale (-50 dB .. 0 dB), so speech fills the icon.
     pub fn level(&self) -> f32 {
         let a = f32::from_bits(self.level.load(Ordering::Relaxed)).max(1e-6);
         ((20.0 * a.log10() + 50.0) / 50.0).clamp(0.0, 1.0)
