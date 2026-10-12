@@ -172,7 +172,6 @@ impl RecordingScreen {
             return RecordingOutcome::Continue;
         }
         ctx.request_repaint();
-        let pal = theme::p();
         let full = ui.max_rect();
         let p = ui.painter().clone();
         let c = pos2(full.center().x, full.top() + 130.0);
@@ -180,9 +179,11 @@ impl RecordingScreen {
         let secs = left.as_secs_f64().ceil() as u64;
         // fraction of the current second already gone: the hand sweeps once per number
         let frac = 1.0 - (left.as_secs_f64() - (secs as f64 - 1.0)) as f32;
-        let ink = pal.on_glass;
+        // always white on a dark see-through disc, like a projected film leader (either theme)
+        let ink = Color32::WHITE;
+        let shade = Color32::from_black_alpha(150);
 
-        p.circle_filled(c, r, pal.glass_solid);
+        p.circle_filled(c, r, shade);
         // swept sector, clockwise from 12 o'clock
         let tau = std::f32::consts::TAU;
         let at = |a: f32, rad: f32| pos2(c.x + rad * (a - tau / 4.0).cos(), c.y + rad * (a - tau / 4.0).sin());
@@ -191,23 +192,23 @@ impl RecordingScreen {
         for i in 0..steps {
             let a0 = end * i as f32 / steps as f32;
             let a1 = end * (i + 1) as f32 / steps as f32;
-            p.add(egui::Shape::convex_polygon(vec![c, at(a0, r - 4.0), at(a1, r - 4.0)], ink.gamma_multiply(0.14), Stroke::NONE));
+            p.add(egui::Shape::convex_polygon(vec![c, at(a0, r - 4.0), at(a1, r - 4.0)], ink.gamma_multiply(0.18), Stroke::NONE));
         }
         // crosshair and rings, like a film leader
         let faint = Stroke::new(1.0, ink.gamma_multiply(0.35));
         p.line_segment([pos2(c.x - r, c.y), pos2(c.x + r, c.y)], faint);
         p.line_segment([pos2(c.x, c.y - r), pos2(c.x, c.y + r)], faint);
         p.circle_stroke(c, r * 0.72, faint);
-        p.circle_stroke(c, r, Stroke::new(3.0, ink.gamma_multiply(0.9)));
-        p.line_segment([c, at(end, r - 4.0)], Stroke::new(2.5, pal.danger));
+        p.circle_stroke(c, r, Stroke::new(3.0, ink));
+        p.line_segment([c, at(end, r - 4.0)], Stroke::new(2.5, ink));
         p.text(c, Align2::CENTER_CENTER, secs.to_string(), FontId::proportional(104.0), ink);
 
         let what = match self.req.mode { Mode::Window => "Recording window", Mode::Area => "Recording area", _ => "Recording screen" };
         let caption = egui::Rect::from_center_size(pos2(c.x, c.y + r + 26.0), vec2(220.0, 26.0));
-        p.rect_filled(caption, CornerRadius::same(10), pal.glass_solid);
+        p.rect_filled(caption, CornerRadius::same(10), shade);
         p.text(caption.center(), Align2::CENTER_CENTER, format!("{what} · Esc to cancel"), FontId::proportional(12.5), ink);
         let cancel = egui::Rect::from_center_size(pos2(c.x, c.y + r + 56.0), vec2(84.0, 26.0));
-        if ui.put(cancel, egui::Button::new(RichText::new("Cancel").size(13.0)).corner_radius(CornerRadius::same(4)).fill(pal.card_3)).clicked() || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+        if ui.put(cancel, egui::Button::new(RichText::new("Cancel").size(13.0).color(ink)).corner_radius(CornerRadius::same(4)).fill(shade).stroke(Stroke::new(1.0, ink.gamma_multiply(0.6)))).clicked() || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
             return RecordingOutcome::Cancelled(None);
         }
         RecordingOutcome::Continue

@@ -63,9 +63,11 @@ pub fn create_project_from_recording(recording_dir: &Path, opts: CreateOptions) 
     let display = meta.display();
     let is_area = display.and_then(|d| d.crop_rect()).is_some();
     project.config.styles.screen_border_radius = if is_area { 16.0 } else { 0.0 };
-    if project.config.styles.background.system_name.as_deref() == Some("macOS/san-francisco-dark.jpg") {
-        // Screen Studio's default is Apple artwork we don't ship; use a bundled ScreenForge wallpaper
-        project.config.styles.background.system_name = Some(DEFAULT_WALLPAPER.into());
+    // start on one of this Mac's own wallpapers unless a preset picked something else
+    let bg = project.config.styles.background.system_name.as_deref();
+    if matches!(bg, None | Some("macOS/san-francisco-dark.jpg") | Some(DEFAULT_WALLPAPER)) {
+        let name = crate::assets::system_wallpapers::default_name().unwrap_or_else(|| DEFAULT_WALLPAPER.into());
+        project.config.styles.background.system_name = Some(name);
     }
     let scene = &mut project.scenes[0];
     scene.slices = vec![Slice::new(0.0, duration)];

@@ -360,6 +360,20 @@ pub mod system_wallpapers {
         out
     }
 
+    /// The wallpaper new recordings start with: the newest macOS landscape on this Mac (as
+    /// `macOS/<name>.jpg`), or any converted macOS wallpaper. `None` until one is converted.
+    pub fn default_name() -> Option<String> {
+        let dir = cache_root()?.join("backgrounds").join(CATEGORY);
+        let mut names: Vec<String> = std::fs::read_dir(&dir).ok()?.flatten()
+            .filter_map(|e| e.file_name().to_str().map(str::to_string))
+            .filter(|n| n.ends_with(".jpg") && !n.starts_with('.'))
+            .collect();
+        names.sort();
+        const PREFERRED: [&str; 7] = ["Tahoe", "Sequoia", "Sonoma", "Ventura", "Monterey", "Big Sur", "Catalina"];
+        let pick = PREFERRED.iter().find_map(|p| names.iter().find(|n| n.starts_with(p))).or(names.first())?;
+        Some(format!("{CATEGORY}/{pick}"))
+    }
+
     /// Convert any wallpapers not converted yet (background thread; cheap when up to date).
     pub fn sync_in_background(root: PathBuf) {
         std::thread::Builder::new()
