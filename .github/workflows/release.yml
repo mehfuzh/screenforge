@@ -1,0 +1,121 @@
+name: Release (macOS)
+# Tag `vX.Y.Z` (or run manually / via "Cut release") → release build, Developer ID signing, DMG,
+# notarization, stapling, GitHub Release with the downloadable app. Secrets, set by
+# scripts/setup-release.sh --ci:
+#   APPLE_CERTIFICATE_BASE64, APPLE_CERTIFICATE_PASSWORD  (Developer ID Application .p12)
+#   APPLE_ID, APPLE_APP_SPECIFIC_PASSWORD, APPLE_TEAM_ID   (notarytool)
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: 'Create a GitHub Release'
+        type: boolean
+        default: false
+      draft:
+        description: 'Leave the release as a draft'
+        type: boolean
+        default: false
+permissions:
+  contents: write
+jobs:
+  build:
+    name: Build, sign, notarize
+    runs-on: macos-26
+    env:
+      APPLE_CERTIFICATE_BASE64: ${{ secrets.APPLE_CERTIFICATE_BASE64 }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Require signing secrets for published releases
+        if: ${{ startsWith(github.ref, 'refs/tags/v') || inputs.publish }}
+        env:
+          C: ${{ secrets.APPLE_CERTIFICATE_BASE64 }}
+          P: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          I: ${{ secrets.APPLE_ID }}
+          A: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          T: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          missing=""
+          [ -n "$C" ] || missing="$missing APPLE_CERTIFICATE_BASE64"
+          [ -n "$P" ] || missing="$missing APPLE_CERTIFICATE_PASSWORD"
+          [ -n "$I" ] || missing="$missing APPLE_ID"
+          [ -n "$A" ] || missing="$missing APPLE_APP_SPECIFIC_PASSWORD"
+          [ -n "$T" ] || missing="$missing APPLE_TEAM_ID"
+          if [ -n "$missing" ]; then
+            echo "::error::Refusing to publish an unsigned build. Missing secrets:$missing. Run scripts/setup-release.sh --ci on the Mac with the Developer ID certificate."
+            exit 1
+          fi
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # ffmpeg/ffprobe: static builds are downloaded by scripts/fetch-ffmpeg.sh inside bundle.sh
+      - name: Import Apple code signing certificate
+        if: ${{ env.APPLE_CERTIFICATE_BASE64 != '' }}
+        uses: apple-actions/import-codesign-certs@v2
+        with:
+          p12-file-base64: ${{ secrets.APPLE_CERTIFICATE_BASE64 }}
+          p12-password: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+      - name: Resolve signing identity
+        id: ident
+        if: ${{ env.APPLE_CERTIFICATE_BASE64 != '' }}
+        run: |
+          ID=$(security find-identity -v -p codesigning | grep "Developer ID Application" | head -1 | sed -E 's/.*"(.*)".*/\1/')
+          echo "identity=$ID" >> "$GITHUB_OUTPUT"
+          echo "Signing as: $ID"
+      - name: Build app bundle
+        env:
+          CODESIGN_IDENTITY: ${{ steps.ident.outputs.identity }}
+        run: ./scripts/bundle.sh --release
+      - name: Create DMG
+        id: dmg
+        env:
+          CODESIGN_IDENTITY: ${{ steps.ident.outputs.identity }}
+        run: echo "path=$(./scripts/dmg.sh)" >> "$GITHUB_OUTPUT"
+      - name: Notarize and staple
+        if: ${{ env.APPLE_CERTIFICATE_BASE64 != '' }}
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          xcrun notarytool submit "${{ steps.dmg.outputs.path }}" --apple-id "$APPLE_ID" --password "$APPLE_APP_SPECIFIC_PASSWORD" --team-id "$APPLE_TEAM_ID" --wait
+          xcrun stapler staple "${{ steps.dmg.outputs.path }}"
+          xcrun stapler staple target/ScreenForge.app
+          spctl -a -t open --context context:primary-signature -v "${{ steps.dmg.outputs.path }}" || true
+      - name: Zip app and add stable-named copies (releases/latest/download/ScreenForge.dmg)
+        run: |
+          cd target
+          ditto -c -k --keepParent ScreenForge.app ScreenForge-macOS.zip
+          cp ScreenForge-*.dmg ScreenForge.dmg
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos
+          path: |
+            target/*.dmg
+            target/ScreenForge-macOS.zip
+      - name: Release notes from commits
+        # GitHub's generated notes only cover merged pull requests; this repo is mostly committed
+        # to directly, so list the commits since the previous tag as well (user-facing subjects).
+        run: |
+          PREV=$(git describe --tags --abbrev=0 "${{ github.ref_name }}^" 2>/dev/null || true)
+          RANGE=${PREV:+$PREV..}${{ github.ref_name }}
+          {
+            echo "## Changes${PREV:+ since $PREV}"
+            echo
+            git log --format='- %s' "$RANGE" | grep -v -E '^- (Release [0-9]|Merge )' | head -60
+            echo
+          } > target/notes.md
+          cat target/notes.md
+      - name: GitHub Release
+        if: ${{ startsWith(github.ref, 'refs/tags/v') || inputs.publish }}
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            target/*.dmg
+            target/ScreenForge-macOS.zip
+          body_path: target/notes.md
+          generate_release_notes: true
+          draft: ${{ inputs.draft == true }}
+          name: ScreenForge ${{ github.ref_name }}

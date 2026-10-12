@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <clipPath id="tile"><rect x="100" y="100" width="824" height="824" rx="185"/></clipPath>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%"><feGaussianBlur stdDeviation="16"/></filter>
+  </defs>
+  <rect x="100" y="118" width="824" height="824" rx="185" fill="#000" opacity="0.35" filter="url(#shadow)"/>
+  <rect x="100" y="100" width="824" height="824" rx="185" fill="#1f1f2a"/>
+  <g clip-path="url(#tile)">
+    <!-- flat obsidian shard: five facets, four greys, one ember edge -->
+    <g transform="translate(512 500) scale(1.18) translate(-512 -500)">
+      <polygon points="512,196 700,400 622,790 402,790 324,400" fill="#8e8ea6"/>
+      <polygon points="512,196 700,400 570,476" fill="#eef0fa"/>
+      <polygon points="512,196 570,476 454,476" fill="#c9cbdc"/>
+      <polygon points="512,196 454,476 324,400" fill="#a3a5bb"/>
+      <polygon points="324,400 454,476 402,790" fill="#7e7f95"/>
+      <polygon points="454,476 570,476 512,664 402,790" fill="#b8bacb"/>
+      <polygon points="570,476 700,400 622,790 512,664" fill="#9496ad"/>
+      <polygon points="512,664 622,790 402,790" fill="#ff7a3a"/>
+    </g>
+  </g>
+</svg>

@@ -1,0 +1,16 @@
+[package]
+name = "sf-export"
+description = "Headless export of a session to MP4/GIF/WebM with mixed audio"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+sf-project.workspace = true
+sf-engine.workspace = true
+sf-media.workspace = true
+sf-render.workspace = true
+sf-session.workspace = true
+anyhow.workspace = true
+tracing.workspace = true

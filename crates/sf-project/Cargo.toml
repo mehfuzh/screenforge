@@ -1,0 +1,18 @@
+[package]
+name = "sf-project"
+description = "Project package (.screenstudio) model, superjson envelope, migrations and package I/O"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+chrono.workspace = true
+nanoid.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+anyhow.workspace = true

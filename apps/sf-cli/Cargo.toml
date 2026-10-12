@@ -1,0 +1,27 @@
+[package]
+name = "sf-cli"
+description = "Command line tool: inspect, render frames and export .screenstudio projects"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "sf"
+path = "src/main.rs"
+
+[dependencies]
+sf-project.workspace = true
+sf-engine.workspace = true
+sf-media.workspace = true
+sf-render.workspace = true
+sf-session.workspace = true
+sf-export.workspace = true
+sf-license.workspace = true
+anyhow.workspace = true
+chrono.workspace = true
+clap.workspace = true
+serde_json.workspace = true
+image.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true

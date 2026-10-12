@@ -1,0 +1,12 @@
+/target
+**/*.rs.bk
+.DS_Store
+/dist
+*.screenstudio/recording
+
+# Supabase CLI state
+backend/supabase/.temp/
+/supabase/
+
+# wrangler (Cloudflare Pages deploy) cache
+.wrangler/

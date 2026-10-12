@@ -1,0 +1,487 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ScreenForge — screen recordings that look professionally edited</title>
+<meta name="description" content="ScreenForge records your Mac screen and turns it into a polished video: automatic zooms that follow your clicks and typing, a smooth cursor, backgrounds, and a separate audio track you can split and trim. Free to record and edit.">
+<meta name="color-scheme" content="dark light">
+<meta property="og:type" content="website">
+<meta property="og:title" content="ScreenForge — screen recordings that look professionally edited">
+<meta property="og:description" content="Record your Mac screen, get automatic zooms, a smooth cursor, backgrounds and an editable audio track. Export to MP4 for YouTube, courses and demos. Free to record and edit.">
+<meta property="og:image" content="https://screenforge.studio/og.png?v=2">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:type" content="website">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:image" content="https://screenforge.studio/og.png?v=2">
+<link rel="icon" type="image/png" sizes="512x512" href="icon.png">
+<link rel="shortcut icon" href="icon.png">
+<link rel="apple-touch-icon" href="icon.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;700;900&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
+<style>
+  /* Dark is the default; the light set below only applies when the OS asks
+     for it (and the page has not been pinned to dark via data-theme). */
+  :root {
+    --ground: #15161e;
+    --ink: #1e1f29;
+    --panel: #282a36;
+    --line: rgba(248,248,242,.10);
+    --line-2: rgba(248,248,242,.18);
+    --fg: #c9cbdc;
+    --white: #f8f8f2;
+    --dim: #8e90a6;
+    --jade: #bd93f9;
+    --jade-deep: #8b6fd0;
+    --gold: #ffb86c;
+    --coral: #ff5555;
+    --on-accent: #1e1f29;
+    --mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    --display: 'Archivo', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    --body: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    color-scheme: dark;
+  }
+  :root[data-theme="light"] {
+    --ground: #ececf1;
+    --ink: #f6f6fa;
+    --panel: #ffffff;
+    --line: rgba(30,31,41,.12);
+    --line-2: rgba(30,31,41,.22);
+    --fg: #2e2f3b;
+    --white: #1a1b24;
+    --dim: #5f6175;
+    --jade: #6d5ce7;
+    --jade-deep: #5a4cd0;
+    --gold: #b8631a;
+    --coral: #d23b3b;
+    --on-accent: #ffffff;
+    color-scheme: light;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html { scroll-behavior: smooth; scroll-padding-top: 24px; }
+  body {
+    font-family: var(--body);
+    background: var(--ground);
+    color: var(--fg);
+    line-height: 1.65;
+    -webkit-font-smoothing: antialiased;
+    overflow-x: hidden;
+  }
+  a { color: inherit; text-decoration: none; }
+  img { display: block; max-width: 100%; height: auto; }
+  ::selection { background: var(--jade); color: #04120e; }
+
+  .wrap { max-width: 1180px; margin: 0 auto; padding: 0 28px; }
+
+  /* ── nav ───────────────────────────────────────────── */
+  nav { position: relative; z-index: 1; }
+  .nav-in { display: flex; align-items: center; gap: 32px; height: 60px; }
+  .brand {
+    font-family: var(--display); font-weight: 900;
+    font-size: 19px; letter-spacing: -.03em; color: var(--white);
+    display: inline-flex; align-items: center; gap: 9px;
+  }
+  .brand img { width: 24px; height: 24px; }
+  .nav-links {
+    display: flex; align-items: center; gap: 18px; margin-left: auto;
+    font-family: var(--mono); font-size: 11.5px;
+    text-transform: lowercase; letter-spacing: .01em;
+    color: var(--dim);
+  }
+  .nav-links a { transition: color .15s; }
+  .nav-links a:hover { color: var(--white); }
+  .mode-toggle {
+    display: inline-flex; align-items: stretch; height: 30px;
+    border: 1px solid var(--line-2); overflow: hidden;
+  }
+  .mode-toggle button {
+    display: inline-flex; align-items: center; justify-content: center;
+    padding: 0 10px; color: var(--dim); cursor: pointer;
+    background: none; border: none; font-size: 11.5px; font-weight: 600;
+    font-family: var(--mono); letter-spacing: .03em; text-transform: lowercase;
+    transition: background .12s, color .12s;
+  }
+  .mode-toggle button + button { border-left: 1px solid var(--line-2); }
+  .mode-toggle button[aria-pressed="true"] { background: var(--jade); color: var(--on-accent); }
+  @media (max-width: 720px) {
+    .nav-links a:not(.nav-cta) { display: none; }
+  }
+
+  /* ── hero ──────────────────────────────────────────── */
+  .hero { padding: 92px 0 72px; position: relative; overflow-x: clip; }
+  .hero::before {
+    content: ''; position: absolute; inset: -20% -10% 30%;
+    background: radial-gradient(60% 55% at 22% 30%, rgba(45,213,183,.10), transparent 70%);
+    background: radial-gradient(60% 55% at 22% 30%, color-mix(in srgb, var(--jade) 10%, transparent), transparent 70%);
+    pointer-events: none;
+  }
+  .hero-in { position: relative; }
+  .eyebrow {
+    font-family: var(--mono); font-size: 11.5px; letter-spacing: .16em;
+    text-transform: uppercase; color: var(--jade); margin-bottom: 22px;
+  }
+  .badges { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 26px; }
+  .badge {
+    display: inline-flex; align-items: stretch; border: 1px solid var(--line-2);
+    font-family: var(--mono); font-size: 11px; font-weight: 700; letter-spacing: .05em; line-height: 1;
+  }
+  .badge span { padding: 7px 9px; white-space: nowrap; }
+  .badge .k { background: var(--panel); color: var(--dim); border-right: 1px solid var(--line-2); }
+  .badge .v { color: var(--jade); }
+  .badge.gold .v { color: var(--gold); }
+  h1 {
+    font-family: var(--display); font-weight: 900;
+    font-size: clamp(40px, 7.4vw, 92px); line-height: .95;
+    letter-spacing: -.045em; color: var(--white); max-width: 15ch;
+  }
+  h1 em { font-style: normal; color: var(--jade); }
+  .tagline {
+    margin-top: 22px; font-family: var(--display); font-weight: 700;
+    font-size: clamp(18px, 2.4vw, 26px); letter-spacing: -.02em; line-height: 1.25;
+    color: var(--fg); max-width: 36ch;
+  }
+  .lede { margin-top: 18px; max-width: 58ch; font-size: 17px; color: var(--dim); }
+  .lede b { color: var(--fg); font-weight: 500; }
+
+  .cta { display: flex; flex-wrap: wrap; align-items: center; gap: 14px; margin-top: 38px; }
+  .go {
+    display: inline-flex; align-items: center; gap: 10px;
+    font-family: var(--mono); font-size: 13.5px; font-weight: 600; color: var(--on-accent);
+    background: var(--jade); border: 1px solid var(--jade);
+    padding: 13px 18px; transition: filter .15s;
+  }
+  .go:hover { filter: brightness(1.08); }
+  .alt {
+    display: inline-flex; align-items: center; gap: 10px;
+    font-family: var(--mono); font-size: 13.5px; color: var(--fg);
+    background: var(--ink); border: 1px solid var(--line-2);
+    padding: 13px 18px; transition: border-color .15s, color .15s;
+  }
+  .alt:hover { border-color: var(--jade); color: var(--white); }
+  .alt svg, .go svg { width: 15px; height: 15px; fill: currentColor; }
+  .cta .note { width: 100%; font-family: var(--mono); font-size: 12.5px; color: var(--dim); margin-top: 6px; }
+
+  .demo {
+    margin-top: 56px; border-radius: 12px; overflow: hidden; background: #1e1f29; line-height: 0;
+    box-shadow: 0 24px 80px rgba(0,0,0,.45);
+  }
+  .demo img, .demo video { display: block; width: 100%; height: auto; }
+  .demo img { width: 100%; aspect-ratio: 1200 / 794; }
+
+  /* ── sections ──────────────────────────────────────── */
+  section { padding: 84px 0; border-top: 1px solid var(--line); }
+  .band { background: var(--ink); }
+  .sec-label {
+    font-family: var(--mono); font-size: 11.5px; letter-spacing: .16em;
+    text-transform: uppercase; color: var(--jade-deep); margin-bottom: 14px;
+  }
+  h2 {
+    font-family: var(--display); font-weight: 900;
+    font-size: clamp(28px, 4vw, 46px); line-height: 1.04;
+    letter-spacing: -.035em; color: var(--white); max-width: 20ch;
+  }
+  h2 em { font-style: normal; color: var(--jade); }
+  .sec-sub { margin-top: 16px; max-width: 56ch; font-size: 15.5px; color: var(--dim); }
+
+  /* feature grid: six cards, square corners, one rule apart */
+  .grid {
+    display: grid; grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 1px; margin-top: 44px; background: var(--line); border: 1px solid var(--line);
+  }
+  .card { background: var(--ground); padding: 26px 24px 28px; }
+  .band .card { background: var(--ink); }
+  .card .k {
+    font-family: var(--mono); font-size: 11px; letter-spacing: .14em;
+    text-transform: uppercase; color: var(--jade); margin-bottom: 16px;
+    display: flex; align-items: center; gap: 10px;
+  }
+  .card .k::before { content: ''; width: 7px; height: 7px; background: var(--jade); flex: none; }
+  .card h3 {
+    font-family: var(--display); font-weight: 700; font-size: 18px;
+    letter-spacing: -.02em; color: var(--white); line-height: 1.25; margin-bottom: 10px;
+  }
+  .card p { font-size: 14px; color: var(--dim); }
+  .card code { font-family: var(--mono); font-size: 12.5px; color: var(--fg); }
+  @media (max-width: 920px) { .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+  @media (max-width: 560px) { .grid { grid-template-columns: minmax(0, 1fr); } }
+
+  /* pricing: one card */
+  .plans { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr); gap: 64px; align-items: start; }
+  .plans-copy .sec-sub { margin-bottom: 36px; }
+  .plans .plan { position: sticky; top: 24px; }
+  @media (max-width: 860px) { .plans { grid-template-columns: minmax(0, 1fr); gap: 36px; } }
+  .plan { border: 1px solid var(--jade-deep); background: var(--panel); padding: 28px 28px 30px; }
+  .plan .name {
+    font-family: var(--mono); font-size: 11.5px; letter-spacing: .14em;
+    text-transform: uppercase; color: var(--gold); margin-bottom: 16px;
+  }
+  .plan .fig {
+    font-family: var(--display); font-weight: 900; color: var(--white);
+    font-size: 44px; line-height: 1; letter-spacing: -.04em;
+  }
+  .plan .fig small { font-family: var(--mono); font-size: 13px; letter-spacing: 0; font-weight: 400; color: var(--dim); margin-left: 8px; }
+  .plan .per { font-family: var(--mono); font-size: 12.5px; color: var(--dim); margin: 12px 0 22px; }
+  .plan ul { list-style: none; margin: 0 0 24px; }
+  .plan li { font-size: 14.5px; margin-bottom: 9px; padding-left: 20px; position: relative; }
+  .plan li::before { content: "▪"; position: absolute; left: 0; color: var(--gold); }
+  .plan .foot { font-size: 13px; color: var(--dim); line-height: 1.5; margin-top: 14px; }
+  .buy {
+    display: block; text-align: center; color: var(--gold);
+    background: rgba(255,225,107,.07);
+    background: color-mix(in srgb, var(--gold) 7%, transparent);
+    font-family: var(--mono); font-size: 13.5px; font-weight: 600;
+    letter-spacing: .02em; padding: 13px 18px;
+    border: 1px solid rgba(255,225,107,.45);
+    border-color: color-mix(in srgb, var(--gold) 45%, transparent);
+    transition: background .15s, border-color .15s;
+  }
+  .buy:hover { background: color-mix(in srgb, var(--gold) 13%, transparent); border-color: var(--gold); }
+  .free { display: flex; flex-direction: column; gap: 14px; }
+  .free .row { display: flex; gap: 12px; align-items: baseline; font-size: 15px; }
+  .free .row b { font-family: var(--mono); font-size: 11px; letter-spacing: .12em; text-transform: uppercase; color: var(--jade); flex: none; width: 92px; }
+  .free .row span { color: var(--fg); }
+  .free .row span i { font-style: normal; color: var(--dim); }
+  .tag {
+    display: inline-block; font-family: var(--mono); font-size: 10px; letter-spacing: .12em;
+    text-transform: uppercase; color: var(--jade); padding: 3px 7px; white-space: nowrap;
+    border: 1px solid color-mix(in srgb, var(--jade) 32%, transparent);
+  }
+
+  /* close */
+  .close { text-align: center; padding: 110px 0; border-top: 1px solid var(--line); }
+  .close h2 { margin: 0 auto; max-width: 18ch; }
+  .close .cta { justify-content: center; }
+
+  footer {
+    border-top: 1px solid var(--line); padding: 34px 0;
+    color: var(--dim); font-family: var(--mono); font-size: 11.5px;
+    text-transform: lowercase; letter-spacing: .01em;
+  }
+  .foot-in { display: flex; flex-wrap: wrap; gap: 14px 24px; align-items: center; }
+  .foot-in .r { margin-left: auto; display: flex; flex-wrap: wrap; align-items: center; gap: 16px; }
+  footer a:hover { color: var(--jade); }
+  footer .lic { color: var(--jade); border: 1px solid color-mix(in srgb, var(--jade) 32%, transparent); padding: 2px 8px; line-height: 1.6; font-size: 11px; letter-spacing: .04em; }
+
+  @media (max-width: 560px) {
+    .wrap { padding: 0 16px; }
+    .hero { padding: 56px 0 40px; }
+    .demo { margin-top: 40px; }
+    section { padding: 60px 0; }
+    .close { padding: 76px 0; }
+    .card { padding: 22px 18px 24px; }
+    .plan { padding: 22px 18px 24px; }
+    .go, .alt { width: 100%; justify-content: center; }
+    .foot-in .r { margin-left: 0; }
+  }
+
+  .roadmap { list-style: none; padding: 0; margin: 28px 0 0; display: grid; grid-template-columns: repeat(2, 1fr); gap: 1px; background: var(--line); border: 1px solid var(--line); }
+  .roadmap li { background: var(--ink); padding: 16px 18px; display: flex; flex-direction: column; gap: 4px; }
+  .roadmap strong { font-family: var(--mono); font-size: 12.5px; letter-spacing: .04em; text-transform: uppercase; color: var(--white); }
+  .roadmap span { font-size: 14px; color: var(--dim); }
+  @media (max-width: 720px) { .roadmap { grid-template-columns: 1fr; } }
+</style>
+<script>
+  (function () {
+    try {
+      var t = localStorage.getItem('theme');
+      if (t === 'light' || t === 'dark') document.documentElement.dataset.theme = t;
+    } catch (e) {}
+    // The checkout success URL points at /#thanks; send it on to the real page.
+    if (location.hash === '#thanks') location.replace('success.html');
+  })();
+</script>
+</head>
+<body>
+
+<nav>
+  <div class="wrap nav-in">
+    <a class="brand" href="#"><img src="icon.png" alt="" width="24" height="24">ScreenForge</a>
+    <div class="nav-links">
+      <a href="#features">Features</a>
+      <a href="#roadmap">Roadmap</a>
+      <a href="pricing.html">Pricing</a>
+      <a href="https://github.com/mehfuzh/screenforge">GitHub</a>
+      <a class="nav-cta" href="download.html">Download</a>
+      <div class="mode-toggle" role="group" aria-label="Color scheme">
+        <button type="button" data-set="dark" aria-pressed="true">dark</button>
+        <button type="button" data-set="light" aria-pressed="false">light</button>
+      </div>
+    </div>
+  </div>
+</nav>
+
+<header class="hero">
+  <div class="wrap hero-in">
+    <div class="badges" aria-label="project badges">
+      <span class="badge"><span class="k">free</span><span class="v">record &amp; edit</span></span>
+      <span class="badge gold"><span class="k">status</span><span class="v">early alpha</span></span>
+    </div>
+    <h1>Screen<em>Forge</em></h1>
+    <p class="tagline">Screen recordings that look professionally edited.</p>
+    <p class="lede">
+      Record your Mac screen and get a finished video, not raw footage: zooms that follow your
+      clicks and typing, a smooth cursor, clean backgrounds, and a separate audio track you can
+      split, trim and mute. Made for tutorials, product demos and YouTube.
+    </p>
+    <div class="cta">
+      <a class="go" href="https://github.com/mehfuzh/screenforge/releases/latest/download/ScreenForge.dmg">
+        <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1.5v8.3l2.7-2.7 1 1L8 11.8 4.3 8.1l1-1L8 9.8V1.5zM2.5 12h11v1.5h-11z"/></svg>
+        Download for macOS
+      </a>
+      <a class="alt" href="https://github.com/mehfuzh/screenforge">
+        <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg>
+        View on GitHub
+      </a>
+      <span class="note">Apple silicon · macOS 14 or later · recording and editing are free</span>
+    </div>
+
+    <div class="demo">
+      <video src="demo.mp4" poster="demo-poster.jpg" autoplay muted loop playsinline preload="metadata" width="1440" height="900" aria-label="ScreenForge editing a recording: automatic zooms, playback, sidebar settings and export"></video>
+    </div>
+  </div>
+</header>
+
+<section id="features" class="band">
+  <div class="wrap">
+    <div class="sec-label">What it does</div>
+    <h2>Record, edit, export.<br><em>One native app.</em></h2>
+    <p class="sec-sub">A recorder and a timeline editor in a single window. No Electron, no web view; the compositor runs on the GPU and the UI is drawn natively.</p>
+
+    <div class="grid">
+      <div class="card">
+        <div class="k">Compatibility</div>
+        <h3>Brings your existing projects</h3>
+        <p>Opens and saves <code>.screenstudio</code> project files, so recordings you already have keep working here.</p>
+      </div>
+      <div class="card">
+        <div class="k">Zoom</div>
+        <h3>Automatic zooms</h3>
+        <p>Zooms follow clicks and typing, animated with a spring. Adjust or remove any of them on the timeline.</p>
+      </div>
+      <div class="card">
+        <div class="k">Audio</div>
+        <h3>Independent audio track</h3>
+        <p>Audio lives on its own track. Split, trim, move and mute it separately from the video.</p>
+      </div>
+      <div class="card">
+        <div class="k">Capture</div>
+        <h3>Native capture</h3>
+        <p>ScreenCaptureKit under the hood. Record a display, a window or an area; click a window to pick it.</p>
+      </div>
+      <div class="card">
+        <div class="k">Render</div>
+        <h3>GPU rendering and export</h3>
+        <p>A wgpu compositor renders the timeline. Export MP4 (H.264 / HEVC), ProRes, GIF or WebM, with mixed audio.</p>
+      </div>
+      <div class="card">
+        <div class="k">Appearance</div>
+        <h3>Light and dark</h3>
+        <p>Both themes, dark by default. Follows the system setting or stays where you put it.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="section" id="roadmap">
+  <div class="wrap">
+    <div class="eyebrow">Product roadmap</div>
+    <h2>Honest about what's missing.</h2>
+    <p class="lead">Anything not built yet is greyed out in the app instead of half-working. In order of likely arrival:</p>
+    <ul class="roadmap">
+        <li><strong>Camera recording</strong><span>webcam capture and the camera layouts/styles that depend on it</span></li>
+        <li><strong>Masks and highlights</strong><span>blur or hide regions, spotlight areas</span></li>
+        <li><strong>Crop editing</strong><span>the Crop tool in the preview toolbar</span></li>
+        <li><strong>Captions</strong><span>transcription and caption rendering</span></li>
+        <li><strong>Keyboard shortcut overlay</strong><span>key-cap rendering of recorded keystrokes</span></li>
+        <li><strong>Device frames</strong><span>iPhone/iPad recording and mockup frames</span></li>
+        <li><strong>Unsplash backgrounds</strong><span>online wallpaper search</span></li>
+        <li><strong>Face tracking and color grading</strong><span>camera centring, looks and LUTs</span></li>
+        <li><strong>Remove project</strong><span>move a project to the Trash from the editor</span></li>
+        <li><strong>Licensing backend</strong><span>hosted key issuing (Supabase + Stripe) so Export can be unlocked</span></li>
+    </ul>
+  </div>
+</section>
+
+<section id="pricing">
+  <div class="wrap">
+    <div class="plans">
+      <div class="plans-copy">
+        <div class="sec-label">Pricing</div>
+        <h2>Free to record and edit.<br><em>Pay to export.</em></h2>
+        <p class="sec-sub">Recording and editing are free and open source under Apache-2.0, and so are your first three exports. After that, exporting from the official build needs a license, verified offline. No account, no phone-home. You can always build from source and remove the gate; the license pays for the signed, notarized download, the CI and the maintenance.</p>
+        <div class="free">
+          <div class="row"><b>Free</b><span>Record, open and edit projects. <i>Forever, no license needed.</i></span></div>
+          <div class="row"><b>Source</b><span>Apache-2.0 on GitHub. <i>Build it yourself and remove the gate if you like; the license funds the ready-made build and its upkeep.</i></span></div>
+          <div class="row"><b>Offline</b><span>The key is checked on your machine. <i>Nothing is sent anywhere.</i></span></div>
+          <div class="row"><b>Refunds</b><span>Email within 14 days. <i>No questions.</i></span></div>
+        </div>
+      </div>
+      <div class="plan">
+        <div class="name">Creator</div>
+        <div class="fig">US$10<small>/ month</small></div>
+        <div class="per">or US$29 once for a lifetime key</div>
+        <ul>
+          <li>Export to MP4, ProRes, GIF and WebM</li>
+          <li>Verified offline, works without a network</li>
+          <li>Every update included while the key is valid</li>
+          <li>Lifetime key never expires</li>
+        </ul>
+        <a class="buy" href="pricing.html">Get a key</a>
+        <p class="foot">Recording and editing stay free either way. The key only unlocks export.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<div class="close">
+  <div class="wrap">
+    <div class="sec-label">Get started</div>
+    <h2>Record your first clip in <em>a minute.</em></h2>
+    <div class="cta">
+      <a class="go" href="https://github.com/mehfuzh/screenforge/releases/latest/download/ScreenForge.dmg">Download for macOS</a>
+      <a class="alt" href="https://github.com/mehfuzh/screenforge">View on GitHub</a>
+    </div>
+  </div>
+</div>
+
+<footer>
+  <div class="wrap foot-in">
+    <span class="lic">Apache-2.0</span>
+    <span>ScreenForge</span>
+    <div class="r">
+      <a href="https://github.com/mehfuzh/screenforge">github</a>
+      <a href="https://github.com/mehfuzh/screenforge/releases/latest">releases</a>
+      <a href="privacy.html">privacy</a>
+      <a href="terms.html">terms</a>
+      <span>Made in San Francisco, CA</span>
+    </div>
+  </div>
+</footer>
+
+<script>
+  (function () {
+    var root = document.documentElement;
+    var btns = document.querySelectorAll('.mode-toggle button');
+    function current() {
+      if (root.dataset.theme) return root.dataset.theme;
+      return 'dark';
+    }
+    function paint() {
+      var c = current();
+      btns.forEach(function (b) { b.setAttribute('aria-pressed', String(b.dataset.set === c)); });
+    }
+    btns.forEach(function (b) {
+      b.addEventListener('click', function () {
+        root.dataset.theme = b.dataset.set;
+        try { localStorage.setItem('theme', b.dataset.set); } catch (e) {}
+        paint();
+      });
+    });
+    paint();
+  })();
+</script>
+</body>
+</html>

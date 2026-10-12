@@ -1,0 +1,17 @@
+[package]
+name = "sf-license"
+description = "Offline license keys for ScreenForge exports (Ed25519 signed, no server needed)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+chrono.workspace = true
+ed25519-dalek = { version = "2", features = ["rand_core"] }
+base64 = "0.22"
+rand = "0.8"
+thiserror.workspace = true
+ureq = { version = "2", features = ["json"] }

@@ -1,0 +1,36 @@
+[package]
+name = "sf-recording"
+description = "Screen/audio/input recorder writing the package recording layout"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+sf-project.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+chrono.workspace = true
+crossbeam-channel.workspace = true
+parking_lot.workspace = true
+which = "7"
+image.workspace = true
+
+[target.'cfg(target_os = "macos")'.dependencies]
+screencapturekit = { version = "11", features = ["macos_14_0"] }
+core-graphics = "0.25"
+core-foundation = "0.10"
+foreign-types = "0.5"
+objc2 = "0.6"
+block2 = "0.6"
+libc = "0.2"
+objc2-foundation = { version = "0.3", features = ["NSData", "NSString", "NSArray", "NSGeometry", "NSDictionary", "NSValue", "NSObject"] }
+objc2-app-kit = { version = "0.3", features = ["NSCursor", "NSImage", "NSImageRep", "NSBitmapImageRep", "NSApplication", "NSGraphics", "NSScreen", "NSResponder"] }
+cpal = "0.18"
+
+[dev-dependencies]
+sf-media.workspace = true
+tempfile = "3"

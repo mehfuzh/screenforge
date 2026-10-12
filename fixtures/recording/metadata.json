@@ -1,0 +1,85 @@
+{
+  "logFilename": "polyrecorder.log",
+  "polyrecorderVersion": "2.7.0+ss.5",
+  "recorders": [
+    {
+      "configuration": {},
+      "cursorImagesFolder": "cursors",
+      "cursorsInfoFile": "cursors.json",
+      "id": "channel-0-cursor",
+      "type": "cursor"
+    },
+    {
+      "configuration": {
+        "captureKeyStrokes": true
+      },
+      "id": "channel-0-input",
+      "sessions": [
+        {
+          "durationMs": 163219.34641664848,
+          "keyStrokesFilename": "keystrokes-0.json",
+          "mouseClicksFilename": "mouseclicks-0.json",
+          "mouseMovesFilename": "mousemoves-0.json",
+          "processTimeEndMs": 163693.7583333347,
+          "processTimeStartMs": 474.41191668622196,
+          "unixEndMs": 1791399371838.5972,
+          "unixStartMs": 1791399208619.2507
+        }
+      ],
+      "type": "input"
+    },
+    {
+      "configuration": {
+        "cropRect": {
+          "height": 900,
+          "width": 1200,
+          "x": 534,
+          "y": 259,
+          "yAxis": "topBasedIncreasingDownwards"
+        },
+        "displayId": 3,
+        "excludeFinderDesktopIcons": false,
+        "excludedWindowIds": [
+          37789,
+          37790,
+          37791,
+          37850
+        ],
+        "videoCompressionSettings": {
+          "maxKeyFrameInterval": 120,
+          "quality": 0.85
+        }
+      },
+      "id": "channel-1-display",
+      "sessions": [
+        {
+          "bounds": {
+            "height": 900,
+            "width": 1200,
+            "x": 534,
+            "y": 259
+          },
+          "displayRefreshRate": 60,
+          "durationMs": 163219.34641600001,
+          "outputFilename": "channel-1-display-0.m3u8",
+          "processTimeEndMs": 163693.75833268624,
+          "processTimeStartMs": 474.41191668622196,
+          "recordingScale": 0.5,
+          "unixEndMs": 1791399371838.5972,
+          "unixStartMs": 1791399208619.2507
+        }
+      ],
+      "type": "display"
+    }
+  ],
+  "sessions": [
+    {
+      "durationMs": 163219.34641664848,
+      "processTimeEndMs": 163693.7583333347,
+      "processTimeStartMs": 474.41191668622196,
+      "unixEndMs": 1791399371838.5972,
+      "unixStartMs": 1791399208619.2507
+    }
+  ],
+  "state": "complete"
+}

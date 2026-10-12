@@ -1,0 +1,62 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/sf-project",
+    "crates/sf-engine",
+    "crates/sf-media",
+    "crates/sf-render",
+    "crates/sf-session",
+    "crates/sf-license",
+    "crates/sf-recording",
+    "crates/sf-export",
+    "apps/studio",
+    "apps/sf-cli",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+repository = "https://github.com/mehfuzh/screenforge"
+rust-version = "1.85"
+
+[workspace.dependencies]
+sf-project = { path = "crates/sf-project" }
+sf-engine = { path = "crates/sf-engine" }
+sf-media = { path = "crates/sf-media" }
+sf-render = { path = "crates/sf-render" }
+sf-session = { path = "crates/sf-session" }
+sf-license = { path = "crates/sf-license" }
+sf-recording = { path = "crates/sf-recording" }
+sf-export = { path = "crates/sf-export" }
+
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order", "float_roundtrip"] }
+anyhow = "1"
+thiserror = "2"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+chrono = { version = "0.4", features = ["serde"] }
+nanoid = "0.5"
+glam = "0.34"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+clap = { version = "4", features = ["derive"] }
+directories = "6"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "process", "io-util", "sync", "time"] }
+crossbeam-channel = "0.5"
+parking_lot = "0.12"
+wgpu = "30"
+bytemuck = { version = "1", features = ["derive"] }
+eframe = { version = "0.36", default-features = false, features = ["wgpu", "default_fonts", "persistence"] }
+egui = "0.36"
+egui-wgpu = "0.36"
+egui_extras = { version = "0.36", features = ["image", "file"] }
+rfd = "0.17"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+
+[profile.dev.package."*"]
+opt-level = 2

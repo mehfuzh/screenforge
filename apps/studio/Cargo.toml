@@ -1,0 +1,44 @@
+[package]
+name = "studio"
+description = "ScreenForge desktop app: recorder, editor, exporter"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "screenforge"
+path = "src/main.rs"
+
+[dependencies]
+sf-project.workspace = true
+sf-engine.workspace = true
+sf-media.workspace = true
+sf-render.workspace = true
+sf-session.workspace = true
+sf-export.workspace = true
+sf-license.workspace = true
+sf-recording.workspace = true
+eframe.workspace = true
+egui.workspace = true
+egui-wgpu.workspace = true
+egui_extras.workspace = true
+wgpu.workspace = true
+rfd.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+directories.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+chrono.workspace = true
+cpal = "0.18"
+muda = "0.21"
+image.workspace = true
+parking_lot.workspace = true
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+objc2-foundation = { version = "0.3", features = ["NSArray", "NSGeometry", "NSString", "NSFileManager", "NSURL", "NSError"] }
+objc2-app-kit = { version = "0.3", features = ["NSApplication", "NSWindow", "NSResponder", "NSView", "NSVisualEffectView", "NSGraphics", "NSStatusBar", "NSStatusItem", "NSStatusBarButton", "NSButton", "NSControl", "NSImage", "NSImageRep", "NSBitmapImageRep", "NSMenu", "NSCell", "NSRunningApplication"] }
+objc2-quartz-core = { version = "0.3", features = ["CALayer"] }

@@ -1,0 +1,27 @@
+name: Site
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "site/**"
+      - ".github/workflows/site.yml"
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    env:
+      CF_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Skip until the Cloudflare token is configured
+        if: ${{ env.CF_TOKEN == '' }}
+        run: echo "CLOUDFLARE_API_TOKEN secret not set; see scripts/deploy-site.sh. Nothing to deploy." >> "$GITHUB_STEP_SUMMARY"
+      - name: Deploy site/ to Cloudflare Pages
+        if: ${{ env.CF_TOKEN != '' }}
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: pages deploy site --project-name=screenforge --branch=main
