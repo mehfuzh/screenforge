@@ -271,6 +271,13 @@ impl Editor {
         }
     }
 
+    /// Stop playback, audio included (scrubbing or jumping must not leave the music running
+    /// and skipping along with the playhead).
+    pub fn pause(&mut self) {
+        self.playing = false;
+        self.audio.pause();
+    }
+
     pub fn toggle_play(&mut self) {
         if self.playing {
             self.playing = false;

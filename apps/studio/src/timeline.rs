@@ -456,7 +456,7 @@ impl TimelineWidget {
         }
         if let Some(ms) = seek_to {
             if self.drag.is_none() {
-                ed.playing = false;
+                ed.pause();
                 ed.seek(ms);
             }
         }
@@ -1185,7 +1185,7 @@ pub fn jump_boundary(ed: &mut Editor, forward: bool) {
     let boundaries = spans.iter().map(|s| s.output_start_ms).chain(std::iter::once(ed.session.timeline.duration_ms()));
     let target = if forward { boundaries.filter(|b| *b > t + 1.0).fold(None, |m: Option<f64>, b| Some(m.map_or(b, |m| m.min(b)))) } else { boundaries.filter(|b| *b < t - 1.0).fold(None, |m: Option<f64>, b| Some(m.map_or(b, |m| m.max(b)))) };
     if let Some(b) = target {
-        ed.playing = false;
+        ed.pause();
         ed.seek(b);
     }
 }
