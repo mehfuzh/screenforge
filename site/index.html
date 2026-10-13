@@ -20,7 +20,7 @@
 <link rel="apple-touch-icon" href="icon.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;700;900&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700;900&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
 <style>
   /* Dark is the default; the light set below only applies when the OS asks
      for it (and the page has not been pinned to dark via data-theme). */
@@ -118,7 +118,39 @@
     background: radial-gradient(60% 55% at 22% 30%, color-mix(in srgb, var(--jade) 10%, transparent), transparent 70%);
     pointer-events: none;
   }
-  .hero-in { position: relative; }
+  /* faint grid behind the hero, fading out towards the edges */
+  .hero::after {
+    content: ''; position: absolute; inset: 0; pointer-events: none;
+    background-image:
+      linear-gradient(var(--line) 1px, transparent 1px),
+      linear-gradient(90deg, var(--line) 1px, transparent 1px);
+    background-size: 64px 64px; background-position: center top;
+    -webkit-mask-image: radial-gradient(80% 70% at 50% 30%, #000 30%, transparent 85%);
+    mask-image: radial-gradient(80% 70% at 50% 30%, #000 30%, transparent 85%);
+    opacity: .55;
+  }
+  .hero-in { position: relative; z-index: 1; }
+
+  /* Record → Edit → Export, quietly beside the heading */
+  .panel { position: absolute; top: 92px; right: 28px; width: 340px; }
+  .steps { list-style: none; margin: 0; padding: 0; counter-reset: step; }
+  .steps li {
+    counter-increment: step; position: relative;
+    padding: 0 0 26px 52px; font-size: 15px; line-height: 1.45;
+  }
+  .steps li:last-child { padding-bottom: 0; }
+  .steps li::before {
+    content: '0' counter(step); position: absolute; left: 0; top: 7px;
+    font-family: var(--mono); font-size: 12px; color: var(--jade);
+  }
+  /* thin line joining the steps */
+  .steps li:not(:last-child)::after {
+    content: ''; position: absolute; left: 8px; top: 30px; bottom: 4px;
+    width: 1px; background: var(--line-2);
+  }
+  .steps b { display: block; font-family: var(--display); font-size: 20px; font-weight: 600; letter-spacing: -.02em; color: var(--white); margin-bottom: 2px; }
+  .steps span { color: var(--dim); }
+  @media (max-width: 1180px) { .panel { display: none; } }
   .eyebrow {
     font-family: var(--mono); font-size: 11.5px; letter-spacing: .16em;
     text-transform: uppercase; color: var(--jade); margin-bottom: 22px;
@@ -133,17 +165,30 @@
   .badge .v { color: var(--jade); }
   .badge.gold .v { color: var(--gold); }
   h1 {
-    font-family: var(--display); font-weight: 900;
-    font-size: clamp(40px, 7.4vw, 92px); line-height: .95;
-    letter-spacing: -.045em; color: var(--white); max-width: 15ch;
+    font-family: var(--display); font-weight: 600;
+    font-size: clamp(32px, 4.4vw, 54px); line-height: 1.1;
+    letter-spacing: -.02em; color: var(--white); max-width: 21ch;
   }
-  h1 em { font-style: normal; color: var(--jade); }
-  .tagline {
-    margin-top: 22px; font-family: var(--display); font-weight: 700;
-    font-size: clamp(18px, 2.4vw, 26px); letter-spacing: -.02em; line-height: 1.25;
-    color: var(--fg); max-width: 36ch;
+  h1 em { font-style: normal; color: var(--jade); white-space: nowrap; }
+  /* "screen" drawn as a little retro TV: thick rounded frame and rabbit-ear antennas */
+  h1 .scr {
+    --tv: color-mix(in srgb, var(--dim) 75%, transparent);
+    position: relative; display: inline-block; line-height: 1;
+    padding: .1em .22em .14em; margin: 0 .06em;
+    border: max(2px, .055em) solid var(--tv); border-radius: .2em;
+    background: var(--ink);
+    box-shadow: inset 0 0 .35em color-mix(in srgb, var(--jade) 22%, transparent);
   }
-  .lede { margin-top: 18px; max-width: 58ch; font-size: 17px; color: var(--dim); }
+  h1 .scr::before {
+    content: ''; position: absolute; left: 50%; bottom: 100%;
+    width: .95em; height: .5em; transform: translateX(-50%);
+    background:
+      radial-gradient(circle at .04em .04em, var(--tv) .045em, transparent .05em) left top / .1em .1em no-repeat,
+      radial-gradient(circle at .06em .04em, var(--tv) .045em, transparent .05em) right top / .1em .1em no-repeat,
+      linear-gradient(to top right, transparent calc(50% - .025em), var(--tv) calc(50% - .025em), var(--tv) calc(50% + .025em), transparent calc(50% + .025em)) left / 50% 100% no-repeat,
+      linear-gradient(to top left, transparent calc(50% - .025em), var(--tv) calc(50% - .025em), var(--tv) calc(50% + .025em), transparent calc(50% + .025em)) right / 50% 100% no-repeat;
+  }
+  .lede { margin-top: 22px; max-width: 58ch; font-size: 17px; color: var(--dim); }
   .lede b { color: var(--fg); font-weight: 500; }
 
   .cta { display: flex; flex-wrap: wrap; align-items: center; gap: 14px; margin-top: 38px; }
@@ -180,9 +225,9 @@
     text-transform: uppercase; color: var(--jade-deep); margin-bottom: 14px;
   }
   h2 {
-    font-family: var(--display); font-weight: 900;
+    font-family: var(--display); font-weight: 700;
     font-size: clamp(28px, 4vw, 46px); line-height: 1.04;
-    letter-spacing: -.035em; color: var(--white); max-width: 20ch;
+    letter-spacing: -.03em; color: var(--white); max-width: 20ch;
   }
   h2 em { font-style: normal; color: var(--jade); }
   .sec-sub { margin-top: 16px; max-width: 56ch; font-size: 15.5px; color: var(--dim); }
@@ -317,11 +362,16 @@
 <header class="hero">
   <div class="wrap hero-in">
     <div class="badges" aria-label="project badges">
-      <span class="badge"><span class="k">free</span><span class="v">record &amp; edit</span></span>
-      <span class="badge gold"><span class="k">status</span><span class="v">early alpha</span></span>
+      <span class="badge gold"><span class="k">status</span><span class="v">beta</span></span>
     </div>
-    <h1>Screen<em>Forge</em></h1>
-    <p class="tagline">Screen recordings that look professionally edited.</p>
+    <h1>Pro <span class="scr">screen</span> recording <em>in minutes.</em></h1>
+    <div class="panel" aria-hidden="true">
+      <ol class="steps">
+        <li><div><b>Record</b><span>Hit record, show your screen, talk it through.</span></div></li>
+        <li><div><b>Edit</b><span>Zooms follow your clicks on their own. Split your voice and trim the ums.</span></div></li>
+        <li><div><b>Export</b><span>MP4 or GIF, up to 4K, ready for YouTube.</span></div></li>
+      </ol>
+    </div>
     <p class="lede">
       Record your Mac screen and get a finished video, not raw footage: zooms that follow your
       clicks and typing, a smooth cursor, clean backgrounds, and a separate audio track you can
@@ -331,10 +381,6 @@
       <a class="go os-dl" href="https://github.com/mehfuzh/screenforge/releases/latest/download/ScreenForge.dmg">
         <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1.5v8.3l2.7-2.7 1 1L8 11.8 4.3 8.1l1-1L8 9.8V1.5zM2.5 12h11v1.5h-11z"/></svg>
         <span class="os-label">Download for macOS</span>
-      </a>
-      <a class="alt" href="https://github.com/mehfuzh/screenforge">
-        <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg>
-        View on GitHub
       </a>
       <span class="note os-note">Apple silicon · macOS 14 or later · recording and editing are free · also on <a href="download.html#linux">Linux</a></span>
     </div>
@@ -363,9 +409,9 @@
         <p>Zooms follow clicks and typing, animated with a spring. Adjust or remove any of them on the timeline.</p>
       </div>
       <div class="card">
-        <div class="k">Audio</div>
-        <h3>Independent audio track</h3>
-        <p>Audio lives on its own track. Split, trim, move and mute it separately from the video.</p>
+        <div class="k">Audio <span class="tag">new</span></div>
+        <h3>Split your voice from the video</h3>
+        <p>Your voice lives on its own track. Split, trim, move and mute it separately from the video.</p>
       </div>
       <div class="card">
         <div class="k">Capture</div>
@@ -443,7 +489,6 @@
     <h2>Record your first clip in <em>a minute.</em></h2>
     <div class="cta">
       <a class="go os-dl" href="https://github.com/mehfuzh/screenforge/releases/latest/download/ScreenForge.dmg"><span class="os-label">Download for macOS</span></a>
-      <a class="alt" href="https://github.com/mehfuzh/screenforge">View on GitHub</a>
     </div>
   </div>
 </div>
