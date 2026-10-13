@@ -221,14 +221,13 @@ impl TimelineWidget {
                 continue;
             }
             let selected = ed.selected_slice == Some(span.index);
-            let fill = if selected { theme::p().clip_selected } else { theme::p().clip };
             let block = Rect::from_min_max(pos2(x0 + 1.5, clip_top), pos2(x1 - 1.5, clip_top + CLIP_H));
-            painter.rect(block, 10.0, fill, Stroke::new(if selected { 2.0 } else { 0.0 }, Color32::WHITE.gamma_multiply(0.8)), egui::StrokeKind::Inside);
+            glass_block(&painter, block, 8.0, if selected { theme::p().clip_selected } else { theme::p().clip }, selected);
             // faint vertical "beat" lines like Screen Studio's clip texture
             let mut lx = x0 + 1.5 + 120.0;
             while lx < x1 - 10.0 {
                 if lx > rect.left() && lx < rect.right() {
-                    painter.line_segment([pos2(lx, clip_top + 10.0), pos2(lx, clip_top + CLIP_H - 10.0)], Stroke::new(1.0, theme::p().clip_line));
+                    painter.line_segment([pos2(lx, clip_top + 10.0), pos2(lx, clip_top + CLIP_H - 10.0)], Stroke::new(1.0, theme::p().clip.gamma_multiply(0.18)));
                 }
                 lx += 120.0;
             }
@@ -243,7 +242,7 @@ impl TimelineWidget {
                             if let Some(src) = ed.session.timeline.output_to_source(ms_of(x)) {
                                 let b = ((src / dur) * peaks.len() as f64) as usize;
                                 let a = (peaks[b.min(peaks.len() - 1)] * main_vol).min(1.0);
-                                painter.line_segment([pos2(x, mid - a * half), pos2(x, mid + a * half)], Stroke::new(1.5, theme::p().clip_text.gamma_multiply(0.28)));
+                                painter.line_segment([pos2(x, mid - a * half), pos2(x, mid + a * half)], Stroke::new(1.5, theme::p().clip.gamma_multiply(0.7)));
                             }
                             x += 2.0;
                         }
@@ -257,10 +256,10 @@ impl TimelineWidget {
             if r.width() > 60.0 {
                 if audio_in_clips {
                     // label on top, waveform underneath
-                    painter.text(pos2(r.center().x, r.top() + 16.0), egui::Align2::CENTER_CENTER, label, egui::FontId::proportional(14.0), theme::p().clip_text);
+                    painter.text(pos2(r.center().x, r.top() + 16.0), egui::Align2::CENTER_CENTER, label, egui::FontId::proportional(14.0), theme::p().text);
                 } else {
-                    painter.text(pos2(r.center().x, r.top() + 16.0), egui::Align2::CENTER_CENTER, "Clip", egui::FontId::proportional(12.0), theme::p().clip_text.gamma_multiply(0.75));
-                    painter.text(pos2(r.center().x, r.bottom() - 18.0), egui::Align2::CENTER_CENTER, label, egui::FontId::proportional(15.0), theme::p().clip_text);
+                    painter.text(pos2(r.center().x, r.top() + 16.0), egui::Align2::CENTER_CENTER, "Clip", egui::FontId::proportional(12.0), theme::p().text_dim);
+                    painter.text(pos2(r.center().x, r.bottom() - 18.0), egui::Align2::CENTER_CENTER, label, egui::FontId::proportional(15.0), theme::p().text);
                 }
             }
             // cut marker badge at the start of every clip but the first
@@ -384,21 +383,20 @@ impl TimelineWidget {
                 continue;
             }
             let selected = ed.selected_zoom.as_deref() == Some(z.id.as_str());
-            let fill = if selected { theme::p().zoom_selected } else { theme::p().zoom };
-            let fill = if z.is_disabled { fill.gamma_multiply(0.45) } else { fill };
-            let stroke = Stroke::new(if selected { 2.0 } else { 0.0 }, Color32::WHITE.gamma_multiply(0.8));
+            let color = if selected { theme::p().zoom_selected } else { theme::p().zoom };
+            let color = if z.is_disabled { color.gamma_multiply(0.45) } else { color };
             let mut min_x = f32::MAX;
             let mut max_x = f32::MIN;
             for (o0, o1) in &segments {
                 let r = Rect::from_min_max(pos2(x_of(*o0) + 1.5, zoom_top + 4.0), pos2(x_of(*o1) - 1.5, zoom_top + ZOOM_H - 4.0));
                 min_x = min_x.min(r.left());
                 max_x = max_x.max(r.right());
-                painter.rect(r, 9.0, fill, stroke, egui::StrokeKind::Inside);
+                glass_block(&painter, r, 8.0, color, selected);
             }
             let item_full = Rect::from_min_max(pos2(min_x, zoom_top), pos2(max_x, zoom_top + ZOOM_H));
             if item_full.width() > 30.0 {
                 let label = if z.is_disabled { format!("🔍 {}× off", trim_float(z.zoom)) } else if z.is_auto() { format!("🔍 Zoom {}×", trim_float(z.zoom)) } else { format!("🔍 Manual {}×", trim_float(z.zoom)) };
-                painter.text(item_full.center(), egui::Align2::CENTER_CENTER, label, egui::FontId::proportional(13.0), Color32::WHITE);
+                painter.text(item_full.center(), egui::Align2::CENTER_CENTER, label, egui::FontId::proportional(13.0), theme::p().text);
             }
             let item_rect = item_full.intersect(rect);
             if item_rect.width() <= 0.0 {
@@ -510,7 +508,7 @@ impl TimelineWidget {
                 Some(name) => {
                     // the whole lane shows the looping background track
                     let lane = track_rect.shrink2(vec2(3.0, 4.0));
-                    painter.rect_filled(lane, 8.0, theme::p().accent.gamma_multiply(0.35));
+                    glass_block(&painter, lane, 8.0, theme::p().accent, false);
                     painter.text(pos2(lane.left() + 12.0, lane.center().y), egui::Align2::LEFT_CENTER, format!("Music · {name}"), egui::FontId::proportional(13.0), theme::p().text);
                 }
                 None => {
@@ -560,9 +558,8 @@ impl TimelineWidget {
             }
             let selected = detached && ed.selected_audio.as_deref() == Some(span.id.as_str());
             let is_sys = span.track == AudioTrack::SystemAudio;
-            let base = if is_sys { Color32::from_rgb(0x2f, 0x6f, 0x6a) } else { Color32::from_rgb(0x2b, 0x5a, 0x8c) };
-            let fill = if span.muted { base.gamma_multiply(0.4) } else if selected { base.gamma_multiply(1.35) } else { base };
-            painter.rect(full, 8.0, fill, Stroke::new(if selected { 2.0 } else { 0.0 }, Color32::WHITE.gamma_multiply(0.8)), egui::StrokeKind::Inside);
+            let base = if is_sys { theme::p().meter } else { theme::p().accent_hover };
+            glass_block(&painter, full, 8.0, if span.muted { base.gamma_multiply(0.4) } else { base }, selected);
             // waveform
             if let Some((t, peaks, dur)) = &self.peaks {
                 if *t == span.track && *dur > 0.0 && !span.muted {
@@ -586,7 +583,7 @@ impl TimelineWidget {
                         poly.extend(pts_bot.iter().rev());
                         painter.add(egui::Shape::convex_polygon(vec![], Color32::TRANSPARENT, Stroke::NONE));
                         for (a, b) in pts_top.iter().zip(pts_bot.iter()) {
-                            painter.line_segment([*a, *b], Stroke::new(1.5, Color32::WHITE.gamma_multiply(0.55)));
+                            painter.line_segment([*a, *b], Stroke::new(1.5, base.gamma_multiply(0.75)));
                         }
                     }
                 }
@@ -594,7 +591,7 @@ impl TimelineWidget {
             if r.width() > 70.0 {
                 let base_label = if span.muted { "Muted" } else if is_sys { "System audio" } else { "Audio" };
                 let label = if (span.speed - 1.0).abs() > 1e-6 { format!("{base_label} · {}×", trim_float(span.speed)) } else { base_label.to_string() };
-                painter.text(pos2(r.left() + 8.0, full.top() + 9.0), egui::Align2::LEFT_CENTER, label, egui::FontId::proportional(10.5), Color32::WHITE.gamma_multiply(0.85));
+                painter.text(pos2(r.left() + 8.0, full.top() + 9.0), egui::Align2::LEFT_CENTER, label, egui::FontId::proportional(10.5), theme::p().text_dim);
             }
             // In linked mode a click/drag on an audio block detaches the audio automatically and
             // continues with the matching clip, so the user can just select and delete.
@@ -1038,6 +1035,14 @@ fn add_zoom_at(ed: &mut Editor, src: f64) {
 
 fn zoom_index(ed: &Editor, id: &str) -> Option<usize> {
     ed.session.pkg.project.scenes[0].zooms.iter().position(|z| z.id == id)
+}
+
+/// Translucent timeline block: a light tint of `color` with a thin outline in the same colour
+/// (stronger when selected), so the lanes read as glass over the theme background.
+fn glass_block(painter: &egui::Painter, r: Rect, radius: f32, color: Color32, selected: bool) {
+    let fill = color.gamma_multiply(if selected { 0.42 } else { 0.26 });
+    let stroke = if selected { Stroke::new(2.0, color) } else { Stroke::new(1.0, color.gamma_multiply(0.75)) };
+    painter.rect(r, radius, fill, stroke, egui::StrokeKind::Inside);
 }
 
 // ───────────── context menus ─────────────
