@@ -109,13 +109,6 @@ impl PermissionsSetup {
                                 };
                                 if !after.is_granted() {
                                     let _ = p::open_settings(perm);
-                                    // macOS does not prompt for Input Monitoring or list the app on
-                                    // request: show the bundle so it can be dragged into the list
-                                    if perm == Permission::InputMonitoring {
-                                        if let Some(app) = app_bundle() {
-                                            crate::os::reveal(&app);
-                                        }
-                                    }
                                 }
                                 self.status = Self::poll();
                             }
@@ -154,7 +147,7 @@ impl PermissionsSetup {
 /// macOS 26 refuses to prompt for this permission and does not list the app on request.
 fn input_monitoring_desc(status: PermissionStatus) -> &'static str {
     if status == PermissionStatus::Denied {
-        "In System Settings, click + and choose ScreenForge, or drag it in from Finder."
+        "In System Settings, click + below the list and choose ScreenForge."
     } else {
         "Cursor, clicks and keystrokes: smooth cursor and automatic zooms."
     }
