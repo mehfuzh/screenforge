@@ -114,6 +114,24 @@ impl FfmpegProc {
         }
     }
 
+    /// Ask ffmpeg to stop (SIGINT, like pressing Ctrl-C) so it finalizes the output, then wait.
+    /// For captures that do not read stdin (e.g. X11 grabbing).
+    #[cfg(unix)]
+    pub fn interrupt(mut self) -> Result<()> {
+        unsafe { libc::kill(self.child.id() as libc::pid_t, libc::SIGINT) };
+        let status = self.child.wait().map_err(|source| Error::Io { path: "ffmpeg".into(), source })?;
+        drop(self.stdin.take());
+        if let Some(t) = self.stderr_thread.take() {
+            let _ = t.join();
+        }
+        // ffmpeg exits with 255 after SIGINT even when the output is complete
+        if status.success() || status.code() == Some(255) {
+            Ok(())
+        } else {
+            Err(Error::Capture(format!("{}: ffmpeg exited with {status}", self.label)))
+        }
+    }
+
     /// Kill the process (used by cancel).
     pub fn kill(mut self) {
         drop(self.stdin.take());

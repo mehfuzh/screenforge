@@ -1,4 +1,4 @@
-name: Release (macOS)
+name: Release (macOS + Linux)
 # Tag `vX.Y.Z` (or run manually / via "Cut release") → release build, Developer ID signing, DMG,
 # notarization, stapling, GitHub Release with the downloadable app. Secrets, set by
 # scripts/setup-release.sh --ci:
@@ -119,3 +119,41 @@ jobs:
           generate_release_notes: true
           draft: ${{ inputs.draft == true }}
           name: ScreenForge ${{ github.ref_name }}
+
+  linux:
+    name: Build Linux packages
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: System libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends pkg-config libgtk-3-dev libasound2-dev \
+            libxkbcommon-dev libwayland-dev libx11-dev libxcursor-dev libxrandr-dev libxi-dev libxtst-dev \
+            libxfixes-dev libxcb1-dev libxcb-xfixes0-dev libxdo-dev
+      - name: Build .deb and .tar.gz
+        run: ./scripts/bundle-linux.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux
+          path: |
+            target/screenforge_*.deb
+            target/ScreenForge-*linux*.tar.gz
+
+  linux-publish:
+    # after the macOS job has created the release, attach the Linux files to it
+    name: Attach Linux packages to the release
+    needs: [build, linux]
+    if: ${{ startsWith(github.ref, 'refs/tags/v') || inputs.publish }}
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: linux
+          path: linux
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: linux/*
+          draft: ${{ inputs.draft == true }}

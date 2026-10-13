@@ -178,19 +178,132 @@ pub fn microphones() -> Vec<AudioDevice> {
         .collect()
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(target_os = "linux")]
+pub use linux::{displays, microphones, windows, windows_with};
+
+/// Linux (X11): monitors from RandR, windows from the EWMH client list, microphones from cpal.
+#[cfg(target_os = "linux")]
+mod linux {
+    use super::{AudioDevice, DisplayInfo, WindowInfo};
+    use sf_project::schema::common::Rect;
+    use x11rb::connection::Connection;
+    use x11rb::protocol::randr::ConnectionExt as _;
+    use x11rb::protocol::xproto::{AtomEnum, ConnectionExt as _};
+
+    pub fn displays() -> Vec<DisplayInfo> {
+        let Ok((conn, screen_num)) = x11rb::connect(None) else { return Vec::new() };
+        let screen = &conn.setup().roots[screen_num];
+        let root = screen.root;
+        let monitors = conn.randr_get_monitors(root, true).ok().and_then(|c| c.reply().ok());
+        let mut out: Vec<DisplayInfo> = match monitors {
+            Some(m) if !m.monitors.is_empty() => m
+                .monitors
+                .iter()
+                .enumerate()
+                .map(|(i, mon)| {
+                    let name = conn.get_atom_name(mon.name).ok().and_then(|c| c.reply().ok()).map(|r| String::from_utf8_lossy(&r.name).into_owned()).unwrap_or_else(|| format!("Monitor {}", i + 1));
+                    DisplayInfo {
+                        id: i as u32 + 1,
+                        bounds_points: Rect { x: mon.x as f64, y: mon.y as f64, width: mon.width as f64, height: mon.height as f64 },
+                        scale: 1.0,
+                        refresh_rate: 60.0,
+                        is_main: mon.primary,
+                        is_builtin: name.starts_with("eDP") || name.starts_with("LVDS"),
+                        name,
+                    }
+                })
+                .collect(),
+            _ => vec![DisplayInfo {
+                id: 1,
+                bounds_points: Rect { x: 0.0, y: 0.0, width: screen.width_in_pixels as f64, height: screen.height_in_pixels as f64 },
+                scale: 1.0,
+                refresh_rate: 60.0,
+                is_main: true,
+                is_builtin: false,
+                name: "Screen".into(),
+            }],
+        };
+        if !out.iter().any(|d| d.is_main) {
+            if let Some(d) = out.first_mut() {
+                d.is_main = true;
+            }
+        }
+        out
+    }
+
+    fn atom(conn: &impl Connection, name: &str) -> Option<u32> {
+        conn.intern_atom(false, name.as_bytes()).ok()?.reply().ok().map(|r| r.atom)
+    }
+
+    fn text_prop(conn: &impl Connection, win: u32, prop: u32, ty: u32) -> Option<String> {
+        let r = conn.get_property(false, win, prop, ty, 0, 1024).ok()?.reply().ok()?;
+        (!r.value.is_empty()).then(|| String::from_utf8_lossy(&r.value).trim_end_matches('\0').to_string())
+    }
+
+    pub fn windows_with(_on_screen_only: bool) -> Vec<WindowInfo> {
+        let Ok((conn, screen_num)) = x11rb::connect(None) else { return Vec::new() };
+        let root = conn.setup().roots[screen_num].root;
+        let (Some(list), Some(net_name), Some(utf8), Some(pid_atom)) = (atom(&conn, "_NET_CLIENT_LIST_STACKING"), atom(&conn, "_NET_WM_NAME"), atom(&conn, "UTF8_STRING"), atom(&conn, "_NET_WM_PID")) else { return Vec::new() };
+        let Some(reply) = conn.get_property(false, root, list, AtomEnum::WINDOW, 0, 4096).ok().and_then(|c| c.reply().ok()) else { return Vec::new() };
+        let Some(ids) = reply.value32() else { return Vec::new() };
+        let ids: Vec<u32> = ids.collect();
+        let mut out = Vec::new();
+        // stacking order is bottom → top; the picker wants front to back
+        for win in ids.into_iter().rev() {
+            let Some(geo) = conn.get_geometry(win).ok().and_then(|c| c.reply().ok()) else { continue };
+            let Some(tr) = conn.translate_coordinates(win, root, 0, 0).ok().and_then(|c| c.reply().ok()) else { continue };
+            let title = text_prop(&conn, win, net_name, utf8).or_else(|| text_prop(&conn, win, AtomEnum::WM_NAME.into(), AtomEnum::STRING.into())).unwrap_or_default();
+            let class = text_prop(&conn, win, AtomEnum::WM_CLASS.into(), AtomEnum::STRING.into()).unwrap_or_default();
+            // WM_CLASS is "instance\0Class"
+            let app_name = class.split('\0').filter(|s| !s.is_empty()).last().unwrap_or("").to_string();
+            let pid = conn.get_property(false, win, pid_atom, AtomEnum::CARDINAL, 0, 1).ok().and_then(|c| c.reply().ok()).and_then(|r| r.value32().and_then(|mut v| v.next())).unwrap_or(0) as i32;
+            let attrs = conn.get_window_attributes(win).ok().and_then(|c| c.reply().ok());
+            let mapped = attrs.map(|a| a.map_state == x11rb::protocol::xproto::MapState::VIEWABLE).unwrap_or(true);
+            if geo.width < 40 || geo.height < 40 || app_name.eq_ignore_ascii_case("screenforge") {
+                continue;
+            }
+            out.push(WindowInfo {
+                id: win,
+                title,
+                bundle_id: app_name.to_lowercase(),
+                app_name,
+                pid,
+                is_on_screen: mapped,
+                bounds: Rect { x: tr.dst_x as f64, y: tr.dst_y as f64, width: geo.width as f64, height: geo.height as f64 },
+            });
+        }
+        out
+    }
+
+    pub fn windows() -> Vec<WindowInfo> {
+        windows_with(true)
+    }
+
+    pub fn microphones() -> Vec<AudioDevice> {
+        use cpal::traits::{DeviceTrait, HostTrait};
+        let host = cpal::default_host();
+        let default = host.default_input_device().and_then(|d| d.description().ok().map(|d| d.name().to_string()));
+        let Ok(devices) = host.input_devices() else { return Vec::new() };
+        devices
+            .filter_map(|d| d.description().ok().map(|d| d.name().to_string()))
+            .map(|name| AudioDevice { is_default: Some(&name) == default.as_ref(), id: name.clone(), name })
+            .collect()
+    }
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
 pub fn displays() -> Vec<DisplayInfo> {
     Vec::new()
 }
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
 pub fn windows_with(_on_screen_only: bool) -> Vec<WindowInfo> {
     Vec::new()
 }
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
 pub fn windows() -> Vec<WindowInfo> {
     Vec::new()
 }
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
 pub fn microphones() -> Vec<AudioDevice> {
     Vec::new()
 }

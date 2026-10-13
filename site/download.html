@@ -3,8 +3,8 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Download for macOS — ScreenForge</title>
-<meta name="description" content="Download ScreenForge for macOS: a screen recorder and timeline editor that makes polished videos. Apple silicon, macOS 14 or later.">
+<title>Download — ScreenForge</title>
+<meta name="description" content="Download ScreenForge for macOS or Linux: a screen recorder and timeline editor that makes polished videos.">
 <meta name="color-scheme" content="dark light">
 <meta property="og:type" content="website">
 <meta property="og:title" content="Download for macOS — ScreenForge">
@@ -433,6 +433,21 @@
 <pre><code><span class="p">$ </span>git clone https://github.com/mehfuzh/screenforge &amp;&amp; cargo build --release -p studio</code></pre>
     <p>The binary lands in <code>target/release/screenforge</code>; <code>scripts/bundle.sh</code> wraps it in an <code>.app</code>. The export gate is ordinary Apache-2.0 code: a source build can remove it. The license exists to fund the signed, notarized download, the CI that produces it and ongoing maintenance.</p>
   </div>
+
+  <h2 id="linux">Linux</h2>
+  <p>ScreenForge also runs on Linux (x86_64). Editing and exporting work everywhere; recording needs an <i class="hl">X11 session</i> (on Wayland, pick an "on Xorg" session at the login screen) and the system <code>ffmpeg</code>. System audio recording is macOS-only for now.</p>
+  <div class="cta">
+    <a class="go" href="https://github.com/mehfuzh/screenforge/releases/latest/download/screenforge_amd64.deb" rel="noopener">
+      <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1.5v8.3l2.7-2.7 1 1L8 11.8 4.3 8.1l1-1L8 9.8V1.5zM2.5 12h11v1.5h-11z"/></svg>
+      Download .deb
+    </a>
+    <a class="go" href="https://github.com/mehfuzh/screenforge/releases/latest/download/ScreenForge-linux-x86_64.tar.gz" rel="noopener">
+      <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1.5v8.3l2.7-2.7 1 1L8 11.8 4.3 8.1l1-1L8 9.8V1.5zM2.5 12h11v1.5h-11z"/></svg>
+      Download .tar.gz
+    </a>
+  </div>
+<pre><code><span class="p">$ </span>sudo apt install ./screenforge_amd64.deb   <span class="p"># Debian / Ubuntu, pulls in ffmpeg</span>
+<span class="p">$ </span>tar xzf ScreenForge-linux-x86_64.tar.gz &amp;&amp; ./ScreenForge/screenforge   <span class="p"># other distros</span></code></pre>
 
   <h2>Older versions</h2>
   <p>Every build, with its notes and checksums, is on <a href="https://github.com/mehfuzh/screenforge/releases">GitHub Releases</a>. The download button above always points at the newest one.</p>

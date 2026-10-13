@@ -3,6 +3,7 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
 permissions:
   contents: read
 jobs:
@@ -22,3 +23,29 @@ jobs:
       - name: Clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
         continue-on-error: true
+
+  linux:
+    name: Build & test (Linux)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: System libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends pkg-config ffmpeg libgtk-3-dev libasound2-dev \
+            libxkbcommon-dev libwayland-dev libx11-dev libxcursor-dev libxrandr-dev libxi-dev libxtst-dev \
+            libxfixes-dev libxcb1-dev libxcb-xfixes0-dev libxdo-dev libpulse-dev
+      - name: Build
+        run: cargo build --workspace --all-targets
+      - name: Test
+        run: cargo test --workspace
+      - name: Linux packages (.deb + .tar.gz)
+        run: ./scripts/bundle-linux.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux
+          path: |
+            target/screenforge_amd64.deb
+            target/ScreenForge-linux-x86_64.tar.gz

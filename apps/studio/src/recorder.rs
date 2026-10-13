@@ -21,7 +21,8 @@ pub fn discover_inputs() -> Inputs {
             .filter(|w| w.bounds.width >= 64.0 && w.bounds.height >= 64.0 && !w.app_name.is_empty() && !is_helper_app(&w.app_name, &w.bundle_id))
             .map(|w| crate::picker::WindowEntry { id: w.id, pid: w.pid, app: w.app_name.clone(), title: w.title.clone(), bounds: w.bounds, on_screen: w.is_on_screen })
             .collect(),
-        system_audio_supported: true,
+        // system audio comes from ScreenCaptureKit (macOS only)
+        system_audio_supported: cfg!(target_os = "macos"),
     }
 }
 
@@ -31,6 +32,10 @@ pub fn discover_inputs() -> Inputs {
 /// it the recording simply has no cursor/keystroke data, so we never block on it.
 pub fn check_permissions(req: &mut RecordRequest) -> Option<String> {
     use sf_recording::permissions as p;
+    #[cfg(target_os = "linux")]
+    if let Some(why) = sf_recording::display::unsupported_reason() {
+        return Some(why);
+    }
     if !p::screen_recording().is_granted() && !p::request_screen_recording().is_granted() {
         return Some("permission:screen".into());
     }

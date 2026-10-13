@@ -23,6 +23,8 @@ fn main() -> eframe::Result {
     let icon = eframe::icon_data::from_png_bytes(include_bytes!("../assets/icon-256.png")).expect("app icon");
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
+            // Linux desktops match the window to screenforge.desktop by this id
+            .with_app_id("screenforge")
             .with_icon(icon)
             .with_inner_size(app::PICKER_SIZE)
             .with_decorations(false)

@@ -10,3 +10,4 @@ backend/supabase/.temp/
 
 # wrangler (Cloudflare Pages deploy) cache
 .wrangler/
+.claude/

@@ -232,10 +232,14 @@ pub fn interleave(planes: &[Vec<f32>]) -> Vec<f32> {
 }
 
 #[cfg(target_os = "macos")]
-pub use imp::{MicRecorder, SystemAudioHandler};
+pub use imp::SystemAudioHandler;
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+pub use mic::MicRecorder;
 
-#[cfg(target_os = "macos")]
-mod imp {
+
+/// Microphone capture through `cpal` (CoreAudio on macOS, ALSA/PulseAudio/PipeWire on Linux).
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+mod mic {
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Arc;
     use std::thread::JoinHandle;
@@ -243,11 +247,8 @@ mod imp {
 
     use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
     use crossbeam_channel::bounded;
-    use screencapturekit::cm::CMSampleBuffer;
-    use screencapturekit::stream::output_trait::SCStreamOutputTrait;
-    use screencapturekit::stream::output_type::SCStreamOutputType;
 
-    use super::{bytes_to_f32, interleave, PcmSink, PcmSinkHandle};
+    use super::{PcmSink, PcmSinkHandle};
     use crate::clock;
     use crate::log::RecLog;
     use crate::{Error, Result};
@@ -266,9 +267,24 @@ mod imp {
         pub channels: u16,
     }
 
+    /// `(uid, name, is_default)` of the inputs the OS reports: CoreAudio UIDs on macOS; on
+    /// Linux the device name doubles as the id.
+    #[cfg(target_os = "macos")]
+    fn known_inputs() -> Vec<crate::discover::AudioDevice> {
+        screencapturekit::audio_devices::AudioInputDevice::list()
+            .into_iter()
+            .map(|d| crate::discover::AudioDevice { id: d.id, name: d.name, is_default: d.is_default })
+            .collect()
+    }
+
+    #[cfg(target_os = "linux")]
+    fn known_inputs() -> Vec<crate::discover::AudioDevice> {
+        crate::discover::microphones()
+    }
+
     fn resolve_device(selector: &str) -> Result<(cpal::Device, String, String)> {
         let host = cpal::default_host();
-        let known = screencapturekit::audio_devices::AudioInputDevice::list();
+        let known = known_inputs();
         let (want_name, uid): (Option<String>, Option<String>) = if selector == "default" || selector.is_empty() {
             (None, known.iter().find(|d| d.is_default).map(|d| d.id.clone()))
         } else if let Some(k) = known.iter().find(|d| d.id == selector) {
@@ -379,6 +395,16 @@ mod imp {
             self.stop();
         }
     }
+}
+
+#[cfg(target_os = "macos")]
+mod imp {
+    use screencapturekit::cm::CMSampleBuffer;
+    use screencapturekit::stream::output_trait::SCStreamOutputTrait;
+    use screencapturekit::stream::output_type::SCStreamOutputType;
+
+    use super::{bytes_to_f32, interleave, PcmSink};
+    use crate::clock;
 
     /// `SCStreamOutputType::Audio` handler forwarding system audio (48 kHz stereo float)
     /// into a [`PcmSink`].

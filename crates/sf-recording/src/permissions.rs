@@ -130,7 +130,33 @@ mod imp {
     }
 }
 
-#[cfg(not(target_os = "macos"))]
+/// Linux has no per-app privacy prompts for X11 capture, input or audio: everything is
+/// available to the user's session (recording itself needs an X11 session, see
+/// `display::unsupported_reason`).
+#[cfg(target_os = "linux")]
+mod imp {
+    use super::PermissionStatus;
+    pub fn screen_recording() -> PermissionStatus {
+        PermissionStatus::Granted
+    }
+    pub fn request_screen_recording() -> PermissionStatus {
+        PermissionStatus::Granted
+    }
+    pub fn input_monitoring() -> PermissionStatus {
+        PermissionStatus::Granted
+    }
+    pub fn request_input_monitoring() -> PermissionStatus {
+        PermissionStatus::Granted
+    }
+    pub fn microphone() -> PermissionStatus {
+        PermissionStatus::Granted
+    }
+    pub fn request_microphone() -> PermissionStatus {
+        PermissionStatus::Granted
+    }
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
 mod imp {
     use super::PermissionStatus;
     pub fn screen_recording() -> PermissionStatus {
@@ -181,6 +207,7 @@ pub fn request_microphone() -> PermissionStatus {
 /// Accessibility permission (`AXIsProcessTrusted`), used to read the text caret while typing.
 pub fn accessibility() -> PermissionStatus {
     if !cfg!(target_os = "macos") {
+        // caret tracking is macOS-only; elsewhere typing zooms follow the mouse
         return PermissionStatus::Unsupported;
     }
     if crate::caret::accessibility_trusted() { PermissionStatus::Granted } else { PermissionStatus::NotDetermined }

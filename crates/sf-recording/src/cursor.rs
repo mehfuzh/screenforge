@@ -38,6 +38,103 @@ pub fn write_cursors_json(dir: &Path, cursors: &[CursorInfo]) -> std::io::Result
 
 #[cfg(target_os = "macos")]
 pub use imp::CursorRecorder;
+#[cfg(target_os = "linux")]
+pub use linux::CursorRecorder;
+
+/// Linux: X11 does not expose the theme's cursor images portably, so the recording gets one
+/// drawn arrow (`arrow`, like the macOS id) and the editor renders it smoothly over the video.
+#[cfg(target_os = "linux")]
+mod linux {
+    use std::path::Path;
+    use std::sync::Arc;
+
+    use sf_project::recording::CursorInfo;
+    use sf_project::schema::common::{Point, Size};
+
+    use crate::log::RecLog;
+    use crate::{Error, Result};
+
+    const COMPONENT: &str = "CursorRecorder";
+    /// Arrow outline in points (tip at the hot spot), drawn at 2× into a 24×32 pt image.
+    const ARROW: [(f64, f64); 7] = [(4.0, 4.0), (4.0, 21.0), (8.2, 17.0), (11.2, 24.0), (13.6, 23.0), (10.6, 16.0), (16.0, 16.0)];
+
+    fn inside(poly: &[(f64, f64)], x: f64, y: f64) -> bool {
+        let mut c = false;
+        let mut j = poly.len() - 1;
+        for i in 0..poly.len() {
+            let (xi, yi) = poly[i];
+            let (xj, yj) = poly[j];
+            if (yi > y) != (yj > y) && x < (xj - xi) * (y - yi) / (yj - yi) + xi {
+                c = !c;
+            }
+            j = i;
+        }
+        c
+    }
+
+    /// Black arrow with a white border, 4× supersampled.
+    fn arrow_png() -> Option<Vec<u8>> {
+        let (w, h, scale) = (48u32, 64u32, 2.0);
+        let mut img = image::RgbaImage::new(w, h);
+        for py in 0..h {
+            for px in 0..w {
+                let (mut fill, mut edge) = (0u32, 0u32);
+                for sy in 0..4 {
+                    for sx in 0..4 {
+                        let x = (px as f64 + (sx as f64 + 0.5) / 4.0) / scale;
+                        let y = (py as f64 + (sy as f64 + 0.5) / 4.0) / scale;
+                        if inside(&ARROW, x, y) {
+                            // a sample is border when a neighbour ~1 pt away falls outside
+                            let near_out = [(-1.0, 0.0), (1.0, 0.0), (0.0, -1.0), (0.0, 1.0), (-0.7, -0.7), (0.7, 0.7), (0.7, -0.7), (-0.7, 0.7)]
+                                .iter()
+                                .any(|(dx, dy)| !inside(&ARROW, x + dx * 1.1, y + dy * 1.1));
+                            if near_out { edge += 1 } else { fill += 1 }
+                        }
+                    }
+                }
+                let a = ((fill + edge) * 255 / 16) as u8;
+                if a > 0 {
+                    let v = (edge * 255 / (fill + edge).max(1)) as u8;
+                    img.put_pixel(px, py, image::Rgba([v, v, v, a]));
+                }
+            }
+        }
+        let mut out = std::io::Cursor::new(Vec::new());
+        img.write_to(&mut out, image::ImageFormat::Png).ok()?;
+        Some(out.into_inner())
+    }
+
+    pub struct CursorRecorder {
+        id: Arc<str>,
+        cursors: Vec<CursorInfo>,
+    }
+
+    impl CursorRecorder {
+        pub fn start(dir: &Path, log: RecLog, on_change: Box<dyn Fn(&str) + Send>) -> Result<Self> {
+            let folder = dir.join("cursors");
+            std::fs::create_dir_all(&folder).map_err(|source| Error::Io { path: folder.clone(), source })?;
+            let png = arrow_png().ok_or_else(|| Error::Capture("could not draw the cursor".into()))?;
+            let path = folder.join("arrow.png");
+            std::fs::write(&path, png).map_err(|source| Error::Io { path, source })?;
+            let info = CursorInfo { id: "arrow".into(), hot_spot: Point::new(4.0, 4.0), standard_size: Size { width: 24.0, height: 32.0 }, system_cursor: true, extra: Default::default() };
+            let cursors = vec![info];
+            super::write_cursors_json(dir, &cursors).map_err(|source| Error::Io { path: dir.join("cursors.json"), source })?;
+            on_change("arrow");
+            log.notice(COMPONENT, "Cursor: drawn arrow (X11 cursor images are not captured).");
+            Ok(CursorRecorder { id: "arrow".into(), cursors })
+        }
+
+        pub fn current_id(&self) -> Arc<str> {
+            self.id.clone()
+        }
+
+        pub fn cursors(&self) -> Vec<CursorInfo> {
+            self.cursors.clone()
+        }
+
+        pub fn stop(&mut self) {}
+    }
+}
 
 /// `(width, height, png)` of the arrow cursor; main thread only. Used by the smoke example.
 #[cfg(target_os = "macos")]

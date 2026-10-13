@@ -114,7 +114,6 @@ pub fn target_bitrate(width: u32, height: u32, quality: f64) -> u64 {
 
 /// ffmpeg arguments for one HLS session (relative file names; run with cwd = output dir).
 pub fn hls_args(width: u32, height: u32, fps: u32, bitrate: u64, encoder: &str, session: usize) -> Vec<String> {
-    let base = format!("channel-1-display-{session}");
     let mut args: Vec<String> = vec![
         "-y".into(),
         "-f".into(),
@@ -127,9 +126,15 @@ pub fn hls_args(width: u32, height: u32, fps: u32, bitrate: u64, encoder: &str, 
         fps.to_string(),
         "-i".into(),
         "pipe:0".into(),
-        "-c:v".into(),
-        encoder.into(),
     ];
+    args.extend(hls_encode_args(bitrate, encoder, session));
+    args
+}
+
+/// Encoder + HLS muxer arguments shared by every capture input.
+pub fn hls_encode_args(bitrate: u64, encoder: &str, session: usize) -> Vec<String> {
+    let base = format!("channel-1-display-{session}");
+    let mut args: Vec<String> = vec!["-c:v".into(), encoder.into()];
     if encoder == "libx264" {
         args.extend(["-preset", "veryfast", "-tune", "zerolatency"].map(String::from));
     } else {
@@ -155,6 +160,119 @@ pub fn hls_args(width: u32, height: u32, fps: u32, bitrate: u64, encoder: &str, 
 
 #[cfg(target_os = "macos")]
 pub use imp::DisplayRecorder;
+#[cfg(target_os = "linux")]
+pub use linux::DisplayRecorder;
+
+/// Linux: ffmpeg grabs the region straight from the X server (`x11grab`), one ffmpeg per
+/// session, writing the same HLS layout as the macOS recorder. The cursor is left out of the
+/// video (`-draw_mouse 0`); the editor draws it from the input log.
+#[cfg(target_os = "linux")]
+mod linux {
+    use std::path::Path;
+
+    use parking_lot::Mutex;
+
+    use super::{hls_encode_args, target_bitrate, DisplayPlan};
+    use crate::config::RecordingConfig;
+    use crate::ffmpeg::FfmpegProc;
+    use crate::log::RecLog;
+    use crate::{Error, Result};
+
+    const COMPONENT: &str = "DisplayRecorder";
+
+    pub struct DisplayRecorder {
+        plan: DisplayPlan,
+        fps: u32,
+        quality: f64,
+        display: String,
+        log: RecLog,
+        proc: Mutex<Option<(FfmpegProc, std::time::Instant)>>,
+        error: Mutex<Option<String>>,
+    }
+
+    /// Why recording cannot work in this session, if it cannot.
+    pub fn unsupported_reason() -> Option<String> {
+        let wayland = std::env::var("XDG_SESSION_TYPE").map(|t| t.eq_ignore_ascii_case("wayland")).unwrap_or(false) || std::env::var_os("WAYLAND_DISPLAY").is_some();
+        if std::env::var_os("DISPLAY").is_none() {
+            return Some("No X11 display. ScreenForge records X11 sessions; on Wayland, log in with an \"on Xorg\" session.".into());
+        }
+        if wayland {
+            return Some("Wayland sessions are not supported for recording yet: log out and choose an \"on Xorg\" / X11 session at the login screen.".into());
+        }
+        None
+    }
+
+    impl DisplayRecorder {
+        pub fn start(cfg: &RecordingConfig, plan: DisplayPlan, log: RecLog, _system_audio: Option<()>) -> Result<Self> {
+            if let Some(why) = unsupported_reason() {
+                return Err(Error::Capture(why));
+            }
+            let display = std::env::var("DISPLAY").unwrap_or_else(|_| ":0".into());
+            log.notice(COMPONENT, format!("x11grab on {display}: {plan:?}"));
+            Ok(DisplayRecorder { plan, fps: cfg.fps, quality: cfg.video_quality, display, log, proc: Mutex::new(None), error: Mutex::new(None) })
+        }
+
+        pub fn begin_session(&self, index: usize, dir: &Path) -> Result<()> {
+            let b = self.plan.bounds;
+            let (w, h) = (self.plan.width_px, self.plan.height_px);
+            // x11grab needs even sizes for yuv420p
+            let (gw, gh) = ((b.width as u32) & !1, (b.height as u32) & !1);
+            let mut args: Vec<String> = vec![
+                "-y".into(),
+                "-f".into(),
+                "x11grab".into(),
+                "-draw_mouse".into(),
+                "0".into(),
+                "-framerate".into(),
+                self.fps.to_string(),
+                "-video_size".into(),
+                format!("{gw}x{gh}"),
+                "-i".into(),
+                format!("{}+{},{}", self.display, b.x as i64, b.y as i64),
+            ];
+            if (gw, gh) != (w, h) {
+                args.extend(["-vf".into(), format!("scale={w}:{h}:flags=bicubic")]);
+            }
+            args.extend(hls_encode_args(target_bitrate(w, h, self.quality), "libx264", index));
+            let proc = FfmpegProc::spawn(&args, dir, self.log.clone(), COMPONENT)?;
+            *self.proc.lock() = Some((proc, std::time::Instant::now()));
+            Ok(())
+        }
+
+        /// Stop the session's ffmpeg; returns the approximate number of frames recorded.
+        pub fn end_session(&self) -> Result<u64> {
+            let Some((proc, started)) = self.proc.lock().take() else { return Ok(0) };
+            let frames = (started.elapsed().as_secs_f64() * self.fps as f64) as u64;
+            if let Err(e) = proc.interrupt() {
+                *self.error.lock() = Some(e.to_string());
+                return Err(e);
+            }
+            Ok(frames)
+        }
+
+        pub fn frames_received(&self) -> u64 {
+            self.proc.lock().as_ref().map(|(_, t)| (t.elapsed().as_secs_f64() * self.fps as f64) as u64).unwrap_or(0)
+        }
+
+        pub fn error(&self) -> Option<String> {
+            self.error.lock().clone()
+        }
+
+        pub fn stop(&mut self) {
+            if let Some((proc, _)) = self.proc.lock().take() {
+                let _ = proc.interrupt();
+            }
+        }
+    }
+
+    impl Drop for DisplayRecorder {
+        fn drop(&mut self) {
+            self.stop();
+        }
+    }
+}
+#[cfg(target_os = "linux")]
+pub use linux::unsupported_reason;
 
 #[cfg(target_os = "macos")]
 mod imp {

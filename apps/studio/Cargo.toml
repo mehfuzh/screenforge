@@ -37,6 +37,10 @@ muda = "0.21"
 image.workspace = true
 parking_lot.workspace = true
 
+[target.'cfg(target_os = "linux")'.dependencies]
+# winit needs a windowing backend on Linux
+eframe = { workspace = true, features = ["x11", "wayland"] }
+
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"
 objc2-foundation = { version = "0.3", features = ["NSArray", "NSGeometry", "NSString", "NSFileManager", "NSURL", "NSError"] }

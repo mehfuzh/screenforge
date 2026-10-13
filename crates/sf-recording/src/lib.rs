@@ -100,7 +100,7 @@ pub enum RecorderState {
 /// [`Recorder::cancel`]. Dropping a recorder without finishing stops all capture and leaves
 /// the files as they are (metadata stays `"partial"`).
 pub struct Recorder {
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     inner: imp::Inner,
 }
 
@@ -110,7 +110,7 @@ impl std::fmt::Debug for Recorder {
     }
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 impl Recorder {
     /// Create the output directory, start every recorder and begin session 0.
     pub fn start(cfg: RecordingConfig) -> Result<Recorder> {
@@ -157,7 +157,7 @@ impl Recorder {
     }
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
 impl Recorder {
     pub fn start(_cfg: RecordingConfig) -> Result<Recorder> {
         Err(Error::Unsupported)
@@ -184,12 +184,14 @@ impl Recorder {
     }
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 mod imp {
     use std::path::Path;
 
     use super::{Error, RecorderState, Result};
-    use crate::audio::{MicRecorder, PcmSink, PcmSinkHandle, SystemAudioHandler};
+    use crate::audio::{MicRecorder, PcmSink, PcmSinkHandle};
+    #[cfg(target_os = "macos")]
+    use crate::audio::SystemAudioHandler;
     use crate::config::RecordingConfig;
     use crate::cursor::CursorRecorder;
     use crate::display::{self, DisplayPlan, DisplayRecorder};
@@ -291,12 +293,22 @@ mod imp {
                 }
                 None => None,
             };
+            #[cfg(target_os = "macos")]
             let (system_audio, sys_handler) = if cfg.capture_system_audio {
                 let h = PcmSink::spawn(48_000, 2, log.clone(), "SystemAudioRecorder")?;
                 let handler = SystemAudioHandler { sink: h.sink() };
                 audio_channels.push(AudioChannel { kind: "systemAudio", channel_index: next_channel, device_id: None });
                 (Some(h), Some(handler))
             } else {
+                (None, None)
+            };
+            // system audio comes from ScreenCaptureKit; there is no Linux equivalent yet
+            #[cfg(target_os = "linux")]
+            let (system_audio, sys_handler): (Option<PcmSinkHandle>, Option<()>) = {
+                if cfg.capture_system_audio {
+                    log.warning(COMPONENT, "System audio recording is not supported on Linux; ignoring.");
+                }
+                let _ = (PcmSink::spawn, next_channel);
                 (None, None)
             };
 

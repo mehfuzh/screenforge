@@ -74,10 +74,12 @@ impl EventFile {
     }
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 pub use imp::InputRecorder;
 
-#[cfg(target_os = "macos")]
+/// Event capture: a listen-only `CGEventTap` on macOS, the X11 RECORD extension (`rdev`) on
+/// Linux. Both feed the same writer, so the event files are identical.
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 mod imp {
     use std::path::{Path, PathBuf};
     use std::sync::atomic::{AtomicBool, Ordering};
@@ -85,13 +87,17 @@ mod imp {
     use std::thread::JoinHandle;
     use std::time::Duration;
 
+    #[cfg(target_os = "macos")]
     use core_foundation::runloop::{kCFRunLoopDefaultMode, CFRunLoop};
+    #[cfg(target_os = "macos")]
     use core_graphics::event::{
         CGEvent, CGEventFlags, CGEventTap, CGEventTapLocation, CGEventTapOptions, CGEventTapPlacement, CGEventType,
         CallbackResult, EventField,
     };
+    #[cfg(target_os = "macos")]
     use core_graphics::event_source::{CGEventSource, CGEventSourceStateID};
     use crossbeam_channel::{bounded, unbounded, Receiver, Sender};
+    #[cfg(target_os = "macos")]
     use foreign_types::ForeignType;
 
     use super::{EventFile, EventLine};
@@ -102,6 +108,7 @@ mod imp {
 
     const COMPONENT: &str = "InputRecorder";
 
+    #[cfg(target_os = "macos")]
     extern "C" {
         fn CGEventGetTimestamp(event: core_graphics::sys::CGEventRef) -> u64;
         fn CGEventKeyboardGetUnicodeString(
@@ -133,6 +140,7 @@ mod imp {
         Stop,
     }
 
+    #[cfg(target_os = "macos")]
     fn modifiers(flags: CGEventFlags) -> Vec<&'static str> {
         let mut v = Vec::new();
         if flags.contains(CGEventFlags::CGEventFlagShift) {
@@ -150,6 +158,7 @@ mod imp {
         v
     }
 
+    #[cfg(target_os = "macos")]
     fn key_characters(event: &CGEvent) -> String {
         let mut buf = [0u16; 8];
         let mut len: libc::c_ulong = 0;
@@ -157,6 +166,7 @@ mod imp {
         String::from_utf16_lossy(&buf[..(len as usize).min(buf.len())])
     }
 
+    #[cfg(target_os = "macos")]
     fn raw_event(etype: CGEventType, event: &CGEvent) -> Option<RawEvent> {
         use CGEventType::*;
         let (kind, button, mouse, key) = match etype {
@@ -201,6 +211,13 @@ mod imp {
     }
 
     /// Current mouse location in global points (top-left origin), for synthesized moves.
+    #[cfg(target_os = "linux")]
+    fn mouse_location() -> Option<(f64, f64)> {
+        None
+    }
+
+    /// Current mouse location in global points (top-left origin), for synthesized moves.
+    #[cfg(target_os = "macos")]
     fn mouse_location() -> Option<(f64, f64)> {
         let source = CGEventSource::new(CGEventSourceStateID::HIDSystemState).ok()?;
         let e = CGEvent::new(source).ok()?;
@@ -433,6 +450,98 @@ mod imp {
         }
     }
 
+    /// X11 input through the RECORD extension. `rdev::listen` cannot be stopped, so the
+    /// listener thread outlives the recording and simply drops events once `stop` is set.
+    #[cfg(target_os = "linux")]
+    fn tap_loop(tx: Sender<Cmd>, stop: Arc<AtomicBool>, keys: bool, ready: Sender<std::result::Result<(), ()>>) {
+        use rdev::{Button, EventType, Key};
+        let (err_tx, err_rx) = bounded::<()>(1);
+        let listener = std::thread::Builder::new().name("sf-input-x11".into()).spawn(move || {
+            let mut pos: Option<(f64, f64)> = None;
+            let mut held: Option<&'static str> = None;
+            let (mut shift, mut ctrl, mut alt, mut meta) = (false, false, false, false);
+            let r = rdev::listen(move |ev| {
+                if stop.load(Ordering::Relaxed) {
+                    return;
+                }
+                let mods = |shift: bool, ctrl: bool, alt: bool, meta: bool| {
+                    let mut v = Vec::new();
+                    if shift { v.push("shift") }
+                    if ctrl { v.push("control") }
+                    if alt { v.push("option") }
+                    if meta { v.push("command") }
+                    v
+                };
+                let button_name = |b: &Button| match b {
+                    Button::Left => "left",
+                    Button::Right => "right",
+                    _ => "other",
+                };
+                let (kind, button, xy, character, repeat) = match &ev.event_type {
+                    EventType::MouseMove { x, y } => {
+                        pos = Some((*x, *y));
+                        (if held.is_some() { "mouseDragged" } else { "mouseMoved" }, held, pos, None, None)
+                    }
+                    EventType::ButtonPress(b) => {
+                        held = Some(button_name(b));
+                        ("mouseDown", held, pos, None, None)
+                    }
+                    EventType::ButtonRelease(b) => {
+                        held = None;
+                        ("mouseUp", Some(button_name(b)), pos, None, None)
+                    }
+                    EventType::KeyPress(k) | EventType::KeyRelease(k) => {
+                        let down = matches!(ev.event_type, EventType::KeyPress(_));
+                        match k {
+                            Key::ShiftLeft | Key::ShiftRight => shift = down,
+                            Key::ControlLeft | Key::ControlRight => ctrl = down,
+                            Key::Alt | Key::AltGr => alt = down,
+                            Key::MetaLeft | Key::MetaRight => meta = down,
+                            _ => {}
+                        }
+                        if !keys {
+                            return;
+                        }
+                        (if down { "keyDown" } else { "keyUp" }, None, None, Some(ev.name.clone().unwrap_or_default()), Some(false))
+                    }
+                    EventType::Wheel { .. } => return,
+                };
+                if (kind.starts_with("mouse")) && xy.is_none() {
+                    return;
+                }
+                let raw = RawEvent {
+                    kind,
+                    button,
+                    x: xy.map(|p| p.0),
+                    y: xy.map(|p| p.1),
+                    character,
+                    is_repeat: repeat,
+                    modifiers: mods(shift, ctrl, alt, meta),
+                    process_time_ms: clock::process_time_ms(),
+                    unix_time_ms: clock::unix_time_ms(),
+                };
+                let _ = tx.send(Cmd::Event(raw));
+            });
+            if r.is_err() {
+                let _ = err_tx.send(());
+            }
+        });
+        if listener.is_err() {
+            let _ = ready.send(Err(()));
+            return;
+        }
+        // listen() returns straight away when X11/RECORD is unavailable; otherwise it blocks
+        match err_rx.recv_timeout(Duration::from_millis(400)) {
+            Ok(()) => {
+                let _ = ready.send(Err(()));
+            }
+            Err(_) => {
+                let _ = ready.send(Ok(()));
+            }
+        }
+    }
+
+    #[cfg(target_os = "macos")]
     fn tap_loop(tx: Sender<Cmd>, stop: Arc<AtomicBool>, keys: bool, ready: Sender<std::result::Result<(), ()>>) {
         use CGEventType::*;
         let mut types = vec![
