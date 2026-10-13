@@ -77,11 +77,27 @@ mod imp {
         }
     }
 
+    // IOHIDRequestType / IOHIDAccessType (IOKit/hid/IOHIDLib.h)
+    const IOHID_REQUEST_TYPE_LISTEN_EVENT: u32 = 1;
+    const IOHID_ACCESS_GRANTED: u32 = 0;
+    const IOHID_ACCESS_UNKNOWN: u32 = 2;
+
+    #[link(name = "IOKit", kind = "framework")]
+    extern "C" {
+        fn IOHIDCheckAccess(request_type: u32) -> u32;
+    }
+
     pub fn input_monitoring() -> PermissionStatus {
         if unsafe { CGPreflightListenEventAccess() } {
-            PermissionStatus::Granted
-        } else {
-            PermissionStatus::Denied
+            return PermissionStatus::Granted;
+        }
+        // The preflight cannot tell "never asked" from "denied". Report never-asked as
+        // NotDetermined so the UI requests access, which is what adds the app to the
+        // Input Monitoring list in System Settings.
+        match unsafe { IOHIDCheckAccess(IOHID_REQUEST_TYPE_LISTEN_EVENT) } {
+            IOHID_ACCESS_GRANTED => PermissionStatus::Granted,
+            IOHID_ACCESS_UNKNOWN => PermissionStatus::NotDetermined,
+            _ => PermissionStatus::Denied,
         }
     }
 

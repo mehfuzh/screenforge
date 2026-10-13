@@ -15,9 +15,14 @@ pub fn open(target: impl AsRef<std::ffi::OsStr>) {
 /// Show `path` selected in the file manager (Linux: `org.freedesktop.FileManager1`, else its
 /// folder is opened).
 pub fn reveal(path: &Path) {
+    // NSWorkspace, not `open -R`: that sends Finder an Apple Event, which the hardened runtime
+    // blocks without the automation entitlement
     #[cfg(target_os = "macos")]
     {
-        let _ = std::process::Command::new("open").arg("-R").arg(path).spawn();
+        use objc2_app_kit::NSWorkspace;
+        use objc2_foundation::{NSArray, NSString, NSURL};
+        let url = NSURL::fileURLWithPath(&NSString::from_str(&path.to_string_lossy()));
+        NSWorkspace::sharedWorkspace().activateFileViewerSelectingURLs(&NSArray::from_retained_slice(&[url]));
     }
     #[cfg(not(target_os = "macos"))]
     {
