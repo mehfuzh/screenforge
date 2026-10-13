@@ -3,6 +3,8 @@
 assets/background-audio/<category>/<Name>.mp3. Needs gcloud auth on the project below.
 
     python3 scripts/gen-music.py            # only generates tracks that are missing
+
+New tracks are then made loopable by scripts/make-loops.py (needs numpy).
 """
 import base64, json, os, subprocess, sys, urllib.error, urllib.request
 
@@ -72,6 +74,8 @@ def main():
                             "-ar", "48000", "-c:a", "libmp3lame", "-b:a", "192k", mp3], check=True)
             os.remove(wav)
             print(" ", os.path.relpath(mp3))
+    # tracks are ~33 s and cut mid-bar: give each a beat-matched seamless loop
+    subprocess.run([sys.executable, os.path.join(os.path.dirname(__file__), "make-loops.py")], check=True)
 
 if __name__ == "__main__":
     main()
