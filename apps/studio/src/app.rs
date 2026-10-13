@@ -438,8 +438,44 @@ impl eframe::App for App {
                 }
             }
         }
+        // editor Trash button: confirm, move the package to the Trash, back to the toolbar
+        let mut removed: Option<String> = None;
+        if let Screen::Editor(ed) = &mut self.screen {
+            if ed.remove_requested {
+                let name = ed.session.pkg.project.name.clone();
+                let (mut confirm, mut cancel) = (false, false);
+                egui::Window::new("Move to Trash?").collapsible(false).resizable(false).anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0]).show(ctx, |ui| {
+                    ui.set_max_width(380.0);
+                    ui.label(egui::RichText::new(format!("“{name}” and its recording will be moved to the Trash. You can put it back from the Trash in Finder.")).color(crate::theme::p().text));
+                    ui.add_space(10.0);
+                    ui.horizontal(|ui| {
+                        if crate::widgets::accent_button(ui, "Move to Trash").clicked() { confirm = true; }
+                        if crate::widgets::secondary_button(ui, "Cancel").clicked() { cancel = true; }
+                    });
+                });
+                if ctx.input(|i| i.key_pressed(egui::Key::Escape)) { cancel = true; }
+                if cancel {
+                    ed.remove_requested = false;
+                } else if confirm {
+                    ed.remove_requested = false;
+                    let path = ed.path.clone();
+                    match crate::os::move_to_trash(&path) {
+                        Ok(()) => {
+                            self.prefs.recent.retain(|r| r != &path);
+                            self.prefs.save();
+                            removed = Some(name);
+                            go_home = true;
+                        }
+                        Err(e) => self.error = Some(format!("Could not move “{name}” to the Trash: {e}")),
+                    }
+                }
+            }
+        }
         if go_home {
             self.show_picker(ctx);
+            if let (Some(name), Screen::Picker(p)) = (removed, &mut self.screen) {
+                p.status = Some(format!("Moved “{name}” to the Trash"));
+            }
         }
         match action {
             Some(PickerAction::OpenProject(p)) => open_request = Some(p),
