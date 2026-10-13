@@ -353,6 +353,8 @@ impl eframe::App for App {
             Screen::Editor(ed) if ed.export.open && !ed.export.is_busy() => {
                 want_mode = Some(WindowMode::ExportSettings);
                 let mut ex = std::mem::take(&mut ed.export);
+                // the editor (which polls otherwise) is hidden: drain the activation result here
+                ex.poll(ctx);
                 let resp = egui::Frame::NONE.fill(crate::theme::p().bg).inner_margin(egui::Margin { left: 22, right: 22, top: 34, bottom: 18 }).show(ui, |ui| {
                     ui.set_width(EXPORT_SETTINGS_W - 44.0);
                     ex.settings_ui(ed, ui);
