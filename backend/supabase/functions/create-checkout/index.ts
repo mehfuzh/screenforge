@@ -13,6 +13,7 @@ serve(async (req) => {
     mode: monthly ? "subscription" : "payment",
     line_items: [{ price, quantity: 1 }],
     customer_email: email,
+    allow_promotion_codes: true,
     success_url: Deno.env.get("CHECKOUT_SUCCESS_URL") ?? "https://screenforge.dev/thanks",
     cancel_url: Deno.env.get("CHECKOUT_CANCEL_URL") ?? "https://screenforge.dev/buy",
     metadata: { plan: monthly ? "monthly" : "lifetime" },
