@@ -67,7 +67,6 @@ Controls for these show up greyed out in the app (hover: "on the product roadmap
 - **Device frames** — iPhone/iPad recording and mockup frames
 - **Unsplash backgrounds** — online wallpaper search
 - **Face tracking and color grading** — camera centring, looks and LUTs
-- **Remove project** — move a project to the Trash from the editor
 
 ## Layout
 

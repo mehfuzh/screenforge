@@ -46,6 +46,9 @@ pub struct Editor {
     pub title_edit: Option<String>,
     /// Set after a rename so the app can update its recent-projects list.
     pub renamed_to: Option<PathBuf>,
+    /// The Trash button was pressed: the app asks for confirmation, then moves the project to
+    /// the Trash and goes back to the toolbar.
+    pub remove_requested: bool,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -95,6 +98,7 @@ impl Editor {
             preview_scale: 1.0,
             title_edit: None,
             renamed_to: None,
+            remove_requested: false,
         })
     }
 
@@ -473,7 +477,9 @@ impl Editor {
                 if widgets::icon_button(ui, widgets::Icon::Folder, 18.0, "Projects").clicked() {
                     go_home = true;
                 }
-                widgets::roadmap(ui, |ui| widgets::icon_button(ui, widgets::Icon::Trash, 18.0, "Remove project"));
+                if widgets::icon_button(ui, widgets::Icon::Trash, 18.0, "Move project to Trash").clicked() && !self.export.is_busy() {
+                    self.remove_requested = true;
+                }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if widgets::accent_icon_button(ui, widgets::Icon::Export, "Export (⌘E)").clicked() {
                         self.export.open = true;

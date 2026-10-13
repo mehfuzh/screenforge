@@ -43,4 +43,3 @@
 - Device frames: iPhone/iPad recording and mockup frames
 - Unsplash backgrounds: online wallpaper search
 - Face tracking and color grading: camera centring, looks and LUTs
-- Remove project: move a project to the Trash from the editor
