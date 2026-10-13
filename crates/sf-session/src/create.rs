@@ -55,6 +55,7 @@ pub fn create_project_from_recording(recording_dir: &Path, opts: CreateOptions) 
 
     // project
     let mut project = Project::new(&base);
+    let has_preset = opts.default_config.is_some();
     if let Some(cfg) = opts.default_config {
         project.config = cfg;
         project.config.crop = Default::default();
@@ -63,6 +64,10 @@ pub fn create_project_from_recording(recording_dir: &Path, opts: CreateOptions) 
     let display = meta.display();
     let is_area = display.and_then(|d| d.crop_rect()).is_some();
     project.config.styles.screen_border_radius = if is_area { 16.0 } else { 0.0 };
+    // a full display fills the video edge to edge; area/window recordings sit on the wallpaper
+    if !is_area && !has_preset {
+        project.config.output.padding_ratio01 = 0.0;
+    }
     // start on one of this Mac's own wallpapers unless a preset picked something else
     let bg = project.config.styles.background.system_name.as_deref();
     if matches!(bg, None | Some("macOS/san-francisco-dark.jpg") | Some(DEFAULT_WALLPAPER)) {
@@ -117,4 +122,48 @@ fn move_dir(from: &Path, to: &Path) -> std::io::Result<()> {
         }
     }
     std::fs::remove_dir_all(from)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Create a project from the fixture recording, optionally without its crop rect (a full display).
+    fn create(full_display: bool) -> Config {
+        let dir = tempfile::tempdir().unwrap();
+        let tmp = dir.path();
+        let rec = tmp.join("recording");
+        std::fs::create_dir_all(&rec).unwrap();
+        let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/recording");
+        for e in std::fs::read_dir(&fixture).unwrap() {
+            let e = e.unwrap();
+            std::fs::copy(e.path(), rec.join(e.file_name())).unwrap();
+        }
+        if full_display {
+            let path = rec.join(sf_project::recording::METADATA_FILE);
+            let mut meta: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+            for r in meta["recorders"].as_array_mut().unwrap() {
+                if let Some(cfg) = r["configuration"].as_object_mut() {
+                    cfg.remove("cropRect");
+                }
+            }
+            std::fs::write(&path, meta.to_string()).unwrap();
+        }
+        let opts = CreateOptions { name: "Test".into(), projects_folder: tmp.join("projects"), default_config: None, create_automatic_zooms: false, markers_ms: Vec::new() };
+        create_project_from_recording(&rec, opts).unwrap().project.config
+    }
+
+    #[test]
+    fn full_display_fills_the_video() {
+        let cfg = create(true);
+        assert_eq!(cfg.output.padding_ratio01, 0.0);
+        assert_eq!(cfg.styles.screen_border_radius, 0.0);
+    }
+
+    #[test]
+    fn area_keeps_the_wallpaper_padding() {
+        let cfg = create(false);
+        assert_eq!(cfg.output.padding_ratio01, 0.1);
+        assert_eq!(cfg.styles.screen_border_radius, 16.0);
+    }
 }

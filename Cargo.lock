@@ -4373,6 +4373,7 @@ dependencies = [
  "sf-media",
  "sf-project",
  "sf-render",
+ "tempfile",
  "tracing",
 ]
 
