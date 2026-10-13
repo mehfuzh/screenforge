@@ -44,4 +44,3 @@
 - Unsplash backgrounds: online wallpaper search
 - Face tracking and color grading: camera centring, looks and LUTs
 - Remove project: move a project to the Trash from the editor
-- Licensing backend: hosted key issuing (Supabase + Stripe) so Export can be unlocked
