@@ -70,7 +70,7 @@ impl PermissionsSetup {
                 ui.add_space(16.0);
                 let rows = [
                     (Permission::ScreenRecording, widgets::Icon::Display, "Screen Recording", "Required to capture the display or a window.", self.status[0]),
-                    (Permission::InputMonitoring, widgets::Icon::Cursor, "Input Monitoring", "Cursor, clicks and keystrokes: smooth cursor and automatic zooms.", self.status[1]),
+                    (Permission::InputMonitoring, widgets::Icon::Cursor, "Input Monitoring", input_monitoring_desc(self.status[1]), self.status[1]),
                     (Permission::Microphone, widgets::Icon::Mic, "Microphone", "Optional. Record your voice with the screen.", self.status[2]),
                     (Permission::Accessibility, widgets::Icon::Keyboard, "Accessibility", "Optional. Automatic zooms follow the text you type.", self.status[3]),
                 ];
@@ -109,6 +109,13 @@ impl PermissionsSetup {
                                 };
                                 if !after.is_granted() {
                                     let _ = p::open_settings(perm);
+                                    // macOS does not prompt for Input Monitoring or list the app on
+                                    // request: show the bundle so it can be dragged into the list
+                                    if perm == Permission::InputMonitoring {
+                                        if let Some(app) = app_bundle() {
+                                            crate::os::reveal(&app);
+                                        }
+                                    }
                                 }
                                 self.status = Self::poll();
                             }
@@ -143,15 +150,30 @@ impl PermissionsSetup {
     }
 }
 
+/// Row text for Input Monitoring. Once macOS has answered, the app has to be added by hand:
+/// macOS 26 refuses to prompt for this permission and does not list the app on request.
+fn input_monitoring_desc(status: PermissionStatus) -> &'static str {
+    if status == PermissionStatus::Denied {
+        "In System Settings, click + and choose ScreenForge, or drag it in from Finder."
+    } else {
+        "Cursor, clicks and keystrokes: smooth cursor and automatic zooms."
+    }
+}
+
+/// The running `.app` bundle, if launched from one.
+fn app_bundle() -> Option<std::path::PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    exe.ancestors().find(|p| p.extension().is_some_and(|e| e == "app")).map(|p| p.to_path_buf())
+}
+
 /// Quit and start the app again (needed for macOS to apply newly granted permissions).
 fn relaunch() {
-    if let Ok(exe) = std::env::current_exe() {
-        let app = exe.ancestors().find(|p| p.extension().is_some_and(|e| e == "app")).map(|p| p.to_path_buf());
-        match app {
-            Some(app) => {
-                let _ = std::process::Command::new("open").arg("-n").arg(&app).spawn();
-            }
-            None => {
+    match app_bundle() {
+        Some(app) => {
+            let _ = std::process::Command::new("open").arg("-n").arg(&app).spawn();
+        }
+        None => {
+            if let Ok(exe) = std::env::current_exe() {
                 let _ = std::process::Command::new(&exe).spawn();
             }
         }
