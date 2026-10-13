@@ -123,7 +123,11 @@ impl Assets {
                 for c in cats.flatten().filter(|e| e.path().is_dir()) {
                     if let Ok(files) = std::fs::read_dir(c.path()) {
                         for f in files.flatten() {
-                            out.push(format!("{}/{}", c.file_name().to_string_lossy(), f.file_name().to_string_lossy()));
+                            // the same track can exist in several roots (app bundle, source tree)
+                            let name = format!("{}/{}", c.file_name().to_string_lossy(), f.file_name().to_string_lossy());
+                            if !out.contains(&name) {
+                                out.push(name);
+                            }
                         }
                     }
                 }
