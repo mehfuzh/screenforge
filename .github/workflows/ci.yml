@@ -43,6 +43,8 @@ jobs:
         run: cargo test --workspace
       - name: Linux packages (.deb + .tar.gz)
         run: ./scripts/bundle-linux.sh
+        env:
+          GH_TOKEN: ${{ github.token }}   # fetch-ffmpeg.sh looks up the newest static ffmpeg
       - uses: actions/upload-artifact@v4
         with:
           name: linux

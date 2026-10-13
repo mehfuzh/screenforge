@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Linux packages: target/ScreenForge-<version>-linux-x86_64.tar.gz (portable folder) and
 # target/screenforge_<version>_amd64.deb (installs to /opt/screenforge with a `screenforge`
-# command, desktop entry and icon). Recording uses the system ffmpeg (every distro's ffmpeg
-# package includes the X11 grabber; static builds often do not), so the .deb depends on it.
+# command, desktop entry and icon). Both carry a static ffmpeg + ffprobe next to the executable
+# (scripts/fetch-ffmpeg.sh picks a build that includes the X11 grabber), so neither needs the
+# distro's ffmpeg.
 #
 #   scripts/bundle-linux.sh            # release build + both packages
 set -euo pipefail
@@ -16,6 +17,9 @@ BIN=target/release/screenforge
 DIR=target/linux/ScreenForge
 rm -rf target/linux && mkdir -p "$DIR"
 cp "$BIN" "$DIR/screenforge" && strip "$DIR/screenforge" || true
+FFDIR=$(./scripts/fetch-ffmpeg.sh)
+cp "$FFDIR/ffmpeg" "$FFDIR/ffprobe" "$DIR/"
+cp "$FFDIR/LICENSE.txt" "$DIR/FFMPEG-LICENSE.txt"
 cp -R assets "$DIR/assets"
 cp apps/studio/assets/icon-256.png "$DIR/screenforge.png"
 cat > "$DIR/screenforge.desktop" <<DESK
@@ -33,8 +37,11 @@ DESK
 cat > "$DIR/README.txt" <<TXT
 ScreenForge $VERSION for Linux (x86_64)
 
-Run ./screenforge. Needs ffmpeg (sudo apt install ffmpeg / dnf install ffmpeg / pacman -S ffmpeg).
-Recording works in X11 sessions; on Wayland, pick an "on Xorg" session at the login screen.
+Run ./screenforge. ffmpeg and ffprobe are included (static GPL builds from
+https://github.com/BtbN/FFmpeg-Builds; see FFMPEG-LICENSE.txt).
+Recording works in X11 sessions; Wayland recording is not supported yet. Pick an "on Xorg"
+session at the login screen; GNOME 49 and later have none, so install an X11 desktop such as
+Xfce (sudo apt install xfce4 xserver-xorg) and log in to "Xfce Session".
 Editing and exporting existing projects work everywhere.
 TXT
 TAR="target/ScreenForge-$VERSION-linux-$ARCH.tar.gz"
@@ -56,7 +63,7 @@ Section: video
 Priority: optional
 Architecture: $ARCH_DEB
 Installed-Size: $SIZE
-Depends: ffmpeg, libgtk-3-0 | libgtk-3-0t64, libasound2 | libasound2t64, libxtst6, libxkbcommon0, libx11-6, libxcursor1, libxrandr2, libxi6
+Depends: libgtk-3-0 | libgtk-3-0t64, libasound2 | libasound2t64, libxtst6, libxkbcommon0, libx11-6, libxcursor1, libxrandr2, libxi6
 Maintainer: Mehfuz Hossain <mehfuz@smartloop.ai>
 Homepage: https://screenforge.studio
 Description: Screen recorder and timeline editor
@@ -65,7 +72,7 @@ Description: Screen recorder and timeline editor
  package format.
 CTRL
 DEB="target/screenforge_${VERSION}_${ARCH_DEB}.deb"
-dpkg-deb --root-owner-group --build "$ROOT" "$DEB" >/dev/null
+dpkg-deb -Zxz --root-owner-group --build "$ROOT" "$DEB" >/dev/null
 # stable names so releases/latest/download/... always points at the newest build
 cp "$TAR" target/ScreenForge-linux-x86_64.tar.gz
 cp "$DEB" target/screenforge_amd64.deb

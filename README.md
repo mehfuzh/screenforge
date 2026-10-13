@@ -27,8 +27,19 @@ the [releases page](https://github.com/mehfuzh/screenforge/releases); the websit
 **Linux (x86_64):** [.deb](https://github.com/mehfuzh/screenforge/releases/latest/download/screenforge_amd64.deb)
 (`sudo apt install ./screenforge_amd64.deb`) or a portable
 [.tar.gz](https://github.com/mehfuzh/screenforge/releases/latest/download/ScreenForge-linux-x86_64.tar.gz).
-Editing and exporting work everywhere; recording needs an X11 session and the system `ffmpeg`
-(on Wayland, choose an "on Xorg" session). System audio and typing-caret zooms are macOS-only.
+ffmpeg is included. Editing and exporting work everywhere; system audio and typing-caret zooms
+are macOS-only.
+
+Recording needs an **X11 session**; Wayland recording is not supported yet. Check with
+`echo $XDG_SESSION_TYPE`. Desktops that still offer one (KDE Plasma 6, older GNOME) list an
+"on Xorg" / "X11" session under the gear icon on the login screen. GNOME 49 and later
+(Ubuntu 25.10+, Fedora 43+) have no X11 session at all: install a desktop that runs on X11,
+such as Xfce, next to GNOME, then pick **Xfce Session** at the login screen:
+
+```sh
+sudo apt install xfce4 xserver-xorg     # Debian / Ubuntu
+sudo dnf install @xfce-desktop          # Fedora
+```
 
 **Pricing:** recording and editing are free and open source (Apache-2.0), and so are your first
 three exports. After that, exporting from the official build needs a license: US$10/month or US$29

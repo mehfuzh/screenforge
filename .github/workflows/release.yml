@@ -135,6 +135,8 @@ jobs:
             libxfixes-dev libxcb1-dev libxcb-xfixes0-dev libxdo-dev
       - name: Build .deb and .tar.gz
         run: ./scripts/bundle-linux.sh
+        env:
+          GH_TOKEN: ${{ github.token }}   # fetch-ffmpeg.sh looks up the newest static ffmpeg
       - uses: actions/upload-artifact@v4
         with:
           name: linux

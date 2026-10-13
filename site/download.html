@@ -447,12 +447,12 @@
 
   <section class="plat" id="linux" data-os="linux">
   <h1>Download ScreenForge for <em>Linux.</em></h1>
-  <p class="stamp">x86_64 · X11 session · recording and editing are free</p>
+  <p class="stamp">x86_64 · ffmpeg included · recording and editing are free</p>
 
   <div class="reqs" aria-label="requirements">
     <span class="badge"><span class="k">arch</span><span class="v">x86_64</span></span>
     <span class="badge"><span class="k">session</span><span class="v">X11 to record</span></span>
-    <span class="badge"><span class="k">needs</span><span class="v">ffmpeg</span></span>
+    <span class="badge"><span class="k">ffmpeg</span><span class="v">included</span></span>
     <span class="badge gold"><span class="k">status</span><span class="v">early alpha</span></span>
   </div>
 
@@ -470,13 +470,14 @@
 
   <h2>Install</h2>
   <ol class="steps">
-    <li><b>Step 1</b><strong>Install with apt</strong>From the folder you downloaded to, run <code>sudo apt install ./screenforge_amd64.deb</code>. Unlike <code>dpkg -i</code>, apt also installs <i class="hl">ffmpeg</i>, which recording needs.</li>
-    <li><b>Step 2</b><strong>Use an X11 session</strong>Recording needs <i class="hl">X11</i>. On Wayland, log out and pick an "on Xorg" session at the login screen. Editing and exporting work in any session.</li>
+    <li><b>Step 1</b><strong>Install the package</strong>From the folder you downloaded to, run <code>sudo apt install ./screenforge_amd64.deb</code>, or open it in your software center. <i class="hl">ffmpeg</i> comes bundled; nothing else to install.</li>
+    <li><b>Step 2</b><strong>Use an X11 session</strong>Recording needs <i class="hl">X11</i>; Wayland recording is not supported yet. Pick an "on Xorg" session at the login screen, or, on GNOME 49 and later (Ubuntu 25.10+), which has none, install Xfce and pick <i class="hl">Xfce Session</i>. Editing and exporting work in any session.</li>
     <li><b>Step 3</b><strong>Launch</strong>Open ScreenForge from your app menu, or run <code>screenforge</code> in a terminal. System audio recording is macOS-only for now; the microphone works.</li>
   </ol>
-<pre style="margin-top:28px"><code><span class="p">$ </span>sudo apt install ./screenforge_amd64.deb   <span class="c"># Debian / Ubuntu, pulls in ffmpeg</span>
-<span class="p">$ </span>sudo apt -f install                        <span class="c"># already ran dpkg -i and got "dependency problems"? this finishes it</span>
-<span class="p">$ </span>tar xzf ScreenForge-linux-x86_64.tar.gz &amp;&amp; ./ScreenForge/screenforge   <span class="c"># other distros; install ffmpeg first</span></code></pre>
+<pre style="margin-top:28px"><code><span class="p">$ </span>sudo apt install ./screenforge_amd64.deb   <span class="c"># Debian / Ubuntu</span>
+<span class="p">$ </span>tar xzf ScreenForge-linux-x86_64.tar.gz &amp;&amp; ./ScreenForge/screenforge   <span class="c"># other distros</span>
+<span class="p">$ </span>echo $XDG_SESSION_TYPE                     <span class="c"># "x11" to record; "wayland"? see step 2</span>
+<span class="p">$ </span>sudo apt install xfce4 xserver-xorg       <span class="c"># an X11 desktop for GNOME 49+, then log in to "Xfce Session"</span></code></pre>
   <p>The app runs without a license. Recording, editing and your first three exports are free; after that, exporting needs a key from the <a href="pricing.html">pricing page</a>.</p>
   <p style="margin-top:28px">On a Mac? <a href="#mac" data-os-link="mac">Get the macOS version</a>.</p>
   </section>
