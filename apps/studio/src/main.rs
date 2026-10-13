@@ -7,6 +7,7 @@ mod audio;
 mod editor;
 mod export;
 mod mic_meter;
+mod os;
 mod permissions;
 mod picker;
 mod recorder;

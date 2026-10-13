@@ -174,8 +174,8 @@ impl ExportDialog {
                         if widgets::accent_button(ui, "Done").clicked() {
                             self.result = None;
                         }
-                        if widgets::secondary_button(ui, "Show in Finder").clicked() {
-                            let _ = std::process::Command::new("open").arg("-R").arg(p).spawn();
+                        if widgets::secondary_button(ui, &format!("Show in {}", crate::os::FILE_MANAGER)).clicked() {
+                            crate::os::reveal(p);
                         }
                     });
                 }
@@ -368,6 +368,6 @@ fn open_checkout(email: &str, plan: &str) {
     let plan = plan.to_string();
     std::thread::spawn(move || {
         let url = sf_license::checkout_url(&email, &plan).unwrap_or_else(|_| sf_license::PURCHASE_URL.to_string());
-        let _ = std::process::Command::new("open").arg(url).spawn();
+        crate::os::open(url);
     });
 }

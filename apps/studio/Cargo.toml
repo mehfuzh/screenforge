@@ -46,3 +46,6 @@ objc2 = "0.6"
 objc2-foundation = { version = "0.3", features = ["NSArray", "NSGeometry", "NSString", "NSFileManager", "NSURL", "NSError"] }
 objc2-app-kit = { version = "0.3", features = ["NSApplication", "NSWindow", "NSResponder", "NSView", "NSVisualEffectView", "NSGraphics", "NSStatusBar", "NSStatusItem", "NSStatusBarButton", "NSButton", "NSControl", "NSImage", "NSImageRep", "NSBitmapImageRep", "NSMenu", "NSCell", "NSRunningApplication"] }
 objc2-quartz-core = { version = "0.3", features = ["CALayer"] }
+
+[dev-dependencies]
+tempfile = "3"

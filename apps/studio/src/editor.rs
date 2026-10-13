@@ -647,7 +647,7 @@ impl Editor {
         if ui.button("Open presets folder").clicked() {
             if let Some(folder) = sf_project::Preset::default_folder() {
                 let _ = std::fs::create_dir_all(&folder);
-                let _ = std::process::Command::new("open").arg(folder).spawn();
+                crate::os::open(folder);
             }
             ui.close();
         }

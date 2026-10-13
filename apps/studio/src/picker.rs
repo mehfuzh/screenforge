@@ -581,17 +581,3 @@ fn project_card(ui: &mut Ui, path: &std::path::Path, tex: Option<&egui::TextureH
     (resp.on_hover_cursor(egui::CursorIcon::PointingHand), trash_clicked)
 }
 
-/// Move a file or folder to the macOS Trash (Finder's "Put Back" works).
-pub fn move_to_trash(path: &std::path::Path) -> Result<(), String> {
-    #[cfg(target_os = "macos")]
-    {
-        use objc2_foundation::{NSFileManager, NSString, NSURL};
-        let url = NSURL::fileURLWithPath(&NSString::from_str(&path.to_string_lossy()));
-        let fm = NSFileManager::defaultManager();
-        fm.trashItemAtURL_resultingItemURL_error(&url, None).map(|_| ()).map_err(|e| e.localizedDescription().to_string())
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
-        std::fs::remove_dir_all(path).map_err(|e| e.to_string())
-    }
-}

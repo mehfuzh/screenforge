@@ -435,7 +435,7 @@ impl eframe::App for App {
                     ed.save();
                 } else {
                     let path = ed.path.clone();
-                    match crate::picker::move_to_trash(&path) {
+                    match crate::os::move_to_trash(&path) {
                         Ok(()) => {
                             self.prefs.recent.retain(|r| r != &path);
                             self.prefs.save();
@@ -515,7 +515,7 @@ impl eframe::App for App {
             }
             Some(PickerAction::RemoveProject(p)) => {
                 let name = p.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
-                match crate::picker::move_to_trash(&p) {
+                match crate::os::move_to_trash(&p) {
                     Ok(()) => {
                         self.prefs.recent.retain(|r| r != &p);
                         self.prefs.save();

@@ -4628,6 +4628,7 @@ dependencies = [
  "sf-recording",
  "sf-render",
  "sf-session",
+ "tempfile",
  "tracing",
  "tracing-subscriber",
  "wgpu",
