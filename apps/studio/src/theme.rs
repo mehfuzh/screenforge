@@ -1,6 +1,6 @@
 //! Visual theme matching Screen Studio's editor (rounded cards, purple accent, amber clips), in a
-//! Osaka Jade (the default), Dracula dark and Solarized Light; the user can also follow the
-//! system appearance.
+//! Dark (Catppuccin Mocha, the default), Osaka Jade and Light (Solarized Light); the user can
+//! also follow the system appearance.
 
 use egui::{Color32, CornerRadius, FontFamily, FontId, Stroke, TextStyle, Visuals};
 
@@ -46,36 +46,36 @@ pub struct Palette {
 
 pub const DARK: Palette = Palette {
     dark: true,
-    // Dracula
-    bg: Color32::from_rgb(0x1e, 0x1f, 0x29),
-    card: Color32::from_rgb(0x28, 0x2a, 0x36),
-    card_2: Color32::from_rgb(0x34, 0x37, 0x46),
-    card_3: Color32::from_rgb(0x44, 0x47, 0x5a),
-    border: Color32::from_rgb(0x3b, 0x3e, 0x4f),
-    text: Color32::from_rgb(0xf8, 0xf8, 0xf2),
-    text_dim: Color32::from_rgb(0xa5, 0xa8, 0xc4),
-    text_faint: Color32::from_rgb(0x62, 0x72, 0xa4),
-    accent: Color32::from_rgb(0xbd, 0x93, 0xf9),
-    accent_hover: Color32::from_rgb(0xca, 0xa9, 0xfa),
-    clip: Color32::from_rgb(0xff, 0xb8, 0x6c),
-    clip_selected: Color32::from_rgb(0xff, 0xc9, 0x8a),
-    clip_text: Color32::from_rgb(0x28, 0x2a, 0x36),
+    // Catppuccin Mocha
+    bg: Color32::from_rgb(0x18, 0x18, 0x25),          // mantle
+    card: Color32::from_rgb(0x1e, 0x1e, 0x2e),        // base
+    card_2: Color32::from_rgb(0x31, 0x32, 0x44),      // surface0
+    card_3: Color32::from_rgb(0x45, 0x47, 0x5a),      // surface1
+    border: Color32::from_rgb(0x31, 0x32, 0x44),
+    text: Color32::from_rgb(0xcd, 0xd6, 0xf4),
+    text_dim: Color32::from_rgb(0xa6, 0xad, 0xc8),    // subtext0
+    text_faint: Color32::from_rgb(0x6c, 0x70, 0x86),  // overlay0
+    accent: Color32::from_rgb(0xcb, 0xa6, 0xf7),      // mauve
+    accent_hover: Color32::from_rgb(0xd6, 0xbb, 0xf9),
+    clip: Color32::from_rgb(0xfa, 0xb3, 0x87),        // peach
+    clip_selected: Color32::from_rgb(0xfc, 0xc6, 0xa3),
+    clip_text: Color32::from_rgb(0x1e, 0x1e, 0x2e),
     clip_line: Color32::from_rgba_premultiplied(0, 0, 0, 40),
-    marker: Color32::from_rgb(0xf1, 0xfa, 0x8c),
-    zoom: Color32::from_rgb(0xff, 0x79, 0xc6),
-    zoom_selected: Color32::from_rgb(0xff, 0x92, 0xd0),
-    track_empty: Color32::from_rgb(0x21, 0x22, 0x2c),
-    playhead: Color32::from_rgb(0xf8, 0xf8, 0xf2),
-    ruler_text: Color32::from_rgb(0x62, 0x72, 0xa4),
-    danger: Color32::from_rgb(0xff, 0x55, 0x55),
-    meter: Color32::from_rgb(0x50, 0xfa, 0x7b),
-    glass: Color32::from_rgba_premultiplied(18, 18, 24, 112),
-    glass_solid: Color32::from_rgba_premultiplied(34, 36, 46, 216),
+    marker: Color32::from_rgb(0xf9, 0xe2, 0xaf),      // yellow
+    zoom: Color32::from_rgb(0xf5, 0xc2, 0xe7),        // pink
+    zoom_selected: Color32::from_rgb(0xf8, 0xd4, 0xee),
+    track_empty: Color32::from_rgb(0x1b, 0x1b, 0x29),
+    playhead: Color32::from_rgb(0xcd, 0xd6, 0xf4),
+    ruler_text: Color32::from_rgb(0x7f, 0x84, 0x9c),  // overlay1
+    danger: Color32::from_rgb(0xf3, 0x8b, 0xa8),      // red
+    meter: Color32::from_rgb(0xa6, 0xe3, 0xa1),       // green
+    glass: Color32::from_rgba_premultiplied(8, 8, 12, 112),
+    glass_solid: Color32::from_rgba_premultiplied(26, 26, 39, 216),
     glass_border: Color32::from_rgba_premultiplied(34, 34, 34, 34),
-    on_glass: Color32::from_rgb(0xf8, 0xf8, 0xf2),
-    glass_button: Color32::from_rgb(0xf8, 0xf8, 0xf2),
-    glass_button_fg: Color32::from_rgb(0x28, 0x2a, 0x36),
-    thumb_empty: Color32::from_rgb(0x34, 0x37, 0x46),
+    on_glass: Color32::from_rgb(0xcd, 0xd6, 0xf4),
+    glass_button: Color32::from_rgb(0xcd, 0xd6, 0xf4),
+    glass_button_fg: Color32::from_rgb(0x1e, 0x1e, 0x2e),
+    thumb_empty: Color32::from_rgb(0x31, 0x32, 0x44),
 };
 
 pub const LIGHT: Palette = Palette {
@@ -147,9 +147,9 @@ pub const OSAKA_JADE: Palette = Palette {
     thumb_empty: Color32::from_rgb(0x1f, 0x33, 0x2a),
 };
 
-static PALETTE: std::sync::RwLock<Palette> = std::sync::RwLock::new(OSAKA_JADE);
-/// Palette used when egui's theme is dark (Dracula or Osaka Jade).
-static DARK_PALETTE: std::sync::RwLock<Palette> = std::sync::RwLock::new(OSAKA_JADE);
+static PALETTE: std::sync::RwLock<Palette> = std::sync::RwLock::new(DARK);
+/// Palette used when egui's theme is dark (Catppuccin Mocha or Osaka Jade).
+static DARK_PALETTE: std::sync::RwLock<Palette> = std::sync::RwLock::new(DARK);
 
 /// Choose which dark palette the dark appearance uses; call `sync` afterwards.
 pub fn set_dark_palette(pal: Palette) {

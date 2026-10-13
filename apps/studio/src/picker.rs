@@ -64,9 +64,10 @@ pub struct Inputs {
 pub enum Appearance {
     System,
     Light,
-    Dark,
-    /// Dark, with the Osaka Jade palette (the default).
+    /// Catppuccin Mocha (the default).
     #[default]
+    Dark,
+    /// Dark, with the Osaka Jade palette.
     #[serde(rename = "osaka-jade")]
     OsakaJade,
 }
