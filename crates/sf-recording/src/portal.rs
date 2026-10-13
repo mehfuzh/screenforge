@@ -709,6 +709,7 @@ impl PortalRecorder {
             input: RawInput { pix_fmt: n.pix_fmt, width: fw, height: fh, filter: (!filters.is_empty()).then(|| filters.join(",")) },
             bitrate,
             encoder: "libx264",
+            channel: crate::display::DISPLAY_CHANNEL.into(),
         };
         self.tx = tx;
         self.repeater = Some(

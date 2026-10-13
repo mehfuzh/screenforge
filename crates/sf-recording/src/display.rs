@@ -137,6 +137,11 @@ pub fn window_stream_plan(width: u32, height: u32, scale: f64, discovery: &Disco
 
 /// Target H.264 bitrate: Screen Studio's ~17 Mb/s for 2400×1800 scaled by pixel count and
 /// quality, clamped to a sane range.
+/// H.264 encoder for live captures: VideoToolbox when this ffmpeg has it, else x264.
+pub fn video_encoder() -> &'static str {
+    if cfg!(target_os = "macos") && crate::ffmpeg::has_encoder("h264_videotoolbox") { "h264_videotoolbox" } else { "libx264" }
+}
+
 pub fn target_bitrate(width: u32, height: u32, quality: f64) -> u64 {
     let px = width as f64 * height as f64;
     let q = (quality / 0.85).clamp(0.3, 1.5);
@@ -154,20 +159,28 @@ pub fn hls_args(width: u32, height: u32, fps: u32, bitrate: u64, encoder: &str, 
 
 /// [`hls_args`] for any raw stdin input, with an optional filter chain to the output size.
 #[cfg(any(target_os = "macos", target_os = "linux"))]
-pub(crate) fn hls_raw_args(input: &crate::repeater::RawInput, fps: u32, bitrate: u64, encoder: &str, session: usize) -> Vec<String> {
+pub(crate) fn hls_raw_args(input: &crate::repeater::RawInput, fps: u32, bitrate: u64, encoder: &str, base: &str, session: usize) -> Vec<String> {
     let mut args: Vec<String> = ["-y", "-f", "rawvideo", "-pix_fmt"].map(String::from).to_vec();
     args.extend([input.pix_fmt.into(), "-video_size".into(), format!("{}x{}", input.width, input.height)]);
     args.extend(["-framerate".into(), fps.to_string(), "-i".into(), "pipe:0".into()]);
     if let Some(vf) = &input.filter {
         args.extend(["-vf".into(), vf.clone()]);
     }
-    args.extend(hls_encode_args(bitrate, encoder, session));
+    args.extend(hls_encode_args_for(base, bitrate, encoder, session));
     args
 }
 
 /// Encoder + HLS muxer arguments shared by every capture input.
 pub fn hls_encode_args(bitrate: u64, encoder: &str, session: usize) -> Vec<String> {
-    let base = format!("channel-1-display-{session}");
+    hls_encode_args_for(DISPLAY_CHANNEL, bitrate, encoder, session)
+}
+
+/// Recorder id of the display channel (file names start with it).
+pub const DISPLAY_CHANNEL: &str = "channel-1-display";
+
+/// [`hls_encode_args`] for any channel: files are `<channel>-<session>.m3u8` and segments.
+pub fn hls_encode_args_for(channel: &str, bitrate: u64, encoder: &str, session: usize) -> Vec<String> {
+    let base = format!("{channel}-{session}");
     let mut args: Vec<String> = vec!["-c:v".into(), encoder.into()];
     if encoder == "libx264" {
         args.extend(["-preset", "veryfast", "-tune", "zerolatency"].map(String::from));
@@ -403,7 +416,6 @@ mod imp {
     use super::{target_bitrate, DisplayPlan};
     use crate::audio::SystemAudioHandler;
     use crate::config::RecordingConfig;
-    use crate::ffmpeg::has_encoder;
     use crate::log::RecLog;
     use crate::permissions;
     use crate::repeater::{Cmd, FrameStore, RawInput, Repeater};
@@ -532,7 +544,7 @@ mod imp {
                 return Err(Error::Capture("no frames received from ScreenCaptureKit".into()));
             }
 
-            let encoder: &'static str = if has_encoder("h264_videotoolbox") { "h264_videotoolbox" } else { "libx264" };
+            let encoder = super::video_encoder();
             let bitrate = target_bitrate(plan.width_px, plan.height_px, cfg.video_quality);
             log.notice(COMPONENT, format!("Capture started. encoder={encoder} bitrate={bitrate} size={}x{} recordingScale={}", plan.width_px, plan.height_px, plan.recording_scale));
 
@@ -544,6 +556,7 @@ mod imp {
                 component: COMPONENT,
                 fps: cfg.fps.max(1),
                 input: RawInput { pix_fmt: "bgra", width: plan.width_px, height: plan.height_px, filter: None },
+                channel: super::DISPLAY_CHANNEL.into(),
                 bitrate,
                 encoder,
             };

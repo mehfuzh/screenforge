@@ -14,9 +14,12 @@
 - Recording: picker toolbar (Display/Window/Area/Device, camera/mic/system audio pickers,
   countdown), ScreenCaptureKit recorder writing the package's `recording/` layout
   (HLS fMP4, cursors, input logs, metadata), project creation with automatic zooms.
+- Webcam recording: the camera picker records `channel-N-camera-S.m3u8` (H.264 HLS, 30 fps, up to
+  1280 px wide) through ffmpeg's AVFoundation (macOS) or V4L2 (Linux) input, in step with the
+  display sessions; new projects show it with the camera-overlay layout.
 
 ## Not yet
-- Webcam capture during recording; window picking / area selection UI (area records a centred 60 % region); iPhone/iPad.
+- Live camera preview while recording; window picking / area selection UI (area records a centred 60 % region); iPhone/iPad.
 - Captions/transcription, keystroke overlay, device frame compositing, color grading/LUTs, cutout matting, face tracking, motion blur.
 - Crop editing UI, Unsplash, background audio library playback, click sounds in preview/export.
 - More bundled assets: cursor sets and device frames.
@@ -33,7 +36,6 @@
 
 ## Roadmap items (disabled in the UI)
 
-- Camera recording: webcam capture and the camera layouts/styles that depend on it
 - Masks and highlights: blur or hide regions, spotlight areas
 - Crop editing: the Crop tool in the preview toolbar
 - Captions: transcription and caption rendering

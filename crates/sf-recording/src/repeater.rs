@@ -73,6 +73,8 @@ pub(crate) struct Repeater {
     pub input: RawInput,
     pub bitrate: u64,
     pub encoder: &'static str,
+    /// Recorder id the output files are named after (`channel-1-display`, `channel-3-camera`).
+    pub channel: String,
 }
 
 struct Active {
@@ -153,8 +155,8 @@ impl Repeater {
     }
 
     fn spawn(&self, index: usize, dir: &Path) -> Result<FfmpegProc> {
-        let args = hls_raw_args(&self.input, self.fps, self.bitrate, self.encoder, index);
-        self.log.notice(self.component, format!("Starting video session {index}. file=channel-1-display-{index}.m3u8"));
+        let args = hls_raw_args(&self.input, self.fps, self.bitrate, self.encoder, &self.channel, index);
+        self.log.notice(self.component, format!("Starting video session {index}. file={}-{index}.m3u8", self.channel));
         FfmpegProc::spawn(&args, dir, self.log.clone(), self.component)
     }
 }

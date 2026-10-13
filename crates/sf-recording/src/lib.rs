@@ -12,6 +12,7 @@
 //!   channel-1-display-S.m3u8 + -0000.mp4 + -NNNN.m4s   H.264 HLS/fMP4, ~2 s segments
 //!   channel-2-microphone-S.m4a                 AAC-LC 48 kHz mono (when a mic is selected)
 //!   channel-N-systemAudio-S.m4a                AAC-LC (when system audio is enabled)
+//!   channel-N-camera-S.m3u8 + segments         H.264 HLS/fMP4 webcam, 30 fps (when a camera is selected)
 //!   cursors.json + cursors/<id>.png
 //!   keystrokes-S.json, mouseclicks-S.json, mousemoves-S.json
 //! ```
@@ -32,9 +33,10 @@
 //! ```
 //!
 //! Everything compiles on other platforms but [`Recorder::start`] returns
-//! [`Error::Unsupported`] there. Camera (`webcam`) recording is not implemented yet.
+//! [`Error::Unsupported`] there.
 
 pub mod audio;
+pub mod camera;
 pub mod caret;
 pub mod clock;
 pub mod config;
@@ -63,7 +65,7 @@ pub use sf_project::recording::RecordingMetadata;
 pub enum Error {
     #[error("recording is only supported on macOS")]
     Unsupported,
-    /// `"screenRecording"`, `"inputMonitoring"` or `"microphone"` (same names Screen Studio
+    /// `"screenRecording"`, `"inputMonitoring"`, `"microphone"` or `"camera"` (same names Screen Studio
     /// reports in its `missingPermission` message).
     #[error("missing permission: {0}")]
     PermissionDenied(&'static str),
@@ -118,7 +120,13 @@ impl std::fmt::Debug for Recorder {
 impl Recorder {
     /// Create the output directory, start every recorder and begin session 0.
     pub fn start(cfg: RecordingConfig) -> Result<Recorder> {
-        imp::Inner::start(cfg).map(|inner| Recorder { inner })
+        imp::Inner::start(cfg, None).map(|inner| Recorder { inner })
+    }
+    /// [`start`](Self::start) recording an already open camera (e.g. the one behind a live
+    /// preview) when it is the configured `camera`, so the recording does not wait for the
+    /// camera to wake up.
+    pub fn start_with_camera(cfg: RecordingConfig, camera: std::sync::Arc<camera::CameraCapture>) -> Result<Recorder> {
+        imp::Inner::start(cfg, Some(camera)).map(|inner| Recorder { inner })
     }
     /// End the current session (media files are finalized). No-op unless recording.
     pub fn pause(&mut self) -> Result<()> {
@@ -147,6 +155,10 @@ impl Recorder {
     /// Recorded (non-paused) time in milliseconds.
     pub fn elapsed_ms(&self) -> f64 {
         self.inner.elapsed_ms()
+    }
+    /// Live microphone level (0..1, dB scale) for a meter; `None` when no microphone is recorded.
+    pub fn microphone_level(&self) -> Option<f32> {
+        self.inner.mic.as_ref().map(|m| m.level())
     }
     pub fn state(&self) -> RecorderState {
         self.inner.state()
@@ -183,6 +195,9 @@ impl Recorder {
     pub fn elapsed_ms(&self) -> f64 {
         0.0
     }
+    pub fn microphone_level(&self) -> Option<f32> {
+        None
+    }
     pub fn state(&self) -> RecorderState {
         RecorderState::Failed("unsupported platform".into())
     }
@@ -191,17 +206,19 @@ impl Recorder {
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 mod imp {
     use std::path::Path;
+    use std::sync::Arc;
 
     use super::{Error, RecorderState, Result};
     use crate::audio::{MicRecorder, PcmSink, PcmSinkHandle};
     #[cfg(target_os = "macos")]
     use crate::audio::SystemAudioHandler;
+    use crate::camera::{CameraCapture, CameraRecorder};
     use crate::config::RecordingConfig;
     use crate::cursor::CursorRecorder;
     use crate::display::{self, DisplayPlan, DisplayRecorder};
     use crate::input::InputRecorder;
     use crate::log::RecLog;
-    use crate::metadata::{AudioChannel, DisplayChannel, InputChannel, MetadataBuilder, SessionTimes};
+    use crate::metadata::{AudioChannel, CameraChannel, DisplayChannel, InputChannel, MetadataBuilder, SessionTimes};
     use crate::{clock, discover, permissions, RecordingMetadata};
 
     const COMPONENT: &str = "Recorder";
@@ -220,8 +237,9 @@ mod imp {
         display: DisplayRecorder,
         input: Option<InputRecorder>,
         cursor: Option<CursorRecorder>,
-        mic: Option<MicRecorder>,
+        pub mic: Option<MicRecorder>,
         system_audio: Option<PcmSinkHandle>,
+        camera: Option<CameraRecorder>,
         current: Option<Open>,
         state: RecorderState,
         pub markers: Vec<f64>,
@@ -239,7 +257,7 @@ mod imp {
     }
 
     impl Inner {
-        pub fn start(cfg: RecordingConfig) -> Result<Self> {
+        pub fn start(cfg: RecordingConfig, camera_capture: Option<Arc<CameraCapture>>) -> Result<Self> {
             clock::init();
             if cfg.fps == 0 {
                 return Err(Error::InvalidConfig("fps must be > 0".into()));
@@ -254,7 +272,7 @@ mod imp {
 
             // Run the rest in a closure so any failure removes the half-created directory.
             let dir = cfg.output_dir.clone();
-            let r = Self::start_inner(cfg, log.clone());
+            let r = Self::start_inner(cfg, camera_capture, log.clone());
             if let Err(e) = &r {
                 log.error(COMPONENT, format!("Start failed: {e}"));
                 let _ = std::fs::remove_dir_all(&dir);
@@ -262,7 +280,7 @@ mod imp {
             r
         }
 
-        fn start_inner(cfg: RecordingConfig, log: RecLog) -> Result<Self> {
+        fn start_inner(cfg: RecordingConfig, camera_capture: Option<Arc<CameraCapture>>, log: RecLog) -> Result<Self> {
             let discovery = discover::Discovery { displays: discover::displays(), windows: discover::windows(), microphones: Vec::new(), cameras: Vec::new() };
             // a window picked in the screen-sharing dialog: its stream size gives the plan
             #[cfg(target_os = "linux")]
@@ -278,9 +296,6 @@ mod imp {
             #[cfg(not(target_os = "linux"))]
             let plan = display::plan(&cfg, &discovery)?;
             log.notice(COMPONENT, format!("Display plan: {plan:?}"));
-            if cfg.camera.is_some() {
-                log.warning(COMPONENT, "Camera recording is not implemented; ignoring camera setting.");
-            }
 
             // Input + cursor
             let (input, cursor) = if cfg.capture_input {
@@ -314,6 +329,7 @@ mod imp {
                 let h = PcmSink::spawn(48_000, 2, log.clone(), "SystemAudioRecorder")?;
                 let handler = SystemAudioHandler { sink: h.sink() };
                 audio_channels.push(AudioChannel { kind: "systemAudio", channel_index: next_channel, device_id: None });
+                next_channel += 1;
                 (Some(h), Some(handler))
             } else {
                 (None, None)
@@ -324,8 +340,27 @@ mod imp {
                 if cfg.capture_system_audio {
                     log.warning(COMPONENT, "System audio recording is not supported on Linux; ignoring.");
                 }
-                let _ = (PcmSink::spawn, next_channel);
+                let _ = PcmSink::spawn;
                 (None, None)
+            };
+
+            // Camera (opened before the display so its warm-up does not delay the first session)
+            let camera = match &cfg.camera {
+                Some(id) => {
+                    if !permissions::camera().is_granted() {
+                        permissions::request_camera();
+                        if !permissions::camera().is_granted() {
+                            return Err(Error::PermissionDenied("camera"));
+                        }
+                    }
+                    // reuse the camera the app already opened for its preview, else open it now
+                    let capture = match camera_capture.filter(|c| &c.device_id == id) {
+                        Some(c) => c,
+                        None => CameraCapture::open(id, log.clone())?,
+                    };
+                    Some(CameraRecorder::start(capture, next_channel, cfg.video_quality, log.clone())?)
+                }
+                None => None,
             };
 
             // Display
@@ -356,6 +391,7 @@ mod imp {
                     recording_scale: plan.recording_scale,
                 },
                 audio: audio_channels,
+                camera: camera.as_ref().map(|c| CameraChannel { channel_index: next_channel, device_id: c.device_id().to_string() }),
                 sessions: Vec::new(),
             };
             let mut inner = Inner {
@@ -368,6 +404,7 @@ mod imp {
                 cursor,
                 mic,
                 system_audio,
+                camera,
                 current: None,
                 state: RecorderState::Paused,
                 markers: Vec::new(),
@@ -400,6 +437,9 @@ mod imp {
                 }
             }
             let (process_start_ms, unix_start_ms) = clock::now_pair();
+            if let Some(c) = &self.camera {
+                c.begin_session(index, &dir)?;
+            }
             self.display.begin_session(index, &dir)?;
             self.current = Some(Open { index, process_start_ms, unix_start_ms });
             self.state = RecorderState::Recording;
@@ -429,6 +469,12 @@ mod imp {
             }
             if let Some(i) = &self.input {
                 note(i.end_session(), "input", &self.log);
+            }
+            if let Some(c) = &self.camera {
+                match c.end_session() {
+                    Ok(frames) => self.log.notice(COMPONENT, format!("Session {} camera finished. frames={frames} received={}", open.index, c.frames_received())),
+                    Err(e) => note(Err(e), "camera", &self.log),
+                }
             }
             match self.display.end_session() {
                 Ok(frames) => self.log.notice(COMPONENT, format!("Session {} video finished. frames={frames}", open.index)),
@@ -501,6 +547,9 @@ mod imp {
             }
             if let Some(s) = self.system_audio.as_mut() {
                 s.stop();
+            }
+            if let Some(c) = self.camera.as_mut() {
+                c.stop();
             }
         }
 

@@ -240,7 +240,7 @@ pub use mic::MicRecorder;
 /// Microphone capture through `cpal` (CoreAudio on macOS, ALSA/PulseAudio/PipeWire on Linux).
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 mod mic {
-    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
     use std::sync::Arc;
     use std::thread::JoinHandle;
     use std::time::Duration;
@@ -265,6 +265,8 @@ mod mic {
         pub device_name: String,
         pub sample_rate: u32,
         pub channels: u16,
+        /// Smoothed peak amplitude (f32 bits), updated by the capture callback.
+        level: Arc<AtomicU32>,
     }
 
     /// `(uid, name, is_default)` of the inputs the OS reports: CoreAudio UIDs on macOS; on
@@ -319,6 +321,8 @@ mod mic {
             let sink = sink_handle.sink();
             let stop = Arc::new(AtomicBool::new(false));
             let thread_stop = stop.clone();
+            let level = Arc::new(AtomicU32::new(0f32.to_bits()));
+            let cb_level = level.clone();
             let (ready_tx, ready_rx) = bounded::<Result<()>>(1);
             let err_log = log.clone();
             let mut full_config = config;
@@ -334,6 +338,11 @@ mod mic {
                             let latency_ms = ts.callback.duration_since(ts.capture).as_secs_f64() * 1000.0;
                             let chunk_ms = (data.len() / in_channels.max(1)) as f64 / sample_rate as f64 * 1000.0;
                             let capture_start_ms = now_ms - latency_ms - chunk_ms;
+                            // level meter: fast attack, slow release
+                            let peak = data.iter().step_by(in_channels.max(1)).fold(0f32, |m, v| m.max(v.abs()));
+                            let prev = f32::from_bits(cb_level.load(Ordering::Relaxed));
+                            let next = if peak > prev { peak } else { prev * 0.85 + peak * 0.15 };
+                            cb_level.store(next.to_bits(), Ordering::Relaxed);
                             let samples = if in_channels > 2 {
                                 // keep the first two channels of multi-channel interfaces
                                 let mut v = Vec::with_capacity(data.len() / in_channels * 2);
@@ -370,7 +379,13 @@ mod mic {
                 Err(_) => return Err(Error::Audio("timeout opening microphone".into())),
             }
             log.notice(COMPONENT, format!("Microphone opened. name=\"{device_name}\" id={device_id} rate={sample_rate} channels={channels}"));
-            Ok(MicRecorder { sink_handle, stop, thread: Some(thread), device_id, device_name, sample_rate, channels })
+            Ok(MicRecorder { sink_handle, stop, thread: Some(thread), device_id, device_name, sample_rate, channels, level })
+        }
+
+        /// Current input level, 0..1 on a dB scale (-50 dB .. 0 dB) so speech moves a meter.
+        pub fn level(&self) -> f32 {
+            let a = f32::from_bits(self.level.load(Ordering::Relaxed)).max(1e-6);
+            ((20.0 * a.log10() + 50.0) / 50.0).clamp(0.0, 1.0)
         }
 
         pub fn begin_session(&self, path: &std::path::Path) -> Result<()> {

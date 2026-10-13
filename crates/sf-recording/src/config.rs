@@ -34,7 +34,7 @@ pub struct RecordingConfig {
     pub microphone: Option<String>,
     /// Record system audio through ScreenCaptureKit (`channel-N-systemAudio-S.m4a`).
     pub capture_system_audio: bool,
-    /// Camera device id. Not implemented yet (accepted and ignored, see crate docs).
+    /// Camera to record: an id from `discover().cameras`. `None` records no camera.
     pub camera: Option<String>,
     /// `CGWindowID`s to remove from the capture (the app's own windows).
     pub exclude_window_ids: Vec<u32>,

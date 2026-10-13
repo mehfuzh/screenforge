@@ -21,7 +21,7 @@ pub enum WindowOutcome {
 
 impl WindowSelect {
     pub fn new(screen: Rect) -> Self {
-        let windows = crate::recorder::discover_inputs().windows.into_iter().filter(|w| w.on_screen).collect();
+        let windows = crate::recorder::discover_windows().into_iter().filter(|w| w.on_screen).collect();
         WindowSelect { screen, windows }
     }
 

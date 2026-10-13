@@ -51,7 +51,7 @@ once (lifetime), verified offline. It is Apache-2.0 code, so you can always buil
 remove the gate; the license pays for the maintained, signed and notarized download, the CI that
 builds it, and ongoing maintenance. See `backend/README.md` for how keys are issued.
 
-> Status: early alpha. Records the screen with ScreenCaptureKit, edits on a GPU-rendered
+> Status: early alpha. Records the screen with ScreenCaptureKit (plus an optional webcam), edits on a GPU-rendered
 > timeline (cuts, speed, zooms with spring animation, smoothed cursor, backgrounds, padding,
 > shadow, camera layouts) and exports MP4/HEVC/ProRes/GIF/WebM with mixed audio, background
 > music and an independent audio track. See `docs/STATUS.md` for what is missing.
@@ -60,7 +60,6 @@ builds it, and ongoing maintenance. See `backend/README.md` for how keys are iss
 
 Controls for these show up greyed out in the app (hover: "on the product roadmap") rather than half-working:
 
-- **Camera recording** — webcam capture and the camera layouts/styles that depend on it
 - **Masks and highlights** — blur or hide regions, spotlight areas
 - **Crop editing** — the Crop tool in the preview toolbar
 - **Captions** — transcription and caption rendering
@@ -81,7 +80,7 @@ Controls for these show up greyed out in the app (hover: "on the product roadmap
 | `crates/sf-render`   | wgpu compositor (WGSL): background, shadow, rounded screen, camera, cursor sprites |
 | `crates/sf-session`  | an opened project: sources, caches, per-frame `FrameDesc` |
 | `crates/sf-export`   | headless export loop |
-| `crates/sf-recording`| recorder (ScreenCaptureKit, input events, cursor capture) writing the polyrecorder layout |
+| `crates/sf-recording`| recorder (ScreenCaptureKit, webcam, input events, cursor capture) writing the polyrecorder layout |
 | `apps/studio`        | egui desktop app (launcher, editor, export) |
 | `apps/sf-cli`        | `sf inspect | frame | export | resave` |
 
