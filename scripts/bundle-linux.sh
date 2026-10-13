@@ -63,7 +63,7 @@ Section: video
 Priority: optional
 Architecture: $ARCH_DEB
 Installed-Size: $SIZE
-Depends: libgtk-3-0 | libgtk-3-0t64, libasound2 | libasound2t64, libxtst6, libxkbcommon0, libx11-6, libxcursor1, libxrandr2, libxi6
+Depends: libgtk-3-0 | libgtk-3-0t64, libasound2 | libasound2t64, libxtst6, libxkbcommon0, libx11-6, libxcursor1, libxrandr2, libxi6, libpipewire-0.3-0 | libpipewire-0.3-0t64
 Maintainer: Mehfuz Hossain <mehfuz@smartloop.ai>
 Homepage: https://screenforge.studio
 Description: Screen recorder and timeline editor

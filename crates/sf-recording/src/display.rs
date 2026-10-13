@@ -112,21 +112,24 @@ pub fn target_bitrate(width: u32, height: u32, quality: f64) -> u64 {
     (REFERENCE_BITRATE * px / REFERENCE_PIXELS * q).clamp(1.5e6, 80e6) as u64
 }
 
-/// ffmpeg arguments for one HLS session (relative file names; run with cwd = output dir).
+/// ffmpeg arguments for one HLS session fed tightly packed BGRA frames on stdin (relative
+/// file names; run with cwd = output dir).
 pub fn hls_args(width: u32, height: u32, fps: u32, bitrate: u64, encoder: &str, session: usize) -> Vec<String> {
-    let mut args: Vec<String> = vec![
-        "-y".into(),
-        "-f".into(),
-        "rawvideo".into(),
-        "-pix_fmt".into(),
-        "bgra".into(),
-        "-video_size".into(),
-        format!("{width}x{height}"),
-        "-framerate".into(),
-        fps.to_string(),
-        "-i".into(),
-        "pipe:0".into(),
-    ];
+    let mut args: Vec<String> = ["-y", "-f", "rawvideo", "-pix_fmt", "bgra", "-video_size"].map(String::from).to_vec();
+    args.extend([format!("{width}x{height}"), "-framerate".into(), fps.to_string(), "-i".into(), "pipe:0".into()]);
+    args.extend(hls_encode_args(bitrate, encoder, session));
+    args
+}
+
+/// [`hls_args`] for any raw stdin input, with an optional filter chain to the output size.
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+pub(crate) fn hls_raw_args(input: &crate::repeater::RawInput, fps: u32, bitrate: u64, encoder: &str, session: usize) -> Vec<String> {
+    let mut args: Vec<String> = ["-y", "-f", "rawvideo", "-pix_fmt"].map(String::from).to_vec();
+    args.extend([input.pix_fmt.into(), "-video_size".into(), format!("{}x{}", input.width, input.height)]);
+    args.extend(["-framerate".into(), fps.to_string(), "-i".into(), "pipe:0".into()]);
+    if let Some(vf) = &input.filter {
+        args.extend(["-vf".into(), vf.clone()]);
+    }
     args.extend(hls_encode_args(bitrate, encoder, session));
     args
 }
@@ -163,9 +166,10 @@ pub use imp::DisplayRecorder;
 #[cfg(target_os = "linux")]
 pub use linux::DisplayRecorder;
 
-/// Linux: ffmpeg grabs the region straight from the X server (`x11grab`), one ffmpeg per
-/// session, writing the same HLS layout as the macOS recorder. The cursor is left out of the
-/// video (`-draw_mouse 0`); the editor draws it from the input log.
+/// Linux on X11: ffmpeg grabs the region straight from the X server (`x11grab`), one ffmpeg
+/// per session, writing the same HLS layout as the macOS recorder. The cursor is left out of
+/// the video (`-draw_mouse 0`); the editor draws it from the input log. Wayland sessions use
+/// the ScreenCast portal instead ([`crate::portal`]).
 #[cfg(target_os = "linux")]
 mod linux {
     use std::path::Path;
@@ -180,7 +184,70 @@ mod linux {
 
     const COMPONENT: &str = "DisplayRecorder";
 
-    pub struct DisplayRecorder {
+    use crate::portal::{is_wayland, PointerSink, PortalRecorder};
+
+    /// The capture backend for this session.
+    pub enum DisplayRecorder {
+        X11(X11Recorder),
+        Portal(PortalRecorder),
+    }
+
+    impl DisplayRecorder {
+        pub fn start(cfg: &RecordingConfig, plan: DisplayPlan, log: RecLog, _system_audio: Option<()>) -> Result<Self> {
+            if is_wayland() {
+                return PortalRecorder::start(cfg, plan, log).map(DisplayRecorder::Portal);
+            }
+            X11Recorder::start(cfg, plan, log).map(DisplayRecorder::X11)
+        }
+
+        /// True when this backend reports cursor positions itself (see [`Self::set_pointer_sink`]).
+        pub fn provides_pointer(&self) -> bool {
+            matches!(self, DisplayRecorder::Portal(p) if p.cursor_metadata)
+        }
+
+        pub fn set_pointer_sink(&self, sink: PointerSink) {
+            if let DisplayRecorder::Portal(p) = self {
+                p.set_pointer_sink(sink);
+            }
+        }
+
+        pub fn begin_session(&self, index: usize, dir: &Path) -> Result<()> {
+            match self {
+                DisplayRecorder::X11(r) => r.begin_session(index, dir),
+                DisplayRecorder::Portal(r) => r.begin_session(index, dir),
+            }
+        }
+
+        pub fn end_session(&self) -> Result<u64> {
+            match self {
+                DisplayRecorder::X11(r) => r.end_session(),
+                DisplayRecorder::Portal(r) => r.end_session(),
+            }
+        }
+
+        pub fn frames_received(&self) -> u64 {
+            match self {
+                DisplayRecorder::X11(r) => r.frames_received(),
+                DisplayRecorder::Portal(r) => r.frames_received(),
+            }
+        }
+
+        pub fn error(&self) -> Option<String> {
+            match self {
+                DisplayRecorder::X11(r) => r.error(),
+                DisplayRecorder::Portal(r) => r.error(),
+            }
+        }
+
+        pub fn stop(&mut self) {
+            match self {
+                DisplayRecorder::X11(r) => r.stop(),
+                DisplayRecorder::Portal(r) => r.stop(),
+            }
+        }
+    }
+
+    pub struct X11Recorder {
         plan: DisplayPlan,
         fps: u32,
         quality: f64,
@@ -190,26 +257,27 @@ mod linux {
         error: Mutex<Option<String>>,
     }
 
-    /// Why recording cannot work in this session, if it cannot.
+    /// Why recording cannot work in this session, if it cannot. Wayland records through the
+    /// portal but the app (and display discovery) still needs XWayland.
     pub fn unsupported_reason() -> Option<String> {
-        let wayland = std::env::var("XDG_SESSION_TYPE").map(|t| t.eq_ignore_ascii_case("wayland")).unwrap_or(false) || std::env::var_os("WAYLAND_DISPLAY").is_some();
         if std::env::var_os("DISPLAY").is_none() {
-            return Some("No X11 display. ScreenForge records X11 sessions; on Wayland, log in with an \"on Xorg\" session.".into());
-        }
-        if wayland {
-            return Some("Wayland sessions are not supported for recording yet: log out and choose an \"on Xorg\" / X11 session at the login screen.".into());
+            return Some(if is_wayland() {
+                "XWayland is not available. ScreenForge needs it on Wayland (it is on by default in GNOME and KDE).".into()
+            } else {
+                "No X11 display found.".into()
+            });
         }
         None
     }
 
-    impl DisplayRecorder {
-        pub fn start(cfg: &RecordingConfig, plan: DisplayPlan, log: RecLog, _system_audio: Option<()>) -> Result<Self> {
+    impl X11Recorder {
+        fn start(cfg: &RecordingConfig, plan: DisplayPlan, log: RecLog) -> Result<Self> {
             if let Some(why) = unsupported_reason() {
                 return Err(Error::Capture(why));
             }
             let display = std::env::var("DISPLAY").unwrap_or_else(|_| ":0".into());
             log.notice(COMPONENT, format!("x11grab on {display}: {plan:?}"));
-            Ok(DisplayRecorder { plan, fps: cfg.fps, quality: cfg.video_quality, display, log, proc: Mutex::new(None), error: Mutex::new(None) })
+            Ok(X11Recorder { plan, fps: cfg.fps, quality: cfg.video_quality, display, log, proc: Mutex::new(None), error: Mutex::new(None) })
         }
 
         pub fn begin_session(&self, index: usize, dir: &Path) -> Result<()> {
@@ -276,13 +344,13 @@ pub use linux::unsupported_reason;
 
 #[cfg(target_os = "macos")]
 mod imp {
-    use std::path::{Path, PathBuf};
-    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+    use std::path::Path;
+    use std::sync::atomic::Ordering;
     use std::sync::Arc;
     use std::thread::JoinHandle;
-    use std::time::{Duration, Instant};
+    use std::time::Duration;
 
-    use crossbeam_channel::{bounded, unbounded, Receiver, Sender};
+    use crossbeam_channel::{bounded, unbounded, Sender};
     use parking_lot::Mutex;
     use screencapturekit::cg::CGRect;
     use screencapturekit::cm::{CMSampleBuffer, CMSampleBufferExt, CMSampleBufferSCExt, SCFrameStatus};
@@ -296,23 +364,16 @@ mod imp {
     use screencapturekit::stream::output_type::SCStreamOutputType;
     use screencapturekit::stream::sc_stream::SCStream;
 
-    use super::{hls_args, target_bitrate, DisplayPlan};
+    use super::{target_bitrate, DisplayPlan};
     use crate::audio::SystemAudioHandler;
     use crate::config::RecordingConfig;
-    use crate::ffmpeg::{has_encoder, FfmpegProc};
+    use crate::ffmpeg::has_encoder;
     use crate::log::RecLog;
     use crate::permissions;
+    use crate::repeater::{Cmd, FrameStore, RawInput, Repeater};
     use crate::{Error, Result};
 
     const COMPONENT: &str = "DisplayRecorder";
-
-    /// Latest captured frame (tightly packed BGRA, `width*4` bytes per row).
-    struct FrameStore {
-        latest: Mutex<Option<Arc<Vec<u8>>>>,
-        width: usize,
-        height: usize,
-        received: AtomicU64,
-    }
 
     struct FrameHandler {
         store: Arc<FrameStore>,
@@ -342,15 +403,8 @@ mod imp {
                 }
                 buf.extend_from_slice(&src[start..start + row]);
             }
-            *self.store.latest.lock() = Some(Arc::new(buf));
-            self.store.received.fetch_add(1, Ordering::Relaxed);
+            self.store.put(buf);
         }
-    }
-
-    enum Cmd {
-        Begin { index: usize, dir: PathBuf, reply: Sender<Result<()>> },
-        End { reply: Sender<Result<u64>> },
-        Stop,
     }
 
     /// ScreenCaptureKit stream plus the HLS writer.
@@ -420,12 +474,7 @@ mod imp {
                 *err_slot.lock() = Some(e.to_string());
             });
             let mut stream = SCStream::new_with_delegate(&filter, &config, callbacks).map_err(|e| Error::Capture(format!("SCStream: {e}")))?;
-            let store = Arc::new(FrameStore {
-                latest: Mutex::new(None),
-                width: plan.width_px as usize,
-                height: plan.height_px as usize,
-                received: AtomicU64::new(0),
-            });
+            let store = Arc::new(FrameStore::new(plan.width_px as usize, plan.height_px as usize));
             stream
                 .add_output_handler(FrameHandler { store: store.clone() }, SCStreamOutputType::Screen)
                 .map_err(|e| Error::Capture(format!("output handler: {e}")))?;
@@ -442,11 +491,7 @@ mod imp {
             stream.start_capture().map_err(|e| Error::Capture(format!("start capture: {e}")))?;
 
             // Wait for the first frame so a session never starts without content.
-            let t = Instant::now();
-            while store.received.load(Ordering::Relaxed) == 0 && t.elapsed() < Duration::from_secs(3) {
-                std::thread::sleep(Duration::from_millis(5));
-            }
-            if store.received.load(Ordering::Relaxed) == 0 {
+            if !store.wait_first(Duration::from_secs(3)) {
                 let _ = stream.stop_capture();
                 return Err(Error::Capture("no frames received from ScreenCaptureKit".into()));
             }
@@ -460,9 +505,9 @@ mod imp {
                 rx,
                 store: store.clone(),
                 log: log.clone(),
+                component: COMPONENT,
                 fps: cfg.fps.max(1),
-                width: plan.width_px,
-                height: plan.height_px,
+                input: RawInput { pix_fmt: "bgra", width: plan.width_px, height: plan.height_px, filter: None },
                 bitrate,
                 encoder,
             };
@@ -513,100 +558,6 @@ mod imp {
         }
     }
 
-    struct Repeater {
-        rx: Receiver<Cmd>,
-        store: Arc<FrameStore>,
-        log: RecLog,
-        fps: u32,
-        width: u32,
-        height: u32,
-        bitrate: u64,
-        encoder: &'static str,
-    }
-
-    struct Active {
-        proc: FfmpegProc,
-        t0: Instant,
-        written: u64,
-        failed: AtomicBool,
-    }
-
-    impl Repeater {
-        fn run(self) {
-            let mut active: Option<Active> = None;
-            let frame_dur = Duration::from_secs_f64(1.0 / self.fps as f64);
-            loop {
-                let cmd = match &active {
-                    None => self.rx.recv().ok(),
-                    Some(a) => {
-                        let due = a.t0 + frame_dur * (a.written as u32);
-                        let now = Instant::now();
-                        if due > now {
-                            match self.rx.recv_timeout(due - now) {
-                                Ok(c) => Some(c),
-                                Err(crossbeam_channel::RecvTimeoutError::Timeout) => None,
-                                Err(_) => break,
-                            }
-                        } else {
-                            match self.rx.try_recv() {
-                                Ok(c) => Some(c),
-                                Err(crossbeam_channel::TryRecvError::Empty) => None,
-                                Err(_) => break,
-                            }
-                        }
-                    }
-                };
-                match cmd {
-                    Some(Cmd::Begin { index, dir, reply }) => {
-                        if let Some(a) = active.take() {
-                            let _ = a.proc.finish();
-                        }
-                        let r = self.spawn(index, &dir).map(|p| {
-                            active = Some(Active { proc: p, t0: Instant::now(), written: 0, failed: AtomicBool::new(false) });
-                        });
-                        let _ = reply.send(r);
-                    }
-                    Some(Cmd::End { reply }) => {
-                        let r = match active.take() {
-                            Some(a) => {
-                                let n = a.written;
-                                a.proc.finish().map(|_| n)
-                            }
-                            None => Ok(0),
-                        };
-                        let _ = reply.send(r);
-                    }
-                    Some(Cmd::Stop) => break,
-                    None => {
-                        if let Some(a) = active.as_mut() {
-                            if a.failed.load(Ordering::Relaxed) {
-                                // ffmpeg died; keep counting ticks so End returns promptly
-                                a.written += 1;
-                                continue;
-                            }
-                            let frame = self.store.latest.lock().clone();
-                            if let Some(f) = frame {
-                                if let Err(e) = a.proc.write(&f) {
-                                    self.log.error(COMPONENT, format!("Frame write failed: {e}"));
-                                    a.failed.store(true, Ordering::Relaxed);
-                                }
-                            }
-                            a.written += 1;
-                        }
-                    }
-                }
-            }
-            if let Some(a) = active.take() {
-                let _ = a.proc.finish();
-            }
-        }
-
-        fn spawn(&self, index: usize, dir: &Path) -> Result<FfmpegProc> {
-            let args = hls_args(self.width, self.height, self.fps, self.bitrate, self.encoder, index);
-            self.log.notice(COMPONENT, format!("Starting video session {index}. file=channel-1-display-{index}.m3u8"));
-            FfmpegProc::spawn(&args, dir, self.log.clone(), COMPONENT)
-        }
-    }
 }
 
 #[cfg(test)]

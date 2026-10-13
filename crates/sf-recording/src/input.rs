@@ -370,22 +370,35 @@ mod imp {
             let (tx, rx) = unbounded::<Cmd>();
             let stop = Arc::new(AtomicBool::new(false));
 
-            // Create the tap on its own thread (the tap is tied to that thread's run loop)
-            // and report success/failure back before returning.
-            let (ready_tx, ready_rx) = bounded::<std::result::Result<(), ()>>(1);
-            let tap_tx = tx.clone();
-            let tap_stop = stop.clone();
-            let tap_thread = std::thread::Builder::new()
-                .name("sf-input-tap".into())
-                .spawn(move || tap_loop(tap_tx, tap_stop, capture_keystrokes, ready_tx))
-                .map_err(|source| Error::Io { path: "thread".into(), source })?;
-            match ready_rx.recv_timeout(Duration::from_secs(5)) {
-                Ok(Ok(())) => {}
-                _ => {
-                    let _ = tap_thread.join();
-                    return Err(Error::PermissionDenied("inputMonitoring"));
+            // Wayland gives no global input: the X11 tap would only see XWayland windows, so
+            // there is none, and pointer positions come from the screen-cast stream instead
+            // (see `pointer_sink`). Clicks and keys are not recorded there.
+            #[cfg(target_os = "linux")]
+            let use_tap = !crate::portal::is_wayland();
+            #[cfg(not(target_os = "linux"))]
+            let use_tap = true;
+            let tap_thread = if use_tap {
+                // Create the tap on its own thread (the tap is tied to that thread's run loop)
+                // and report success/failure back before returning.
+                let (ready_tx, ready_rx) = bounded::<std::result::Result<(), ()>>(1);
+                let tap_tx = tx.clone();
+                let tap_stop = stop.clone();
+                let tap_thread = std::thread::Builder::new()
+                    .name("sf-input-tap".into())
+                    .spawn(move || tap_loop(tap_tx, tap_stop, capture_keystrokes, ready_tx))
+                    .map_err(|source| Error::Io { path: "thread".into(), source })?;
+                match ready_rx.recv_timeout(Duration::from_secs(5)) {
+                    Ok(Ok(())) => {}
+                    _ => {
+                        let _ = tap_thread.join();
+                        return Err(Error::PermissionDenied("inputMonitoring"));
+                    }
                 }
-            }
+                Some(tap_thread)
+            } else {
+                log.notice(COMPONENT, "Wayland session: no global input tap; pointer positions come from the screen-cast stream, clicks and keys are not recorded.");
+                None
+            };
 
             let writer = Writer {
                 rx,
@@ -401,7 +414,7 @@ mod imp {
                 .spawn(move || writer.run())
                 .map_err(|source| Error::Io { path: "thread".into(), source })?;
             log.notice(COMPONENT, format!("Event tap created. captureKeyStrokes={capture_keystrokes}"));
-            Ok(InputRecorder { tx, stop, tap_thread: Some(tap_thread), writer_thread: Some(writer_thread) })
+            Ok(InputRecorder { tx, stop, tap_thread, writer_thread: Some(writer_thread) })
         }
 
         /// Called by the cursor recorder when the cursor image changes.
@@ -414,6 +427,25 @@ mod imp {
             let tx = self.tx.clone();
             Box::new(move |id: &str| {
                 let _ = tx.send(Cmd::CursorChanged(id.to_string()));
+            })
+        }
+
+        /// Feed pointer positions (global points) from another source, e.g. the cursor
+        /// metadata of a Wayland screen-cast stream.
+        pub fn pointer_sink(&self) -> Box<dyn Fn(f64, f64) + Send> {
+            let tx = self.tx.clone();
+            Box::new(move |x: f64, y: f64| {
+                let _ = tx.send(Cmd::Event(RawEvent {
+                    kind: "mouseMoved",
+                    button: None,
+                    x: Some(x),
+                    y: Some(y),
+                    character: None,
+                    is_repeat: None,
+                    modifiers: Vec::new(),
+                    process_time_ms: clock::process_time_ms(),
+                    unix_time_ms: clock::unix_time_ms(),
+                }));
             })
         }
 

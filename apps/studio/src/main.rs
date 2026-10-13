@@ -18,6 +18,12 @@ mod vibrancy;
 mod widgets;
 
 fn main() -> eframe::Result {
+    // The toolbar and HUD place themselves at absolute screen positions, which Wayland does not
+    // allow; run the windows on XWayland. Recording still goes through the screen-cast portal.
+    #[cfg(target_os = "linux")]
+    if std::env::var_os("DISPLAY").is_some() {
+        std::env::remove_var("WAYLAND_DISPLAY");
+    }
     sf_recording::clock::init();
     tracing_subscriber::fmt().with_env_filter(tracing_subscriber::EnvFilter::from_default_env()).init();
     let icon = eframe::icon_data::from_png_bytes(include_bytes!("../assets/icon-256.png")).expect("app icon");

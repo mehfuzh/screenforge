@@ -46,6 +46,10 @@ pub mod input;
 pub mod log;
 pub mod metadata;
 pub mod permissions;
+#[cfg(target_os = "linux")]
+pub mod portal;
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+mod repeater;
 
 use std::path::PathBuf;
 
@@ -314,6 +318,10 @@ mod imp {
 
             // Display
             let display = DisplayRecorder::start(&cfg, plan.clone(), log.clone(), sys_handler)?;
+            #[cfg(target_os = "linux")]
+            if let (Some(i), true) = (&input, display.provides_pointer()) {
+                display.set_pointer_sink(i.pointer_sink());
+            }
 
             let meta = MetadataBuilder {
                 version: cfg.recorder_version.clone(),
