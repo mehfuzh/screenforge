@@ -4,6 +4,7 @@
 //! - Input Monitoring: the listen-only `CGEventTap` used for `mousemoves/mouseclicks/keystrokes`
 //!   cannot be created without it.
 //! - Microphone: CoreAudio input.
+//! - Camera: the webcam channel (ffmpeg's AVFoundation input runs under the app's grant).
 //!
 //! `request_*` functions trigger the system prompt (first time) or no-op; the user may have
 //! to enable the app in System Settings and relaunch. [`open_settings`] deep-links there.
@@ -31,6 +32,7 @@ pub enum Permission {
     ScreenRecording,
     InputMonitoring,
     Microphone,
+    Camera,
     /// Optional: lets automatic zooms follow the text caret while typing.
     Accessibility,
 }
@@ -113,11 +115,31 @@ mod imp {
         objc2::runtime::AnyClass::get(c"AVCaptureDevice")
     }
 
+    // AVMediaTypeAudio / AVMediaTypeVideo
+    const AUDIO: &str = "soun";
+    const VIDEO: &str = "vide";
+
     pub fn microphone() -> PermissionStatus {
+        media_status(AUDIO)
+    }
+
+    pub fn camera() -> PermissionStatus {
+        media_status(VIDEO)
+    }
+
+    pub fn request_microphone() -> PermissionStatus {
+        request_media(AUDIO)
+    }
+
+    pub fn request_camera() -> PermissionStatus {
+        request_media(VIDEO)
+    }
+
+    fn media_status(media: &str) -> PermissionStatus {
         use objc2::msg_send;
         use objc2_foundation::NSString;
         let Some(cls) = av_capture_device() else { return PermissionStatus::Unsupported };
-        let media = NSString::from_str("soun"); // AVMediaTypeAudio
+        let media = NSString::from_str(media);
         // AVAuthorizationStatus: 0 notDetermined, 1 restricted, 2 denied, 3 authorized
         let status: isize = unsafe { msg_send![cls, authorizationStatusForMediaType: &*media] };
         match status {
@@ -127,19 +149,19 @@ mod imp {
         }
     }
 
-    /// Shows the microphone prompt if not determined; returns the status known right now
+    /// Shows the prompt for `media` if not determined; returns the status known right now
     /// (the prompt completes asynchronously).
-    pub fn request_microphone() -> PermissionStatus {
+    fn request_media(media: &str) -> PermissionStatus {
         use block2::RcBlock;
         use objc2::msg_send;
         use objc2::runtime::Bool;
         use objc2_foundation::NSString;
-        let status = microphone();
+        let status = media_status(media);
         if status != PermissionStatus::NotDetermined {
             return status;
         }
         let Some(cls) = av_capture_device() else { return PermissionStatus::Unsupported };
-        let media = NSString::from_str("soun");
+        let media = NSString::from_str(media);
         let block = RcBlock::new(|_granted: Bool| {});
         let _: () = unsafe { msg_send![cls, requestAccessForMediaType: &*media, completionHandler: &*block] };
         PermissionStatus::NotDetermined
@@ -170,6 +192,12 @@ mod imp {
     pub fn request_microphone() -> PermissionStatus {
         PermissionStatus::Granted
     }
+    pub fn camera() -> PermissionStatus {
+        PermissionStatus::Granted
+    }
+    pub fn request_camera() -> PermissionStatus {
+        PermissionStatus::Granted
+    }
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "linux")))]
@@ -191,6 +219,12 @@ mod imp {
         PermissionStatus::Unsupported
     }
     pub fn request_microphone() -> PermissionStatus {
+        PermissionStatus::Unsupported
+    }
+    pub fn camera() -> PermissionStatus {
+        PermissionStatus::Unsupported
+    }
+    pub fn request_camera() -> PermissionStatus {
         PermissionStatus::Unsupported
     }
 }
@@ -219,6 +253,14 @@ pub fn request_input_monitoring() -> PermissionStatus {
 pub fn request_microphone() -> PermissionStatus {
     imp::request_microphone()
 }
+/// Camera permission (`AVCaptureDevice.authorizationStatus(for: .video)`).
+pub fn camera() -> PermissionStatus {
+    imp::camera()
+}
+/// Prompt for the camera.
+pub fn request_camera() -> PermissionStatus {
+    imp::request_camera()
+}
 
 /// Accessibility permission (`AXIsProcessTrusted`), used to read the text caret while typing.
 pub fn accessibility() -> PermissionStatus {
@@ -239,6 +281,7 @@ pub fn open_settings(permission: Permission) -> std::io::Result<()> {
         Permission::ScreenRecording => "Privacy_ScreenCapture",
         Permission::InputMonitoring => "Privacy_ListenEvent",
         Permission::Microphone => "Privacy_Microphone",
+        Permission::Camera => "Privacy_Camera",
         Permission::Accessibility => "Privacy_Accessibility",
     };
     let url = format!("x-apple.systempreferences:com.apple.preference.security?{anchor}");

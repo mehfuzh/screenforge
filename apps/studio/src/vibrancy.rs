@@ -40,6 +40,7 @@ mod imp {
         let windows = app.windows();
         let Some(window) = windows.iter().next() else { return };
         let Some(content) = window.contentView() else { return };
+        pin_contents_to_bottom(&content, rect.is_some());
         EFFECT.with(|slot| {
             let mut slot = slot.borrow_mut();
             match rect {
@@ -74,6 +75,30 @@ mod imp {
                 }
             }
         });
+    }
+
+    /// While the floating bar is shown the window grows upwards for menus and panels, with the
+    /// bar pinned to its bottom edge. Until the first frame at the new size is presented, Core
+    /// Animation shows the previous one; with the Metal layer's default `resize` gravity that
+    /// frame is stretched over the new height (a tall, distorted bar). Pinning the contents to
+    /// the bottom shows it unscaled where the bar really is. `false` restores `resize` (editor).
+    fn pin_contents_to_bottom(content: &objc2_app_kit::NSView, pin: bool) {
+        use objc2_foundation::NSString;
+        let Some(root) = content.layer() else { return };
+        let mut layers = vec![root.clone()];
+        // SAFETY: read on the main thread; the array is copied before the layers are touched
+        if let Some(subs) = unsafe { root.sublayers() } {
+            layers.extend(subs.iter());
+        }
+        for layer in layers {
+            // "bottom" is in the layer's own coordinates: visually the top in a flipped hierarchy
+            let gravity = match (pin, layer.contentsAreFlipped()) {
+                (false, _) => "resize",
+                (true, false) => "bottom",
+                (true, true) => "top",
+            };
+            layer.setContentsGravity(&NSString::from_str(gravity));
+        }
     }
 
     pub fn is_active() -> bool {

@@ -75,6 +75,22 @@ impl AudioChannel {
     }
 }
 
+/// Static description of the webcam channel (`channel-N-camera`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct CameraChannel {
+    pub channel_index: usize,
+    pub device_id: String,
+}
+
+impl CameraChannel {
+    pub fn id(&self) -> String {
+        format!("channel-{}-camera", self.channel_index)
+    }
+    pub fn output_filename(&self, session: usize) -> String {
+        format!("{}-{session}.m3u8", self.id())
+    }
+}
+
 /// Collects everything that ends up in `metadata.json`.
 #[derive(Debug, Clone)]
 pub struct MetadataBuilder {
@@ -82,6 +98,7 @@ pub struct MetadataBuilder {
     pub input: Option<InputChannel>,
     pub display: DisplayChannel,
     pub audio: Vec<AudioChannel>,
+    pub camera: Option<CameraChannel>,
     pub sessions: Vec<SessionTimes>,
 }
 
@@ -197,6 +214,24 @@ impl MetadataBuilder {
             }));
         }
 
+        if let Some(c) = &self.camera {
+            let sessions: Vec<Value> = self
+                .sessions
+                .iter()
+                .map(|s| {
+                    let mut j = s.base_json();
+                    j.insert("outputFilename".into(), json!(c.output_filename(s.index)));
+                    Value::Object(j)
+                })
+                .collect();
+            recorders.push(json!({
+                "configuration": {"deviceId": c.device_id},
+                "id": c.id(),
+                "sessions": sessions,
+                "type": "camera",
+            }));
+        }
+
         let sessions: Vec<Value> = self.sessions.iter().map(|s| Value::Object(s.base_json())).collect();
         let doc = json!({
             "logFilename": LOG_FILENAME,
@@ -259,6 +294,7 @@ mod tests {
                 recording_scale: 0.5,
             },
             audio: vec![AudioChannel { kind: "microphone", channel_index: 2, device_id: Some("dev".into()) }],
+            camera: Some(CameraChannel { channel_index: 3, device_id: "FaceTime HD Camera".into() }),
             sessions: vec![SessionTimes {
                 index: 0,
                 process_start_ms: 474.4,
@@ -285,6 +321,9 @@ mod tests {
         assert_eq!(i.sessions[0].mouse_moves_filename.as_deref(), Some("mousemoves-0.json"));
         assert!(loaded.cursor().is_some());
         assert_eq!(loaded.microphone().unwrap().sessions[0].output_filename.as_deref(), Some("channel-2-microphone-0.m4a"));
+        let cam = loaded.camera().unwrap();
+        assert_eq!(cam.id, "channel-3-camera");
+        assert_eq!(cam.sessions[0].output_filename.as_deref(), Some("channel-3-camera-0.m3u8"));
         assert!((loaded.duration_ms() - 1000.0).abs() < 1e-9);
     }
 

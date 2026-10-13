@@ -58,6 +58,15 @@ pub struct Inputs {
     pub system_audio_supported: bool,
 }
 
+impl Inputs {
+    /// Take the device lists (cameras, microphones, windows) from a background discovery.
+    pub fn merge_devices(&mut self, d: Inputs) {
+        self.cameras = d.cameras;
+        self.microphones = d.microphones;
+        self.windows = d.windows;
+    }
+}
+
 /// Theme preference stored in prefs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -187,11 +196,15 @@ pub struct Picker {
     recent_rect: egui::Rect,
     /// Height the window should have this frame (bar only, or bar + open panel/menu).
     pub wanted_height: f32,
+    /// Cameras, microphones and windows being listed on a background thread.
+    devices_rx: Option<std::sync::mpsc::Receiver<Inputs>>,
+    /// Menu text has been laid out once (glyphs are in the font atlas).
+    menus_warm: bool,
 }
 
 impl Default for Picker {
     fn default() -> Self {
-        Picker { thumbs: None, inputs: Inputs::default(), mode: None, camera: None, microphone: None, mic_meter: None, bar_w: PILL_SIZE.x, system_audio: false, countdown_ms: 5000, status: None, show_recent: false, recent_rect: egui::Rect::NOTHING, wanted_height: BAR_WINDOW_H }
+        Picker { thumbs: None, inputs: Inputs::default(), mode: None, camera: None, microphone: None, mic_meter: None, bar_w: PILL_SIZE.x, system_audio: false, countdown_ms: 5000, status: None, show_recent: false, recent_rect: egui::Rect::NOTHING, wanted_height: BAR_WINDOW_H, devices_rx: None, menus_warm: false }
     }
 }
 
@@ -204,8 +217,55 @@ pub const RECENT_WINDOW_H: f32 = 300.0;
 pub const PILL_RADIUS: f32 = 10.0;
 
 impl Picker {
+    /// Fill `inputs`: displays now (cheap), the rest from a background thread so the toolbar
+    /// appears without waiting for device listing (cameras run ffmpeg).
+    pub fn load_inputs(&mut self) {
+        self.inputs = crate::recorder::display_inputs();
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(crate::recorder::device_inputs());
+        });
+        self.devices_rx = Some(rx);
+        self.menus_warm = false;
+    }
+
+    /// Lay out the menus' text once so its glyphs are rasterized before a menu first opens.
+    fn warm_menu_text(&self, ui: &Ui) {
+        let color = theme::p().on_glass;
+        let fonts = [egui::TextStyle::Body.resolve(ui.style()), egui::TextStyle::Button.resolve(ui.style()), egui::TextStyle::Small.resolve(ui.style())];
+        let mut texts: Vec<String> = [
+            "Don't record camera", "Don't record microphone", "Don't record system audio", "Record system audio from all apps",
+            "Recording countdown", "None", "3 seconds", "5 seconds", "10 seconds", "Appearance", "Match system", "Light", "Dark", "Osaka Jade", "Quit ScreenForge",
+        ]
+        .map(String::from)
+        .to_vec();
+        texts.extend(self.inputs.cameras.iter().chain(&self.inputs.microphones).map(|d| d.name.clone()));
+        ui.fonts_mut(|f| {
+            for t in &texts {
+                for font in &fonts {
+                    let _ = f.layout(t.clone(), font.clone(), color, f32::INFINITY);
+                }
+            }
+        });
+    }
+
     pub fn ui(&mut self, ui: &mut Ui, prefs: &Prefs) -> Option<PickerAction> {
         let mut action = None;
+        if let Some(rx) = &self.devices_rx {
+            match rx.try_recv() {
+                Ok(d) => {
+                    self.inputs.merge_devices(d);
+                    self.devices_rx = None;
+                    self.menus_warm = false;
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => ui.ctx().request_repaint_after(std::time::Duration::from_millis(30)),
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => self.devices_rx = None,
+            }
+        }
+        if !self.menus_warm {
+            self.warm_menu_text(ui);
+            self.menus_warm = true;
+        }
         if self.thumbs.is_none() {
             self.thumbs = Some(ThumbCache::start(prefs.recent.iter().filter(|p| p.exists()).cloned().collect()));
         }
@@ -253,8 +313,18 @@ impl Picker {
 
         // inputs
         let cam_label = self.camera.as_ref().and_then(|id| self.inputs.cameras.iter().find(|c| &c.id == id)).map(|c| c.name.clone()).unwrap_or_else(|| "No camera".into());
-        // camera recording is not implemented: greyed out until it is
-        widgets::roadmap(ui, |ui| input_menu(ui, widgets::Icon::Camera, &cam_label, false, |_| {}));
+        let cam_menu = input_menu(ui, widgets::Icon::Camera, &cam_label, self.camera.is_some(), |ui| {
+            if ui.selectable_label(self.camera.is_none(), "Don't record camera").clicked() {
+                self.camera = None;
+            }
+            for c in &self.inputs.cameras {
+                if ui.selectable_label(self.camera.as_deref() == Some(&c.id), &c.name).clicked() {
+                    self.camera = Some(c.id.clone());
+                    // ask now so the system prompt is answered before the recording starts
+                    let _ = sf_recording::permissions::request_camera();
+                }
+            }
+        });
         let mic_label = self.microphone.as_ref().and_then(|id| self.inputs.microphones.iter().find(|c| &c.id == id)).map(|c| c.name.clone()).unwrap_or_else(|| "No microphone".into());
         if self.microphone.is_none() {
             // SF_TEST_MIC=<device name substring>: UI tests preselect a microphone
@@ -273,7 +343,7 @@ impl Picker {
         if mic_level.is_some() {
             ui.ctx().request_repaint_after(std::time::Duration::from_millis(50));
         }
-        input_menu_level(ui, widgets::Icon::Mic, &mic_label, self.microphone.is_some(), mic_level, |ui| {
+        let mic_menu = input_menu_level(ui, widgets::Icon::Mic, &mic_label, self.microphone.is_some(), mic_level, |ui| {
             if ui.selectable_label(self.microphone.is_none(), "Don't record microphone").clicked() {
                 self.microphone = None;
             }
@@ -284,7 +354,7 @@ impl Picker {
             }
         });
         let sys_label = if self.system_audio { "System audio" } else { "No system audio" };
-        input_menu(ui, widgets::Icon::Audio, sys_label, self.system_audio, |ui| {
+        let sys_menu = input_menu(ui, widgets::Icon::Audio, sys_label, self.system_audio, |ui| {
             if ui.selectable_label(!self.system_audio, "Don't record system audio").clicked() {
                 self.system_audio = false;
             }
@@ -343,7 +413,11 @@ impl Picker {
             }
         });
 
-        let any_menu = egui::Popup::is_any_open(ui.ctx());
+        // Menus open above the bar, so the window must be tall first. Grow it while the pointer
+        // is on a menu button: a click then opens the menu at once instead of waiting a few
+        // frames for the window to resize.
+        let menu_hover = cam_menu.hovered() || mic_menu.hovered() || sys_menu.hovered() || gear.hovered();
+        let any_menu = egui::Popup::is_any_open(ui.ctx()) || menu_hover;
         if self.show_recent {
             let h = RECENT_WINDOW_H - 8.0 - 4.0;
             let panel = egui::Rect::from_min_size(pos2(pill.left(), pill.top() - 8.0 - h), vec2(pill.width(), h));
@@ -456,12 +530,12 @@ fn mode_button(ui: &mut Ui, icon: widgets::Icon, label: &str, selected: bool) ->
 
 /// Input picker pill on the bar: icon · label · chevron, with a subtle glass fill. `active`
 /// (a device is selected) draws the icon in the accent colour.
-fn input_menu(ui: &mut Ui, icon: widgets::Icon, label: &str, active: bool, add: impl FnOnce(&mut Ui)) {
+fn input_menu(ui: &mut Ui, icon: widgets::Icon, label: &str, active: bool, add: impl FnOnce(&mut Ui)) -> egui::Response {
     input_menu_level(ui, icon, label, active, None, add)
 }
 
 /// `input_menu` with an optional live level (0..1) that fills the icon.
-fn input_menu_level(ui: &mut Ui, icon: widgets::Icon, label: &str, active: bool, level: Option<f32>, add: impl FnOnce(&mut Ui)) {
+fn input_menu_level(ui: &mut Ui, icon: widgets::Icon, label: &str, active: bool, level: Option<f32>, add: impl FnOnce(&mut Ui)) -> egui::Response {
     let pal = theme::p();
     let font = FontId::proportional(13.0);
     // long device names end in "…" instead of being cut mid-letter
@@ -490,6 +564,7 @@ fn input_menu_level(ui: &mut Ui, icon: widgets::Icon, label: &str, active: bool,
         ui.set_min_width(260.0);
         add(ui);
     });
+    resp
 }
 
 /// Popup menu styled like the bar: glass panel with 10 px corners, rows with 2 px corners, a

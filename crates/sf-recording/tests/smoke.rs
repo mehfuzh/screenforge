@@ -49,6 +49,8 @@ fn records_main_display_for_three_seconds() {
     cfg.capture_input = permissions::input_monitoring().is_granted();
     cfg.capture_system_audio = std::env::var("SF_SMOKE_SYSTEM_AUDIO").is_ok();
     cfg.microphone = std::env::var("SF_SMOKE_MIC").ok();
+    // SF_SMOKE_CAMERA=<camera name> also records that webcam (needs Camera permission)
+    cfg.camera = std::env::var("SF_SMOKE_CAMERA").ok();
     println!("input events: {}", cfg.capture_input);
 
     let mut rec = Recorder::start(cfg).expect("start");
@@ -99,6 +101,21 @@ fn records_main_display_for_three_seconds() {
             let dur = info.duration_ms().unwrap_or(0.0);
             assert!((dur - s.duration_ms).abs() < 150.0, "{}: audio {dur} ms vs session {} ms", rec.id, s.duration_ms);
         }
+    }
+
+    // camera: one HLS playlist per session, as long as the session
+    if let Some(cam) = loaded.camera() {
+        assert_eq!(cam.sessions.len(), 2);
+        for (i, s) in cam.sessions.iter().enumerate() {
+            let playlist = s.media_path(&out).expect("camera playlist");
+            assert!(playlist.ends_with(format!("{}-{i}.m3u8", cam.id)));
+            assert!(ffprobe_ok(&playlist), "ffprobe decodes {}", playlist.display());
+            let reader = sf_media::VideoReader::open(&playlist, sf_media::VideoReaderOptions::default()).expect("VideoReader opens camera m3u8");
+            assert!(reader.native_width > 0 && reader.native_width <= 1280);
+            assert!((reader.duration_ms - s.duration_ms).abs() < 400.0, "camera {} ms vs session {} ms", reader.duration_ms, s.duration_ms);
+        }
+    } else {
+        assert!(std::env::var("SF_SMOKE_CAMERA").is_err(), "camera requested but not recorded");
     }
 
     // input + cursors

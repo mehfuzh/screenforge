@@ -3,7 +3,7 @@
 
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Child, ChildStdin, Command, Stdio};
+use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 use std::sync::OnceLock;
 use std::thread::JoinHandle;
 
@@ -75,10 +75,23 @@ impl std::fmt::Debug for FfmpegProc {
 impl FfmpegProc {
     /// Spawn `ffmpeg <args>` in `cwd` with a piped stdin.
     pub fn spawn(args: &[String], cwd: &Path, log: RecLog, label: &str) -> Result<Self> {
+        Self::spawn_with(args, cwd, log, label, false).map(|(p, _)| p)
+    }
+
+    /// Like [`spawn`](Self::spawn) but with stdout piped back (for captures that write frames to `pipe:1`).
+    pub fn spawn_reading(args: &[String], cwd: &Path, log: RecLog, label: &str) -> Result<(Self, ChildStdout)> {
+        let (p, out) = Self::spawn_with(args, cwd, log, label, true)?;
+        let out = out.ok_or_else(|| Error::Capture(format!("{label}: no ffmpeg stdout")))?;
+        Ok((p, out))
+    }
+
+    fn spawn_with(args: &[String], cwd: &Path, log: RecLog, label: &str, read_stdout: bool) -> Result<(Self, Option<ChildStdout>)> {
         let mut cmd = ffmpeg_cmd()?;
-        cmd.args(args).current_dir(cwd).stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::piped());
+        let stdout = if read_stdout { Stdio::piped() } else { Stdio::null() };
+        cmd.args(args).current_dir(cwd).stdin(Stdio::piped()).stdout(stdout).stderr(Stdio::piped());
         log.debug(label, format!("Spawning ffmpeg {}", args.join(" ")));
         let mut child = cmd.spawn().map_err(|source| Error::Io { path: "ffmpeg".into(), source })?;
+        let stdout = child.stdout.take();
         let stdin = child.stdin.take();
         let stderr = child.stderr.take();
         let label_s = label.to_string();
@@ -89,7 +102,7 @@ impl FfmpegProc {
                 }
             })
         });
-        Ok(FfmpegProc { child, stdin, stderr_thread, label: label.into() })
+        Ok((FfmpegProc { child, stdin, stderr_thread, label: label.into() }, stdout))
     }
 
     /// Write raw input.

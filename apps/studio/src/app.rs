@@ -39,6 +39,9 @@ pub struct App {
     perm_setup: Option<crate::permissions::PermissionsSetup>,
     /// Closing a just-recorded project: ask keep / move to Trash. `true` = quit afterwards.
     confirm_close: Option<bool>,
+    /// Set when the user chose Quit (toolbar or menu bar icon); any other window close in
+    /// the editor goes back to the recording toolbar instead of quitting.
+    quitting: bool,
     /// Path of the project opened right after recording (marks the editor as fresh).
     fresh_open: Option<PathBuf>,
 }
@@ -100,9 +103,9 @@ impl App {
         prefs.appearance.apply(&cc.egui_ctx);
         crate::theme::apply(&cc.egui_ctx);
         let mut picker = Picker::default();
-        picker.inputs = crate::recorder::discover_inputs();
+        picker.load_inputs();
         let perm_setup = (crate::permissions::PermissionsSetup::needed() || std::env::var_os("SF_SHOW_PERMISSIONS").is_some()).then(crate::permissions::PermissionsSetup::start);
-        let mut app = App { gpu, screen: Screen::Picker(picker), error: None, prefs, window_mode: WindowMode::Picker, export_settings_h: 560.0, picker_height: crate::picker::BAR_WINDOW_H, placed_once: false, tray: None, tray_tried: false, area_select: None, window_select: None, titlebar_fix: 0, perm_setup, confirm_close: None, fresh_open: None, pending_open: std::env::args().nth(1).map(PathBuf::from).filter(|p| p.is_dir() || p.extension().is_some_and(|e| e == "screenstudio")) };
+        let mut app = App { gpu, screen: Screen::Picker(picker), error: None, prefs, window_mode: WindowMode::Picker, export_settings_h: 560.0, picker_height: crate::picker::BAR_WINDOW_H, placed_once: false, tray: None, tray_tried: false, area_select: None, window_select: None, titlebar_fix: 0, perm_setup, confirm_close: None, quitting: false, fresh_open: None, pending_open: std::env::args().nth(1).map(PathBuf::from).filter(|p| p.is_dir() || p.extension().is_some_and(|e| e == "screenstudio")) };
         if let Some(p) = std::env::args().nth(1) {
             app.open_project(PathBuf::from(p), &cc.egui_ctx, rs);
         }
@@ -182,26 +185,6 @@ impl App {
         ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize([width, height].into()));
     }
 
-    /// Size of the film-leader countdown window, centred over what is being recorded.
-    pub const COUNTDOWN_SIZE: [f32; 2] = [260.0, 280.0];
-
-    /// Put the countdown over the middle of the selected window or area (where its Record
-    /// button was), or the middle of the screen for a display recording.
-    fn place_countdown(ctx: &egui::Context, area: Option<&sf_project::schema::common::Rect>) {
-        let [w, h] = Self::COUNTDOWN_SIZE;
-        Self::set_fixed_size(ctx, w, h);
-        let centre = match area {
-            Some(a) => Some(((a.x + a.width / 2.0) as f32, (a.y + a.height / 2.0) as f32)),
-            None => ctx.input(|i| i.viewport().monitor_size).map(|m| (m.x / 2.0, m.y / 2.0)),
-        };
-        if let Some((cx, cy)) = centre {
-            // the dial's centre (130 px from the top) lands on the centre of the target
-            ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition([(cx - w / 2.0).max(0.0), (cy - 130.0).max(0.0)].into()));
-        }
-        // keyboard focus, so Esc cancels the countdown
-        ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
-    }
-
     fn tray_tick(&mut self, ctx: &egui::Context, open_request: &mut Option<PathBuf>) {
         // The status item is created on the first frame, after the app has finished launching:
         // creating it inside the launch callback crashed inside ImageIO on some systems.
@@ -237,7 +220,10 @@ impl App {
                             *open_request = Some(p);
                         }
                     }
-                    crate::tray::TrayAction::Quit => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
+                    crate::tray::TrayAction::Quit => {
+                        self.quitting = true;
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                    }
                 }
             }
             // tray events arrive outside egui's input loop: keep polling at a low rate
@@ -262,7 +248,7 @@ impl App {
 
     fn show_picker(&mut self, ctx: &egui::Context) {
         let mut picker = Picker::default();
-        picker.inputs = crate::recorder::discover_inputs();
+        picker.load_inputs();
         self.screen = Screen::Picker(picker);
         self.picker_height = crate::picker::BAR_WINDOW_H;
         self.set_window_mode(ctx, WindowMode::Picker);
@@ -296,7 +282,7 @@ impl eframe::App for App {
             if setup.show(ctx) {
                 self.perm_setup = None;
                 if let Screen::Picker(p) = &mut self.screen {
-                    p.inputs = crate::recorder::discover_inputs();
+                    p.load_inputs();
                 }
             }
         }
@@ -341,14 +327,6 @@ impl eframe::App for App {
                     ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
                 }
                 outcome = Some(r.ui(ui, ctx));
-                // the countdown sat over the selection; the recording HUD goes back to the bottom
-                if r.hud_centred && matches!(r.phase, crate::recorder::Phase::Recording(_)) {
-                    r.hud_centred = false;
-                    Self::place_picker(ctx, 520.0, 110.0);
-                    if let Some(pid) = r.return_to_pid.take() {
-                        crate::recorder::activate_app(pid);
-                    }
-                }
             }
             Screen::Editor(ed) if ed.export.open && !ed.export.is_busy() => {
                 want_mode = Some(WindowMode::ExportSettings);
@@ -389,14 +367,23 @@ impl eframe::App for App {
                         go_home = true;
                     }
                 }
-                // window close button / ⌘Q on a fresh recording: ask first
-                if ed.fresh_recording && ctx.input(|i| i.viewport().close_requested()) {
-                    ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
-                    self.confirm_close = Some(true);
-                }
                 if let Some(p) = ed.renamed_to.take() {
                     self.prefs.recent.retain(|r| r.exists());
                     self.prefs.touch(&p);
+                }
+            }
+        }
+        // Closing the editor window goes back to the recording toolbar (like its home button);
+        // the app quits only from the toolbar or the menu bar icon.
+        if !self.quitting && ctx.input(|i| i.viewport().close_requested()) {
+            if let Screen::Editor(ed) = &self.screen {
+                ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+                if ed.export.is_busy() {
+                    // keep the editor while an export runs
+                } else if ed.fresh_recording {
+                    self.confirm_close = Some(false);
+                } else {
+                    go_home = true;
                 }
             }
         }
@@ -465,11 +452,8 @@ impl eframe::App for App {
                 if let Some(msg) = crate::recorder::check_permissions(&mut req) {
                     self.error = Some(msg);
                 } else {
-                    let centred = req.countdown_ms > 0;
-                    if centred { Self::place_countdown(ctx, None) } else { Self::place_picker(ctx, 520.0, 110.0) }
-                    let mut screen = RecordingScreen::new(req);
-                    screen.hud_centred = centred;
-                    self.screen = Screen::Recording(screen);
+                    Self::place_picker(ctx, 520.0, 110.0);
+                    self.screen = Screen::Recording(RecordingScreen::new(req));
                     crate::vibrancy::set(None, 0.0, 0.0);
                 }
             }
@@ -492,11 +476,8 @@ impl eframe::App for App {
                     self.error = Some(msg);
                 } else if crate::recorder::picks_window_in_portal() {
                     // Wayland: other windows cannot be listed; the screen-sharing dialog picks one
-                    let centred = req.countdown_ms > 0;
-                    if centred { Self::place_countdown(ctx, None) } else { Self::place_picker(ctx, 520.0, 110.0) }
-                    let mut screen = RecordingScreen::new(req);
-                    screen.hud_centred = centred;
-                    self.screen = Screen::Recording(screen);
+                    Self::place_picker(ctx, 520.0, 110.0);
+                    self.screen = Screen::Recording(RecordingScreen::new(req));
                     crate::vibrancy::set(None, 0.0, 0.0);
                 } else {
                     let d = sf_recording::discover();
@@ -527,7 +508,10 @@ impl eframe::App for App {
                     Err(e) => self.error = Some(format!("Could not move “{name}” to the Trash: {e}")),
                 }
             }
-            Some(PickerAction::Quit) => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
+            Some(PickerAction::Quit) => {
+                self.quitting = true;
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            }
             None => {}
         }
         if let Some((sel, _)) = self.window_select.as_mut() {
@@ -539,12 +523,8 @@ impl eframe::App for App {
                     let bounds = crate::recorder::activate_and_locate(w.pid, w.id).unwrap_or(w.bounds);
                     req.area = Some(bounds);
                     req.window_id = Some(w.id.to_string());
-                    let centred = req.countdown_ms > 0;
-                    if centred { Self::place_countdown(ctx, Some(&bounds)) } else { Self::place_picker(ctx, 520.0, 110.0) }
-                    let mut screen = RecordingScreen::new(req);
-                    screen.hud_centred = centred;
-                    screen.return_to_pid = centred.then_some(w.pid);
-                    self.screen = Screen::Recording(screen);
+                    Self::place_picker(ctx, 520.0, 110.0);
+                    self.screen = Screen::Recording(RecordingScreen::new(req));
                     crate::vibrancy::set(None, 0.0, 0.0);
                 }
             }
@@ -557,11 +537,8 @@ impl eframe::App for App {
                     let (_, mut req) = self.area_select.take().unwrap();
                     let area = sf_project::schema::common::Rect { x: r.min.x as f64, y: r.min.y as f64, width: r.width() as f64, height: r.height() as f64 };
                     req.area = Some(area);
-                    let centred = req.countdown_ms > 0;
-                    if centred { Self::place_countdown(ctx, Some(&area)) } else { Self::place_picker(ctx, 520.0, 110.0) }
-                    let mut screen = RecordingScreen::new(req);
-                    screen.hud_centred = centred;
-                    self.screen = Screen::Recording(screen);
+                    Self::place_picker(ctx, 520.0, 110.0);
+                    self.screen = Screen::Recording(RecordingScreen::new(req));
                     crate::vibrancy::set(None, 0.0, 0.0);
                 }
             }

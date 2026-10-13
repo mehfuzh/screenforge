@@ -42,9 +42,11 @@ pub struct AudioDevice {
     pub is_default: bool,
 }
 
-/// A camera. Camera recording is not implemented yet; the list is informational.
+/// A camera.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CameraInfo {
+    /// The device name on macOS (what ffmpeg's AVFoundation input knows it by), the device
+    /// node (`/dev/video0`) on Linux.
     pub id: String,
     pub name: String,
     pub is_default: bool,
@@ -78,8 +80,94 @@ pub fn discover() -> Discovery {
         displays: displays(),
         windows: windows(),
         microphones: microphones(),
-        cameras: Vec::new(),
+        cameras: cameras(),
     }
+}
+
+/// Cameras as ffmpeg's AVFoundation input lists them (`-list_devices`), so every entry is
+/// one the recorder can open. Screen capture pseudo-devices are left out.
+#[cfg(target_os = "macos")]
+pub fn cameras() -> Vec<CameraInfo> {
+    avfoundation_video_devices()
+        .into_iter()
+        .enumerate()
+        .map(|(i, (_, name))| CameraInfo { id: name.clone(), name, is_default: i == 0 })
+        .collect()
+}
+
+/// `(ffmpeg index, name)` of the AVFoundation video devices, excluding screens.
+#[cfg(target_os = "macos")]
+fn avfoundation_video_devices() -> Vec<(usize, String)> {
+    let Ok(mut cmd) = crate::ffmpeg::ffmpeg_cmd() else { return Vec::new() };
+    // -loglevel info: the device list is printed at info level
+    let Ok(out) = cmd.args(["-loglevel", "info", "-f", "avfoundation", "-list_devices", "true", "-i", ""]).output() else { return Vec::new() };
+    parse_avfoundation_devices(&String::from_utf8_lossy(&out.stderr))
+}
+
+/// Parse `ffmpeg -f avfoundation -list_devices true` output (video section only).
+pub fn parse_avfoundation_devices(text: &str) -> Vec<(usize, String)> {
+    let mut in_video = false;
+    let mut out = Vec::new();
+    for line in text.lines() {
+        if line.contains("AVFoundation video devices") {
+            in_video = true;
+            continue;
+        }
+        if line.contains("AVFoundation audio devices") {
+            break;
+        }
+        if !in_video {
+            continue;
+        }
+        // "[AVFoundation indev @ 0x…] [1] Studio Display Camera"
+        let Some(rest) = line.split_once("] [").map(|(_, r)| r) else { continue };
+        let Some((idx, name)) = rest.split_once("] ") else { continue };
+        let (Ok(idx), name) = (idx.parse::<usize>(), name.trim()) else { continue };
+        if name.is_empty() || name.starts_with("Capture screen") {
+            continue;
+        }
+        out.push((idx, name.to_string()));
+    }
+    out
+}
+
+/// The ffmpeg input that opens camera `id`: its current AVFoundation index (device names may
+/// contain `:`, which the `video:audio` input syntax cannot take).
+#[cfg(target_os = "macos")]
+pub fn camera_input(id: &str) -> Option<String> {
+    avfoundation_video_devices().into_iter().find(|(_, name)| name == id).map(|(i, _)| i.to_string())
+}
+
+/// Video capture devices from sysfs. Drivers register extra nodes (metadata) for the same
+/// camera with a non-zero `index`; only index 0 delivers frames.
+#[cfg(target_os = "linux")]
+pub fn cameras() -> Vec<CameraInfo> {
+    let Ok(dir) = std::fs::read_dir("/sys/class/video4linux") else { return Vec::new() };
+    let mut out: Vec<CameraInfo> = dir
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_name().to_string_lossy().starts_with("video"))
+        .filter(|e| std::fs::read_to_string(e.path().join("index")).map(|s| s.trim() == "0").unwrap_or(true))
+        .map(|e| {
+            let node = e.file_name().to_string_lossy().into_owned();
+            let name = std::fs::read_to_string(e.path().join("name")).map(|s| s.trim().to_string()).unwrap_or_else(|_| node.clone());
+            CameraInfo { id: format!("/dev/{node}"), name, is_default: false }
+        })
+        .collect();
+    out.sort_by(|a, b| a.id.cmp(&b.id));
+    if let Some(c) = out.first_mut() {
+        c.is_default = true;
+    }
+    out
+}
+
+#[cfg(target_os = "linux")]
+pub fn camera_input(id: &str) -> Option<String> {
+    std::path::Path::new(id).exists().then(|| id.to_string())
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+pub fn cameras() -> Vec<CameraInfo> {
+    Vec::new()
 }
 
 /// Displays only (cheap; no TCC involvement).
@@ -306,4 +394,21 @@ pub fn windows() -> Vec<WindowInfo> {
 #[cfg(not(any(target_os = "macos", target_os = "linux")))]
 pub fn microphones() -> Vec<AudioDevice> {
     Vec::new()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_avfoundation_device_list() {
+        let text = "[AVFoundation indev @ 0x1] AVFoundation video devices:
+[AVFoundation indev @ 0x1] [0] FaceTime HD Camera
+[AVFoundation indev @ 0x1] [1] Studio Display Camera
+[AVFoundation indev @ 0x1] [2] Capture screen 0
+[AVFoundation indev @ 0x1] AVFoundation audio devices:
+[AVFoundation indev @ 0x1] [0] MacBook Pro Microphone
+";
+        assert_eq!(parse_avfoundation_devices(text), vec![(0, "FaceTime HD Camera".to_string()), (1, "Studio Display Camera".to_string())]);
+    }
 }
