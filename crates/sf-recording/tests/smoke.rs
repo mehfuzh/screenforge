@@ -29,7 +29,11 @@ fn ffprobe_ok(path: &Path) -> bool {
 fn records_main_display_for_three_seconds() {
     assert!(permissions::screen_recording().is_granted(), "grant Screen Recording to the terminal first");
     let d = discover();
-    let display = d.main_display().expect("a display");
+    // SF_SMOKE_DISPLAY=<name> (e.g. eDP-1) records that display instead of the main one
+    let display = match std::env::var("SF_SMOKE_DISPLAY") {
+        Ok(name) => d.displays.iter().find(|x| x.name == name).expect("SF_SMOKE_DISPLAY names a display"),
+        Err(_) => d.main_display().expect("a display"),
+    };
     println!("display {:?}", display);
 
     // SF_SMOKE_OUT=<dir> keeps the recording for inspection instead of a temp dir.
@@ -113,4 +117,45 @@ fn records_main_display_for_three_seconds() {
     }
     assert!(out.join("polyrecorder.log").exists());
     println!("markers {:?}", meta.duration_ms());
+}
+
+/// Wayland: pick a window in the screen-sharing dialog and record it for three seconds. Move
+/// the pointer over the window while it records. Run with:
+///
+/// ```sh
+/// cargo test -p sf-recording --test smoke records_picked_window -- --ignored --nocapture
+/// ```
+#[cfg(target_os = "linux")]
+#[test]
+#[ignore = "opens the screen-sharing dialog; pick a window there"]
+fn records_picked_window() {
+    assert!(sf_recording::portal::is_wayland(), "needs a Wayland session");
+    let tmp = tempfile::tempdir().unwrap();
+    let out = match std::env::var("SF_SMOKE_OUT") {
+        Ok(p) => {
+            let _ = std::fs::remove_dir_all(&p);
+            std::path::PathBuf::from(p)
+        }
+        Err(_) => tmp.path().join("recording"),
+    };
+    let mut cfg = RecordingConfig::new(&out, CaptureTarget::PortalWindow);
+    cfg.capture_input = true;
+    let rec = Recorder::start(cfg).expect("start");
+    let plan = rec.display_plan().clone();
+    println!("plan {plan:?}");
+    assert_eq!((plan.bounds.x, plan.bounds.y), (0.0, 0.0), "window-relative bounds");
+    std::thread::sleep(Duration::from_secs(3));
+    rec.finish().expect("finish");
+
+    let loaded = RecordingMetadata::load(&out).expect("metadata.json parses");
+    let disp = loaded.display().expect("display recorder");
+    assert_eq!(disp.sessions.len(), 1);
+    let playlist = disp.sessions[0].media_path(&out).expect("playlist exists");
+    assert!(ffprobe_ok(&playlist), "ffprobe decodes {}", playlist.display());
+    let mut reader = sf_media::VideoReader::open(&playlist, sf_media::VideoReaderOptions::default()).expect("VideoReader opens m3u8");
+    let frame = reader.next_frame().expect("decode").expect("a frame");
+    assert_eq!((frame.width, frame.height), (plan.width_px, plan.height_px));
+    let input = loaded.input().expect("input recorder");
+    let log = InputLog::load(&out, &input.sessions[0]).expect("event logs parse");
+    println!("moves={} (window-relative points)", log.mouse_moves.len());
 }

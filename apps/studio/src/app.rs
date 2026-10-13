@@ -119,6 +119,12 @@ impl App {
                 crate::vibrancy::set(None, 0.0, 0.0);
                 ctx.send_viewport_cmd(egui::ViewportCommand::Decorations(true));
                 ctx.send_viewport_cmd(egui::ViewportCommand::WindowLevel(egui::WindowLevel::Normal));
+                // winit keeps the fixed-size window's limits and restores them on Resizable(true)
+                #[cfg(target_os = "linux")]
+                {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::MinInnerSize(egui::Vec2::ZERO));
+                    ctx.send_viewport_cmd(egui::ViewportCommand::MaxInnerSize(egui::Vec2::INFINITY));
+                }
                 ctx.send_viewport_cmd(egui::ViewportCommand::Resizable(true));
                 // size the window to fit the screen and centre it explicitly (the generic
                 // centre helper would use the picker's old size)
@@ -134,14 +140,14 @@ impl App {
                 let mon = ctx.input(|i| i.viewport().monitor_size).unwrap_or(egui::vec2(1920.0, 1080.0));
                 let [w, h] = EXPORT_WINDOW_SIZE;
                 ctx.send_viewport_cmd(egui::ViewportCommand::Resizable(false));
-                ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize([w, h].into()));
+                Self::set_fixed_size(ctx, w, h);
                 ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition([((mon.x - w) / 2.0).max(0.0), ((mon.y - h) / 2.0).max(0.0)].into()));
             }
             WindowMode::ExportSettings => {
                 let mon = ctx.input(|i| i.viewport().monitor_size).unwrap_or(egui::vec2(1920.0, 1080.0));
                 let (w, h) = (EXPORT_SETTINGS_W, self.export_settings_h);
                 ctx.send_viewport_cmd(egui::ViewportCommand::Resizable(false));
-                ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize([w, h].into()));
+                Self::set_fixed_size(ctx, w, h);
                 ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition([((mon.x - w) / 2.0).max(0.0), ((mon.y - h) / 2.0 - 40.0).max(0.0)].into()));
             }
             WindowMode::Picker => {
@@ -156,12 +162,24 @@ impl App {
 
     /// Size the floating window and pin its bottom edge above the Dock, centred horizontally.
     pub fn place_picker(ctx: &egui::Context, width: f32, height: f32) {
-        ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize([width, height].into()));
+        Self::set_fixed_size(ctx, width, height);
         if let Some(mon) = ctx.input(|i| i.viewport().monitor_size) {
             let x = ((mon.x - width) / 2.0).max(0.0);
             let y = (mon.y - height - PICKER_BOTTOM_GAP).max(0.0);
             ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition([x, y].into()));
         }
+    }
+
+    /// Resize a window that is not user-resizable. On X11, winit pins the min/max size hints
+    /// to the window's size when it stops being resizable, and the window manager then ignores
+    /// any other size; move the hints along with the size.
+    pub fn set_fixed_size(ctx: &egui::Context, width: f32, height: f32) {
+        #[cfg(target_os = "linux")]
+        {
+            ctx.send_viewport_cmd(egui::ViewportCommand::MinInnerSize([width, height].into()));
+            ctx.send_viewport_cmd(egui::ViewportCommand::MaxInnerSize([width, height].into()));
+        }
+        ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize([width, height].into()));
     }
 
     /// Size of the film-leader countdown window, centred over what is being recorded.
@@ -171,7 +189,7 @@ impl App {
     /// button was), or the middle of the screen for a display recording.
     fn place_countdown(ctx: &egui::Context, area: Option<&sf_project::schema::common::Rect>) {
         let [w, h] = Self::COUNTDOWN_SIZE;
-        ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize([w, h].into()));
+        Self::set_fixed_size(ctx, w, h);
         let centre = match area {
             Some(a) => Some(((a.x + a.width / 2.0) as f32, (a.y + a.height / 2.0) as f32)),
             None => ctx.input(|i| i.viewport().monitor_size).map(|m| (m.x / 2.0, m.y / 2.0)),
@@ -344,7 +362,7 @@ impl eframe::App for App {
                 let need = resp.response.rect.height().ceil();
                 if self.window_mode == WindowMode::ExportSettings && (need - self.export_settings_h).abs() > 1.0 {
                     self.export_settings_h = need;
-                    ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize([EXPORT_SETTINGS_W, need].into()));
+                    Self::set_fixed_size(ctx, EXPORT_SETTINGS_W, need);
                 }
             }
             Screen::Editor(ed) if ed.export.is_busy() || matches!(self.window_mode, WindowMode::Exporting | WindowMode::ExportSettings) => {
@@ -470,6 +488,14 @@ impl eframe::App for App {
             Some(PickerAction::SelectWindow(mut req)) => {
                 if let Some(msg) = crate::recorder::check_permissions(&mut req) {
                     self.error = Some(msg);
+                } else if crate::recorder::picks_window_in_portal() {
+                    // Wayland: other windows cannot be listed; the screen-sharing dialog picks one
+                    let centred = req.countdown_ms > 0;
+                    if centred { Self::place_countdown(ctx, None) } else { Self::place_picker(ctx, 520.0, 110.0) }
+                    let mut screen = RecordingScreen::new(req);
+                    screen.hud_centred = centred;
+                    self.screen = Screen::Recording(screen);
+                    crate::vibrancy::set(None, 0.0, 0.0);
                 } else {
                     let d = sf_recording::discover();
                     if let Some(disp) = d.main_display().or_else(|| d.displays.first()) {

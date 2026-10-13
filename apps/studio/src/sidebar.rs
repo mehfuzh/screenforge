@@ -226,7 +226,16 @@ fn wallpaper_categories(list: &[String]) -> Vec<String> {
         v
     };
     let mut out: Vec<String> = vec![];
+    // the desktop's own wallpapers first (macOS, or the Linux distribution's)
+    if let Some(c) = sf_session::assets::system_wallpapers::category() {
+        if present.contains(&c) {
+            out.push(c);
+        }
+    }
     for c in BUNDLED_CATEGORIES.iter().chain(KNOWN_EXTRA_CATEGORIES.iter()) {
+        if out.iter().any(|o| o == c) {
+            continue;
+        }
         if present.iter().any(|p| p == c) {
             out.push(c.to_string());
         }

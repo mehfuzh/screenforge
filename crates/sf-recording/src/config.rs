@@ -17,6 +17,10 @@ pub enum CaptureTarget {
     /// the display region under the window's bounds (so the result stays a `display`
     /// channel with a `cropRect`), not an isolated window stream.
     Window { window_id: u32 },
+    /// Linux on Wayland: a window the user picks in the system's screen-sharing dialog when
+    /// recording starts (Wayland lets no application list or locate other windows). Records
+    /// that window's own stream; positions in the recording are relative to the window.
+    PortalWindow,
 }
 
 /// Everything the UI decides before pressing record.

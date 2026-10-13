@@ -141,6 +141,15 @@ pub enum RecordingOutcome {
     Cancelled(Option<String>),
 }
 
+/// On Wayland the window to record is chosen in the system's screen-sharing dialog instead
+/// of ScreenForge's own window overlay.
+pub fn picks_window_in_portal() -> bool {
+    #[cfg(target_os = "linux")]
+    return sf_recording::portal::is_wayland();
+    #[cfg(not(target_os = "linux"))]
+    false
+}
+
 impl RecordingScreen {
     pub fn new(req: RecordRequest) -> Self {
         let stamp = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
@@ -165,6 +174,7 @@ impl RecordingScreen {
                 let h = ((y1 - y0).max(32.0) / 2.0).floor() * 2.0;
                 CaptureTarget::Area { display_id: display.id, rect_points: sf_project::schema::common::Rect { x: x0.round(), y: y0.round(), width: w, height: h } }
             }
+            (Mode::Window, None) if picks_window_in_portal() => CaptureTarget::PortalWindow,
             _ => CaptureTarget::Display { display_id: display.id },
         };
         let mut cfg = RecordingConfig::new(&self.output_dir, target);

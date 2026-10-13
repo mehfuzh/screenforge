@@ -71,6 +71,9 @@ pub fn plan(cfg: &RecordingConfig, discovery: &Discovery) -> Result<DisplayPlan>
                 .ok_or_else(|| Error::InvalidConfig("no display".into()))?;
             (d, Some(w.bounds))
         }
+        CaptureTarget::PortalWindow => {
+            return Err(Error::InvalidConfig("the window is picked in the screen-sharing dialog (see window_stream_plan)".into()))
+        }
     };
     let db = display.bounds_points;
     let (bounds, crop) = match region {
@@ -95,6 +98,34 @@ pub fn plan(cfg: &RecordingConfig, discovery: &Discovery) -> Result<DisplayPlan>
     Ok(DisplayPlan {
         display_id: display.id,
         crop,
+        bounds,
+        scale,
+        width_px,
+        height_px,
+        recording_scale: bounds.width / width_px as f64,
+        refresh_rate: display.refresh_rate,
+    })
+}
+
+/// Geometry for a window stream from the screen-cast portal: `width`×`height` points recorded
+/// at `scale` pixels per point. Its position on screen is unknown, so the bounds (and the
+/// cursor positions recorded with them) are relative to the window's top-left corner.
+pub fn window_stream_plan(width: u32, height: u32, scale: f64, discovery: &Discovery) -> Result<DisplayPlan> {
+    let display = discovery.main_display().ok_or_else(|| Error::InvalidConfig("no display".into()))?;
+    let bounds = Rect { x: 0.0, y: 0.0, width: (width.max(2) & !1) as f64, height: (height.max(2) & !1) as f64 };
+    let scale = scale.max(1.0);
+    let mut width_px = (bounds.width * scale).round() as u32;
+    let mut height_px = (bounds.height * scale).round() as u32;
+    if width_px > MAX_WIDTH_PX {
+        height_px = (height_px as f64 * MAX_WIDTH_PX as f64 / width_px as f64).round() as u32;
+        width_px = MAX_WIDTH_PX;
+    }
+    width_px = (width_px & !1).max(2);
+    height_px = (height_px & !1).max(2);
+    Ok(DisplayPlan {
+        display_id: display.id,
+        // a crop marks the recording as a window/area one, like a macOS window recording
+        crop: Some(bounds),
         bounds,
         scale,
         width_px,
@@ -184,7 +215,7 @@ mod linux {
 
     const COMPONENT: &str = "DisplayRecorder";
 
-    use crate::portal::{is_wayland, PointerSink, PortalRecorder};
+    use crate::portal::{is_wayland, PickedWindow, PointerSink, PortalRecorder};
 
     /// The capture backend for this session.
     pub enum DisplayRecorder {
@@ -198,6 +229,11 @@ mod linux {
                 return PortalRecorder::start(cfg, plan, log).map(DisplayRecorder::Portal);
             }
             X11Recorder::start(cfg, plan, log).map(DisplayRecorder::X11)
+        }
+
+        /// Record a window picked in the screen-sharing dialog (Wayland).
+        pub fn start_window(cfg: &RecordingConfig, plan: DisplayPlan, log: RecLog, window: PickedWindow) -> Result<Self> {
+            PortalRecorder::start_window(cfg, plan, log, window).map(DisplayRecorder::Portal)
         }
 
         /// True when this backend reports cursor positions itself (see [`Self::set_pointer_sink`]).
@@ -607,6 +643,15 @@ mod tests {
         assert_eq!(p.recording_scale, 0.5);
         assert_eq!(p.crop.unwrap(), Rect { x: 534.0, y: 259.0, width: 1200.0, height: 900.0 });
         assert_eq!(p.bounds, Rect { x: 534.0, y: 259.0, width: 1200.0, height: 900.0 });
+    }
+
+    #[test]
+    fn window_stream_is_window_relative() {
+        let p = window_stream_plan(1201, 801, 2.0, &disc()).unwrap();
+        assert_eq!(p.bounds, Rect { x: 0.0, y: 0.0, width: 1200.0, height: 800.0 });
+        assert_eq!(p.crop, Some(p.bounds));
+        assert_eq!((p.width_px, p.height_px), (2400, 1600));
+        assert_eq!(p.width_px as f64 * p.recording_scale, p.bounds.width);
     }
 
     #[test]

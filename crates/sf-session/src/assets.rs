@@ -324,38 +324,94 @@ mod background_audio_tests {
     }
 }
 
-/// macOS wallpapers that ship with the system (`/System/Library/Desktop Pictures`) or that the
-/// user downloaded in System Settings. They are HEIC; `sips` converts each once to a JPEG under
-/// `~/Library/Caches/dev.screenforge.ScreenForge/system-wallpapers/backgrounds/macOS/`, which
-/// is then an ordinary assets root. Nothing is bundled or redistributed.
+/// The desktop's own wallpapers as a wallpaper category, read locally and never bundled or
+/// redistributed:
+///
+/// - macOS: the system wallpapers (`/System/Library/Desktop Pictures`) and those downloaded in
+///   System Settings. They are HEIC; `sips` converts each once to a JPEG under
+///   `~/Library/Caches/dev.screenforge.ScreenForge/system-wallpapers/backgrounds/macOS/`.
+/// - Linux: `/usr/share/backgrounds` and `~/.local/share/backgrounds`, in a category named
+///   after the distribution (`NAME` in `/etc/os-release`, e.g. "Ubuntu"). JPEG and PNG are
+///   symlinked into `~/.cache/screenforge/system-wallpapers/backgrounds/<category>/`; WebP is
+///   converted once to JPEG.
+///
+/// The cache is then an ordinary assets root.
 pub mod system_wallpapers {
     use std::path::{Path, PathBuf};
 
-    const CATEGORY: &str = "macOS";
+    #[cfg(target_os = "macos")]
+    pub fn category() -> Option<String> {
+        Some("macOS".into())
+    }
+
+    #[cfg(target_os = "linux")]
+    pub fn category() -> Option<String> {
+        static NAME: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+        Some(NAME.get_or_init(|| distro_name(&std::fs::read_to_string("/etc/os-release").unwrap_or_default())).clone())
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    pub fn category() -> Option<String> {
+        None
+    }
+
+    /// `NAME` from os-release text, usable as a folder name ("Linux" when missing).
+    pub fn distro_name(os_release: &str) -> String {
+        let name = os_release
+            .lines()
+            .find_map(|l| l.strip_prefix("NAME="))
+            .map(|v| v.trim().trim_matches('"').trim_matches('\'').trim().replace('/', "-"))
+            .filter(|v| !v.is_empty() && !v.starts_with('.'));
+        name.unwrap_or_else(|| "Linux".into())
+    }
 
     pub fn cache_root() -> Option<PathBuf> {
-        if !cfg!(target_os = "macos") {
-            return None;
-        }
-        let home = std::env::var_os("HOME")?;
-        let root = PathBuf::from(home).join("Library/Caches/dev.screenforge.ScreenForge/system-wallpapers");
-        std::fs::create_dir_all(root.join("backgrounds").join(CATEGORY)).ok()?;
+        let category = category()?;
+        let root = if cfg!(target_os = "macos") {
+            PathBuf::from(std::env::var_os("HOME")?).join("Library/Caches/dev.screenforge.ScreenForge/system-wallpapers")
+        } else {
+            let cache = std::env::var_os("XDG_CACHE_HOME")
+                .map(PathBuf::from)
+                .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".cache")))?;
+            cache.join("screenforge/system-wallpapers")
+        };
+        std::fs::create_dir_all(root.join("backgrounds").join(category)).ok()?;
         Some(root)
     }
 
-    fn sources() -> Vec<PathBuf> {
-        let mut dirs = vec![PathBuf::from("/System/Library/Desktop Pictures")];
-        if let Some(home) = std::env::var_os("HOME") {
-            dirs.push(PathBuf::from(home).join("Library/Application Support/com.apple.mobileAssetDesktop"));
+    fn source_dirs() -> Vec<PathBuf> {
+        let home = std::env::var_os("HOME").map(PathBuf::from);
+        if cfg!(target_os = "macos") {
+            let mut dirs = vec![PathBuf::from("/System/Library/Desktop Pictures")];
+            dirs.extend(home.map(|h| h.join("Library/Application Support/com.apple.mobileAssetDesktop")));
+            dirs
+        } else {
+            let mut dirs = vec![PathBuf::from("/usr/share/backgrounds")];
+            dirs.extend(home.map(|h| h.join(".local/share/backgrounds")));
+            dirs
         }
-        let mut out = vec![];
-        for d in dirs {
+    }
+
+    fn is_image(p: &Path) -> bool {
+        let ext = p.extension().and_then(|e| e.to_str()).map(|e| e.to_ascii_lowercase());
+        let known: &[&str] = if cfg!(target_os = "macos") { &["heic", "jpg", "jpeg", "png"] } else { &["jpg", "jpeg", "png", "webp"] };
+        ext.is_some_and(|e| known.contains(&e.as_str()))
+    }
+
+    /// Wallpaper files, each once (symlinked aliases such as Ubuntu's
+    /// `ubuntu-default-greyscale-wallpaper.png` resolve to the file they point at).
+    fn sources() -> Vec<PathBuf> {
+        let mut out: Vec<PathBuf> = vec![];
+        for d in source_dirs() {
             if let Ok(rd) = std::fs::read_dir(&d) {
                 for e in rd.flatten() {
                     let p = e.path();
-                    let ext = p.extension().and_then(|e| e.to_str()).map(|e| e.to_ascii_lowercase());
-                    if matches!(ext.as_deref(), Some("heic" | "jpg" | "jpeg" | "png")) {
-                        out.push(p);
+                    if !p.is_file() || !is_image(&p) {
+                        continue;
+                    }
+                    let real = std::fs::canonicalize(&p).unwrap_or(p);
+                    if is_image(&real) && !out.contains(&real) {
+                        out.push(real);
                     }
                 }
             }
@@ -364,18 +420,74 @@ pub mod system_wallpapers {
         out
     }
 
-    /// The wallpaper new recordings start with: the newest macOS landscape on this Mac (as
-    /// `macOS/<name>.jpg`), or any converted macOS wallpaper. `None` until one is converted.
+    /// Name of `src` in the cache: JPEG and PNG keep theirs, others become JPEG.
+    fn cached_name(src: &Path) -> Option<String> {
+        let name = src.file_name()?.to_str()?;
+        let ext = src.extension().and_then(|e| e.to_str()).map(|e| e.to_ascii_lowercase());
+        if !cfg!(target_os = "macos") && matches!(ext.as_deref(), Some("jpg" | "jpeg" | "png")) {
+            return Some(name.to_string());
+        }
+        Some(format!("{}.jpg", src.file_stem()?.to_str()?))
+    }
+
+    /// The wallpaper new recordings start with, as `<category>/<name>`, or `None` until one
+    /// is in the cache. macOS: the newest landscape on this Mac. Linux: the current desktop
+    /// wallpaper (the dark style's one when the desktop is dark).
     pub fn default_name() -> Option<String> {
-        let dir = cache_root()?.join("backgrounds").join(CATEGORY);
+        let category = category()?;
+        let dir = cache_root()?.join("backgrounds").join(&category);
         let mut names: Vec<String> = std::fs::read_dir(&dir).ok()?.flatten()
             .filter_map(|e| e.file_name().to_str().map(str::to_string))
-            .filter(|n| n.ends_with(".jpg") && !n.starts_with('.'))
+            .filter(|n| !n.starts_with('.'))
             .collect();
         names.sort();
-        const PREFERRED: [&str; 7] = ["Tahoe", "Sequoia", "Sonoma", "Ventura", "Monterey", "Big Sur", "Catalina"];
-        let pick = PREFERRED.iter().find_map(|p| names.iter().find(|n| n.starts_with(p))).or(names.first())?;
-        Some(format!("{CATEGORY}/{pick}"))
+        if cfg!(target_os = "macos") {
+            names.retain(|n| n.ends_with(".jpg"));
+            const PREFERRED: [&str; 7] = ["Tahoe", "Sequoia", "Sonoma", "Ventura", "Monterey", "Big Sur", "Catalina"];
+            let pick = PREFERRED.iter().find_map(|p| names.iter().find(|n| n.starts_with(p))).or(names.first())?;
+            return Some(format!("{category}/{pick}"));
+        }
+        let current = current_desktop_wallpaper().and_then(|p| std::fs::canonicalize(&p).ok().or(Some(p)))?;
+        let want = cached_name(&current)?;
+        names.iter().find(|n| **n == want).map(|n| format!("{category}/{n}"))
+    }
+
+    /// GNOME's current wallpaper file (`org.gnome.desktop.background`).
+    fn current_desktop_wallpaper() -> Option<PathBuf> {
+        let get = |key: &str| -> Option<String> {
+            let out = std::process::Command::new("gsettings").args(["get", "org.gnome.desktop.background", key]).output().ok()?;
+            let v = String::from_utf8_lossy(&out.stdout).trim().trim_matches('\'').to_string();
+            (out.status.success() && !v.is_empty()).then_some(v)
+        };
+        let dark = std::process::Command::new("gsettings")
+            .args(["get", "org.gnome.desktop.interface", "color-scheme"])
+            .output()
+            .is_ok_and(|o| String::from_utf8_lossy(&o.stdout).contains("prefer-dark"));
+        let uri = if dark { get("picture-uri-dark").or_else(|| get("picture-uri")) } else { get("picture-uri") }?;
+        file_uri_path(&uri)
+    }
+
+    /// The path of a `file://` URI (percent-decoded), or a plain path as is.
+    pub fn file_uri_path(uri: &str) -> Option<PathBuf> {
+        let raw = uri.strip_prefix("file://").unwrap_or(uri);
+        if !raw.starts_with('/') {
+            return None;
+        }
+        let bytes = raw.as_bytes();
+        let mut out = Vec::with_capacity(bytes.len());
+        let mut i = 0;
+        while i < bytes.len() {
+            if bytes[i] == b'%' && i + 2 < bytes.len() {
+                if let Ok(b) = u8::from_str_radix(&raw[i + 1..i + 3], 16) {
+                    out.push(b);
+                    i += 3;
+                    continue;
+                }
+            }
+            out.push(bytes[i]);
+            i += 1;
+        }
+        Some(PathBuf::from(String::from_utf8(out).ok()?))
     }
 
     /// Convert any wallpapers not converted yet (background thread; cheap when up to date).
@@ -387,28 +499,86 @@ pub mod system_wallpapers {
     }
 
     pub fn sync(root: &Path) {
-        let dest_dir = root.join("backgrounds").join(CATEGORY);
+        let Some(category) = category() else { return };
+        let dest_dir = root.join("backgrounds").join(category);
+        // drop links to wallpapers that were uninstalled
+        if let Ok(rd) = std::fs::read_dir(&dest_dir) {
+            for e in rd.flatten() {
+                let p = e.path();
+                if p.is_symlink() && !p.exists() {
+                    let _ = std::fs::remove_file(&p);
+                }
+            }
+        }
         for src in sources() {
-            let Some(stem) = src.file_stem().and_then(|s| s.to_str()) else { continue };
-            let dest = dest_dir.join(format!("{stem}.jpg"));
+            let Some(name) = cached_name(&src) else { continue };
+            let dest = dest_dir.join(&name);
             if dest.is_file() {
                 continue;
             }
-            let tmp = dest_dir.join(format!(".{stem}.tmp.jpg"));
-            let ok = std::process::Command::new("/usr/bin/sips")
-                .args(["-s", "format", "jpeg", "-s", "formatOptions", "85", "-Z", "2880"])
-                .arg(&src)
-                .arg("--out")
-                .arg(&tmp)
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
-                .status()
-                .map(|s| s.success())
-                .unwrap_or(false);
+            let tmp = dest_dir.join(format!(".{name}.tmp.jpg"));
+            let ok = convert(&src, &dest, &tmp);
             if ok {
                 let _ = std::fs::rename(&tmp, &dest);
             } else {
                 let _ = std::fs::remove_file(&tmp);
+            }
+        }
+    }
+
+    /// Put `src` into the cache via `tmp` (renamed to `dest` on success).
+    #[cfg(target_os = "macos")]
+    fn convert(src: &Path, _dest: &Path, tmp: &Path) -> bool {
+        std::process::Command::new("/usr/bin/sips")
+            .args(["-s", "format", "jpeg", "-s", "formatOptions", "85", "-Z", "2880"])
+            .arg(src)
+            .arg("--out")
+            .arg(tmp)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false)
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    fn convert(src: &Path, dest: &Path, tmp: &Path) -> bool {
+        if dest.extension() == src.extension() {
+            #[cfg(unix)]
+            return std::os::unix::fs::symlink(src, tmp).is_ok();
+            #[cfg(not(unix))]
+            return std::fs::copy(src, tmp).is_ok();
+        }
+        let Ok(img) = image::open(src) else { return false };
+        let Ok(file) = std::fs::File::create(tmp) else { return false };
+        let mut enc = image::codecs::jpeg::JpegEncoder::new_with_quality(std::io::BufWriter::new(file), 90);
+        enc.encode_image(&img.to_rgb8()).is_ok()
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn distro_name_from_os_release() {
+            assert_eq!(distro_name("PRETTY_NAME=\"Ubuntu 26.04 LTS\"\nNAME=\"Ubuntu\"\nID=ubuntu\n"), "Ubuntu");
+            assert_eq!(distro_name("NAME=Fedora Linux\n"), "Fedora Linux");
+            assert_eq!(distro_name("ID=arch\n"), "Linux");
+        }
+
+        #[test]
+        fn file_uris() {
+            assert_eq!(file_uri_path("file:///usr/share/backgrounds/warty-final-ubuntu.png"), Some(PathBuf::from("/usr/share/backgrounds/warty-final-ubuntu.png")));
+            assert_eq!(file_uri_path("file:///home/me/My%20Pictures/a.jpg"), Some(PathBuf::from("/home/me/My Pictures/a.jpg")));
+            assert_eq!(file_uri_path("/tmp/x.png"), Some(PathBuf::from("/tmp/x.png")));
+            assert_eq!(file_uri_path("https://example.com/a.png"), None);
+        }
+
+        #[test]
+        fn cached_names() {
+            if cfg!(target_os = "linux") {
+                assert_eq!(cached_name(Path::new("/b/warty.png")).as_deref(), Some("warty.png"));
+                assert_eq!(cached_name(Path::new("/b/Snowy.webp")).as_deref(), Some("Snowy.jpg"));
             }
         }
     }

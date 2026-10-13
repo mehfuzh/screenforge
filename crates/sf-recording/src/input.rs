@@ -396,7 +396,7 @@ mod imp {
                 }
                 Some(tap_thread)
             } else {
-                log.notice(COMPONENT, "Wayland session: no global input tap; pointer positions come from the screen-cast stream, clicks and keys are not recorded.");
+                log.notice(COMPONENT, "Wayland session: no global input tap; clicks and keys are not recorded; the cursor is part of the video (pointer positions only with SF_PORTAL_CURSOR_METADATA=1).");
                 None
             };
 

@@ -264,6 +264,18 @@ mod imp {
 
         fn start_inner(cfg: RecordingConfig, log: RecLog) -> Result<Self> {
             let discovery = discover::Discovery { displays: discover::displays(), windows: discover::windows(), microphones: Vec::new(), cameras: Vec::new() };
+            // a window picked in the screen-sharing dialog: its stream size gives the plan
+            #[cfg(target_os = "linux")]
+            let picked = match cfg.target {
+                crate::CaptureTarget::PortalWindow => Some(crate::portal::pick_window(cfg.fps.max(1), &log)?),
+                _ => None,
+            };
+            #[cfg(target_os = "linux")]
+            let plan = match &picked {
+                Some(w) => display::window_stream_plan(w.size().0, w.size().1, w.scale(), &discovery)?,
+                None => display::plan(&cfg, &discovery)?,
+            };
+            #[cfg(not(target_os = "linux"))]
             let plan = display::plan(&cfg, &discovery)?;
             log.notice(COMPONENT, format!("Display plan: {plan:?}"));
             if cfg.camera.is_some() {
@@ -317,6 +329,12 @@ mod imp {
             };
 
             // Display
+            #[cfg(target_os = "linux")]
+            let display = match picked {
+                Some(w) => DisplayRecorder::start_window(&cfg, plan.clone(), log.clone(), w)?,
+                None => DisplayRecorder::start(&cfg, plan.clone(), log.clone(), sys_handler)?,
+            };
+            #[cfg(not(target_os = "linux"))]
             let display = DisplayRecorder::start(&cfg, plan.clone(), log.clone(), sys_handler)?;
             #[cfg(target_os = "linux")]
             if let (Some(i), true) = (&input, display.provides_pointer()) {
