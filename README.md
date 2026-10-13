@@ -30,6 +30,10 @@ the [releases page](https://github.com/mehfuzh/screenforge/releases); the websit
 ffmpeg is included. Editing and exporting work everywhere; system audio and typing-caret zooms
 are macOS-only.
 
+**Homebrew (macOS and Linux):** `brew install zot24/tap/screenforge` installs the same builds
+(the app into /Applications on a Mac, a `screenforge` command on Linux), and `brew upgrade`
+picks up new releases a few hours after they are published.
+
 Recording works on **X11 and Wayland** sessions. On Wayland (GNOME, KDE Plasma and other
 desktops with an xdg-desktop-portal backend) the first recording asks you to pick a screen in
 the system's "Share your screen" dialog; ScreenForge remembers the choice and only asks again
