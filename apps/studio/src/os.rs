@@ -78,8 +78,9 @@ pub fn move_to_trash(path: &Path) -> Result<(), String> {
     }
 }
 
-/// Move `path` into `$XDG_DATA_HOME/Trash` per the freedesktop Trash spec (same file system
-/// only: a rename, never a copy and delete).
+/// Move `path` into `$XDG_DATA_HOME/Trash` per the freedesktop Trash spec. From another file
+/// system (e.g. a tmpfs `/tmp`, which `gio` refuses) it is copied in first, and the original is
+/// removed only once the copy is complete.
 #[cfg(not(target_os = "macos"))]
 fn home_trash(path: &Path) -> Result<(), String> {
     let data = std::env::var_os("XDG_DATA_HOME")
@@ -103,15 +104,67 @@ fn home_trash(path: &Path) -> Result<(), String> {
     let encoded = file_uri(&abs).trim_start_matches("file://").to_string();
     let info_file = info.join(format!("{pick}.trashinfo"));
     std::fs::write(&info_file, format!("[Trash Info]\nPath={encoded}\nDeletionDate={stamp}\n")).map_err(|e| e.to_string())?;
-    std::fs::rename(&abs, files.join(&pick)).map_err(|e| {
-        let _ = std::fs::remove_file(&info_file);
+    let dest = files.join(&pick);
+    let moved = match std::fs::rename(&abs, &dest) {
+        Err(e) if e.kind() == std::io::ErrorKind::CrossesDevices => copy_tree(&abs, &dest)
+            .inspect_err(|_| {
+                let _ = remove_tree(&dest);
+            })
+            .and_then(|_| remove_tree(&abs)),
+        r => r,
+    };
+    moved.map_err(|e| {
+        if !abs.exists() {
+            // the copy is complete and only part of the original went: keep the Trash entry
+            return format!("moved to the Trash, but some of the original remains: {e}");
+        }
+        if std::fs::symlink_metadata(&dest).is_err() {
+            let _ = std::fs::remove_file(&info_file);
+        }
         format!("cannot move to the Trash: {e}")
     })
+}
+
+/// Copy a file, symlink or folder tree (symlinks are copied as links, not followed).
+#[cfg(not(target_os = "macos"))]
+fn copy_tree(from: &Path, to: &Path) -> std::io::Result<()> {
+    let meta = std::fs::symlink_metadata(from)?;
+    if meta.file_type().is_symlink() {
+        std::os::unix::fs::symlink(std::fs::read_link(from)?, to)
+    } else if meta.is_dir() {
+        std::fs::create_dir(to)?;
+        for entry in std::fs::read_dir(from)? {
+            let entry = entry?;
+            copy_tree(&entry.path(), &to.join(entry.file_name()))?;
+        }
+        std::fs::set_permissions(to, meta.permissions())
+    } else {
+        std::fs::copy(from, to).map(|_| ())
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn remove_tree(path: &Path) -> std::io::Result<()> {
+    match std::fs::symlink_metadata(path) {
+        Ok(m) if m.is_dir() => std::fs::remove_dir_all(path),
+        Ok(_) => std::fs::remove_file(path),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(e),
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Run `f` with `XDG_DATA_HOME` set (tests run in parallel and share the environment).
+    #[cfg(not(target_os = "macos"))]
+    fn with_data_home<T>(dir: &Path, f: impl FnOnce() -> T) -> T {
+        static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let _guard = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        std::env::set_var("XDG_DATA_HOME", dir);
+        f()
+    }
 
     #[test]
     fn file_uris_are_encoded() {
@@ -123,17 +176,40 @@ mod tests {
     #[test]
     fn home_trash_moves_and_records_the_origin() {
         let tmp = tempfile::tempdir().unwrap();
-        std::env::set_var("XDG_DATA_HOME", tmp.path().join("data"));
         let p = tmp.path().join("My Project.screenstudio");
         std::fs::create_dir_all(p.join("recording")).unwrap();
-        home_trash(&p).unwrap();
+        let data = tmp.path().join("data");
+        with_data_home(&data, || home_trash(&p)).unwrap();
         assert!(!p.exists());
         assert!(tmp.path().join("data/Trash/files/My Project.screenstudio/recording").is_dir());
         let info = std::fs::read_to_string(tmp.path().join("data/Trash/info/My Project.screenstudio.trashinfo")).unwrap();
         assert!(info.contains("Path=") && info.contains("My%20Project.screenstudio"), "{info}");
         // a second item with the same name gets a free name
         std::fs::create_dir_all(&p).unwrap();
-        home_trash(&p).unwrap();
+        with_data_home(&data, || home_trash(&p)).unwrap();
         assert!(tmp.path().join("data/Trash/files/My Project.screenstudio.2").is_dir());
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn home_trash_copies_across_file_systems() {
+        // a tmpfs /tmp and a Trash under the home directory are different devices
+        let home = std::env::var_os("HOME").map(std::path::PathBuf::from).unwrap();
+        let src = tempfile::tempdir_in("/tmp").unwrap();
+        let data = tempfile::tempdir_in(&home).unwrap();
+        use std::os::unix::fs::MetadataExt;
+        if std::fs::metadata(src.path()).unwrap().dev() == std::fs::metadata(data.path()).unwrap().dev() {
+            return; // same file system here: covered by the test above
+        }
+        let p = src.path().join("Cross.screenstudio");
+        std::fs::create_dir_all(p.join("recording")).unwrap();
+        std::fs::write(p.join("recording/a.mp4"), b"video").unwrap();
+        std::os::unix::fs::symlink("recording/a.mp4", p.join("link")).unwrap();
+        with_data_home(data.path(), || home_trash(&p)).unwrap();
+        assert!(!p.exists());
+        let t = data.path().join("Trash/files/Cross.screenstudio");
+        assert_eq!(std::fs::read(t.join("recording/a.mp4")).unwrap(), b"video");
+        assert_eq!(std::fs::read_link(t.join("link")).unwrap(), Path::new("recording/a.mp4"));
+        assert!(data.path().join("Trash/info/Cross.screenstudio.trashinfo").is_file());
     }
 }
