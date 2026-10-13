@@ -1,6 +1,6 @@
 name: Cut release
 # Actions tab → "Cut release" → Run workflow with a version. Bumps Cargo.toml, commits, tags
-# vX.Y.Z, then starts "Release (macOS)" for that tag, which builds, signs/notarizes (when the
+# vX.Y.Z, then starts the release workflow (release.yml) for that tag, which builds, signs/notarizes (when the
 # Apple secrets exist), and publishes the GitHub Release with generated notes.
 on:
   workflow_dispatch:
@@ -46,8 +46,8 @@ jobs:
         # tags pushed with GITHUB_TOKEN do not trigger other workflows, so start it explicitly
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh workflow run "Release (macOS)" --ref "v${{ inputs.version }}" -f publish=true -f draft=${{ inputs.draft }}
+        run: gh workflow run release.yml --ref "v${{ inputs.version }}" -f publish=true -f draft=${{ inputs.draft }}
       - name: Summary
         run: |
-          echo "Tagged v${{ inputs.version }}. Follow the build under Actions → Release (macOS)." >> "$GITHUB_STEP_SUMMARY"
+          echo "Tagged v${{ inputs.version }}. Follow the build under Actions → Release (macOS + Linux)." >> "$GITHUB_STEP_SUMMARY"
           echo "Release: https://github.com/${{ github.repository }}/releases/tag/v${{ inputs.version }}" >> "$GITHUB_STEP_SUMMARY"
