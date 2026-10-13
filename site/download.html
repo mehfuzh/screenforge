@@ -7,8 +7,8 @@
 <meta name="description" content="Download ScreenForge for macOS or Linux: a screen recorder and timeline editor that makes polished videos.">
 <meta name="color-scheme" content="dark light">
 <meta property="og:type" content="website">
-<meta property="og:title" content="Download for macOS — ScreenForge">
-<meta property="og:description" content="Download ScreenForge for macOS: a screen recorder and timeline editor that makes polished videos. Apple silicon, macOS 14 or later.">
+<meta property="og:title" content="Download — ScreenForge">
+<meta property="og:description" content="Download ScreenForge for macOS or Linux: a screen recorder and timeline editor that makes polished videos.">
 <meta property="og:image" content="https://screenforge.studio/og.png?v=2">
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
@@ -337,6 +337,9 @@
   .steps li strong { display: block; font-family: var(--display); font-weight: 700; font-size: 17px; color: var(--white); letter-spacing: -.02em; margin-bottom: 8px; line-height: 1.25; }
   .steps li code { white-space: nowrap; }
   .steps li .hl { color: var(--white); font-weight: 600; font-style: normal; }
+  .os-switch { display: inline-flex; margin: 0 0 22px; }
+  .os-switch button { text-transform: none; padding: 0 14px; }
+  .plat[hidden] { display: none; }
   .reqs { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 28px; }
   .doc .cta { margin-top: 28px; }
   .dl-meta { font-family: var(--mono); font-size: 12.5px; color: var(--dim); }
@@ -401,6 +404,12 @@
 
 <main class="doc">
   <div class="eyebrow">Download</div>
+  <div class="mode-toggle os-switch" role="group" aria-label="Platform">
+    <button type="button" data-os="mac" aria-pressed="true">macOS</button>
+    <button type="button" data-os="linux" aria-pressed="false">Linux</button>
+  </div>
+
+  <section class="plat" id="mac" data-os="mac">
   <h1>Download ScreenForge for <em>macOS.</em></h1>
   <p class="stamp">Apple silicon · macOS 14 or later · recording and editing are free</p>
 
@@ -433,24 +442,47 @@
 <pre><code><span class="p">$ </span>git clone https://github.com/mehfuzh/screenforge &amp;&amp; cargo build --release -p studio</code></pre>
     <p>The binary lands in <code>target/release/screenforge</code>; <code>scripts/bundle.sh</code> wraps it in an <code>.app</code>. The export gate is ordinary Apache-2.0 code: a source build can remove it. The license exists to fund the signed, notarized download, the CI that produces it and ongoing maintenance.</p>
   </div>
+  <p style="margin-top:28px">On Linux? <a href="#linux" data-os-link="linux">Get the Linux version</a>.</p>
+  </section>
 
-  <h2 id="linux">Linux</h2>
-  <p>ScreenForge also runs on Linux (x86_64). Editing and exporting work everywhere; recording needs an <i class="hl">X11 session</i> (on Wayland, pick an "on Xorg" session at the login screen) and the system <code>ffmpeg</code>. System audio recording is macOS-only for now.</p>
+  <section class="plat" id="linux" data-os="linux">
+  <h1>Download ScreenForge for <em>Linux.</em></h1>
+  <p class="stamp">x86_64 · X11 session · recording and editing are free</p>
+
+  <div class="reqs" aria-label="requirements">
+    <span class="badge"><span class="k">arch</span><span class="v">x86_64</span></span>
+    <span class="badge"><span class="k">session</span><span class="v">X11 to record</span></span>
+    <span class="badge"><span class="k">needs</span><span class="v">ffmpeg</span></span>
+    <span class="badge gold"><span class="k">status</span><span class="v">early alpha</span></span>
+  </div>
+
   <div class="cta">
-    <a class="go" href="https://github.com/mehfuzh/screenforge/releases/latest/download/screenforge_amd64.deb" rel="noopener">
+    <a class="go" id="dl-deb" href="https://github.com/mehfuzh/screenforge/releases/latest/download/screenforge_amd64.deb" rel="noopener">
       <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1.5v8.3l2.7-2.7 1 1L8 11.8 4.3 8.1l1-1L8 9.8V1.5zM2.5 12h11v1.5h-11z"/></svg>
       Download .deb
     </a>
-    <a class="go" href="https://github.com/mehfuzh/screenforge/releases/latest/download/ScreenForge-linux-x86_64.tar.gz" rel="noopener">
+    <a class="alt" id="dl-tar" href="https://github.com/mehfuzh/screenforge/releases/latest/download/ScreenForge-linux-x86_64.tar.gz" rel="noopener">
       <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1.5v8.3l2.7-2.7 1 1L8 11.8 4.3 8.1l1-1L8 9.8V1.5zM2.5 12h11v1.5h-11z"/></svg>
       Download .tar.gz
     </a>
+    <span class="dl-meta" id="dl-meta-linux" aria-live="polite">Debian / Ubuntu: .deb · other distros: .tar.gz</span>
   </div>
-<pre><code><span class="p">$ </span>sudo apt install ./screenforge_amd64.deb   <span class="p"># Debian / Ubuntu, pulls in ffmpeg</span>
-<span class="p">$ </span>tar xzf ScreenForge-linux-x86_64.tar.gz &amp;&amp; ./ScreenForge/screenforge   <span class="p"># other distros</span></code></pre>
+
+  <h2>Install</h2>
+  <ol class="steps">
+    <li><b>Step 1</b><strong>Install with apt</strong>From the folder you downloaded to, run <code>sudo apt install ./screenforge_amd64.deb</code>. Unlike <code>dpkg -i</code>, apt also installs <i class="hl">ffmpeg</i>, which recording needs.</li>
+    <li><b>Step 2</b><strong>Use an X11 session</strong>Recording needs <i class="hl">X11</i>. On Wayland, log out and pick an "on Xorg" session at the login screen. Editing and exporting work in any session.</li>
+    <li><b>Step 3</b><strong>Launch</strong>Open ScreenForge from your app menu, or run <code>screenforge</code> in a terminal. System audio recording is macOS-only for now; the microphone works.</li>
+  </ol>
+<pre style="margin-top:28px"><code><span class="p">$ </span>sudo apt install ./screenforge_amd64.deb   <span class="c"># Debian / Ubuntu, pulls in ffmpeg</span>
+<span class="p">$ </span>sudo apt -f install                        <span class="c"># already ran dpkg -i and got "dependency problems"? this finishes it</span>
+<span class="p">$ </span>tar xzf ScreenForge-linux-x86_64.tar.gz &amp;&amp; ./ScreenForge/screenforge   <span class="c"># other distros; install ffmpeg first</span></code></pre>
+  <p>The app runs without a license. Recording, editing and your first three exports are free; after that, exporting needs a key from the <a href="pricing.html">pricing page</a>.</p>
+  <p style="margin-top:28px">On a Mac? <a href="#mac" data-os-link="mac">Get the macOS version</a>.</p>
+  </section>
 
   <h2>Older versions</h2>
-  <p>Every build, with its notes and checksums, is on <a href="https://github.com/mehfuzh/screenforge/releases">GitHub Releases</a>. The download button above always points at the newest one.</p>
+  <p>Every build, with its notes and checksums, is on <a href="https://github.com/mehfuzh/screenforge/releases">GitHub Releases</a>. The download buttons above always point at the newest one.</p>
 </main>
 
 <footer>
@@ -470,7 +502,7 @@
 <script>
   (function () {
     var root = document.documentElement;
-    var btns = document.querySelectorAll('.mode-toggle button');
+    var btns = document.querySelectorAll('.mode-toggle button[data-set]');
     function current() {
       if (root.dataset.theme) return root.dataset.theme;
       return 'dark';
@@ -490,6 +522,25 @@
   })();
 </script>
 <script>
+  // Show the build for the visitor's OS: Linux desktops get the Linux section, everyone else macOS.
+  (function () {
+    var ua = navigator.userAgent || '';
+    var plat = (navigator.userAgentData && navigator.userAgentData.platform) || navigator.platform || '';
+    var linux = /linux/i.test(plat + ' ' + ua) && !/android|cros/i.test(ua);
+    var secs = document.querySelectorAll('.plat'), btns = document.querySelectorAll('.os-switch button');
+    function show(os) {
+      secs.forEach(function (s) { s.hidden = s.dataset.os !== os; });
+      btns.forEach(function (b) { b.setAttribute('aria-pressed', String(b.dataset.os === os)); });
+    }
+    btns.forEach(function (b) { b.addEventListener('click', function () { show(b.dataset.os); history.replaceState(null, '', '#' + b.dataset.os); }); });
+    document.querySelectorAll('[data-os-link]').forEach(function (a) {
+      a.addEventListener('click', function (e) { e.preventDefault(); show(a.dataset.osLink); history.replaceState(null, '', '#' + a.dataset.osLink); scrollTo(0, 0); });
+    });
+    var h = location.hash.slice(1);
+    show(h === 'linux' || h === 'mac' ? h : (linux ? 'linux' : 'mac'));
+  })();
+</script>
+<script>
   (function () {
     var a = document.getElementById('dl'), m = document.getElementById('dl-meta'), sz = document.getElementById('dl-size');
     var fallback = 'https://github.com/mehfuzh/screenforge/releases/latest/download/ScreenForge.dmg';
@@ -499,6 +550,10 @@
       .then(function (r) { if (!r.ok) throw new Error(String(r.status)); return r.json(); })
       .then(function (rel) {
         var dmg = (rel.assets || []).filter(function (x) { return /\.dmg$/i.test(x.name || ''); })[0];
+        (rel.assets || []).forEach(function (x) {
+          if (/_amd64\.deb$/i.test(x.name || '')) document.getElementById('dl-deb').href = x.browser_download_url;
+          if (/linux-x86_64\.tar\.gz$/i.test(x.name || '')) document.getElementById('dl-tar').href = x.browser_download_url;
+        });
         if (!dmg || !dmg.browser_download_url) return fail();
         a.href = dmg.browser_download_url;
         var d = new Date(rel.published_at || rel.created_at || '');

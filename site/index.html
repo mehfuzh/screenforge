@@ -163,6 +163,7 @@
   .alt:hover { border-color: var(--jade); color: var(--white); }
   .alt svg, .go svg { width: 15px; height: 15px; fill: currentColor; }
   .cta .note { width: 100%; font-family: var(--mono); font-size: 12.5px; color: var(--dim); margin-top: 6px; }
+  .cta .note a { color: var(--jade); text-decoration: underline; text-underline-offset: 3px; }
 
   .demo {
     margin-top: 56px; border-radius: 12px; overflow: hidden; background: #1e1f29; line-height: 0;
@@ -327,15 +328,15 @@
       split, trim and mute. Made for tutorials, product demos and YouTube.
     </p>
     <div class="cta">
-      <a class="go" href="https://github.com/mehfuzh/screenforge/releases/latest/download/ScreenForge.dmg">
+      <a class="go os-dl" href="https://github.com/mehfuzh/screenforge/releases/latest/download/ScreenForge.dmg">
         <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1.5v8.3l2.7-2.7 1 1L8 11.8 4.3 8.1l1-1L8 9.8V1.5zM2.5 12h11v1.5h-11z"/></svg>
-        Download for macOS
+        <span class="os-label">Download for macOS</span>
       </a>
       <a class="alt" href="https://github.com/mehfuzh/screenforge">
         <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg>
         View on GitHub
       </a>
-      <span class="note">Apple silicon · macOS 14 or later · recording and editing are free</span>
+      <span class="note os-note">Apple silicon · macOS 14 or later · recording and editing are free · also on <a href="download.html#linux">Linux</a></span>
     </div>
 
     <div class="demo">
@@ -441,7 +442,7 @@
     <div class="sec-label">Get started</div>
     <h2>Record your first clip in <em>a minute.</em></h2>
     <div class="cta">
-      <a class="go" href="https://github.com/mehfuzh/screenforge/releases/latest/download/ScreenForge.dmg">Download for macOS</a>
+      <a class="go os-dl" href="https://github.com/mehfuzh/screenforge/releases/latest/download/ScreenForge.dmg"><span class="os-label">Download for macOS</span></a>
       <a class="alt" href="https://github.com/mehfuzh/screenforge">View on GitHub</a>
     </div>
   </div>
@@ -481,6 +482,19 @@
       });
     });
     paint();
+  })();
+</script>
+<script>
+  // Linux visitors get the Linux build (the download page has the .deb, the .tar.gz and apt instructions).
+  (function () {
+    var ua = navigator.userAgent || '';
+    var plat = (navigator.userAgentData && navigator.userAgentData.platform) || navigator.platform || '';
+    if (!/linux/i.test(plat + ' ' + ua) || /android|cros/i.test(ua)) return;
+    document.querySelectorAll('.os-dl').forEach(function (a) { a.href = 'download.html#linux'; });
+    document.querySelectorAll('.os-label').forEach(function (l) { l.textContent = 'Download for Linux'; });
+    document.querySelectorAll('.os-note').forEach(function (n) {
+      n.innerHTML = 'x86_64 · .deb for Debian / Ubuntu, .tar.gz for other distros · recording and editing are free · also on <a href="download.html#mac">macOS</a>';
+    });
   })();
 </script>
 </body>
