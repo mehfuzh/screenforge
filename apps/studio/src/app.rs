@@ -14,9 +14,9 @@ pub enum Screen {
     /// Countdown / recording HUD in the floating window.
     Recording(RecordingScreen),
     Editor(Box<Editor>),
-    /// The editor window is up and shows "Opening …" while the project loads; the count is
-    /// the frames left before loading starts (the resized window paints first).
-    Opening(PathBuf, u8),
+    /// The editor window is up and shows "Opening …" while the project loads on a background
+    /// thread (the spinner keeps turning however long the load takes).
+    Opening(PathBuf, std::sync::mpsc::Receiver<anyhow::Result<sf_session::Session>>),
 }
 
 pub struct App {
@@ -45,6 +45,9 @@ pub struct App {
     quitting: bool,
     /// Path of the project opened right after recording (marks the editor as fresh).
     fresh_open: Option<PathBuf>,
+    /// Toolbar window size and pointer position as of the last frame (`raw_input_hook`).
+    last_size: Option<egui::Vec2>,
+    last_pointer: Option<egui::Pos2>,
 }
 
 #[derive(PartialEq, Eq, Clone, Copy)]
@@ -98,7 +101,7 @@ impl App {
         let mut picker = Picker::default();
         picker.load_inputs();
         let perm_setup = (crate::permissions::PermissionsSetup::needed() || std::env::var_os("SF_SHOW_PERMISSIONS").is_some()).then(crate::permissions::PermissionsSetup::start);
-        let app = App { gpu, screen: Screen::Picker(picker), error: None, prefs, window_mode: WindowMode::Picker, picker_height: crate::picker::BAR_WINDOW_H, placed_once: false, tray: None, tray_tried: false, area_select: None, window_select: None, titlebar_fix: 0, perm_setup, confirm_close: None, quitting: false, fresh_open: None, pending_open: std::env::args().nth(1).map(PathBuf::from).filter(|p| p.is_dir() || p.extension().is_some_and(|e| e == "screenstudio")) };
+        let app = App { gpu, screen: Screen::Picker(picker), error: None, prefs, window_mode: WindowMode::Picker, picker_height: crate::picker::BAR_WINDOW_H, placed_once: false, tray: None, tray_tried: false, area_select: None, window_select: None, titlebar_fix: 0, perm_setup, confirm_close: None, quitting: false, fresh_open: None, last_size: None, last_pointer: None, pending_open: std::env::args().nth(1).map(PathBuf::from).filter(|p| p.is_dir() || p.extension().is_some_and(|e| e == "screenstudio")) };
         // a project on the command line opens on the first frame (`pending_open`)
         app
     }
@@ -208,18 +211,27 @@ impl App {
         }
     }
 
-    /// Switch to the editor window and show "Opening …"; the project loads a couple of frames
-    /// later (`open_project`), so the window never sits empty while it does.
+    /// Switch to the editor window and show "Opening …" while the project loads in the
+    /// background; `open_project` finishes once it has.
     fn begin_open(&mut self, path: PathBuf, ctx: &egui::Context) {
         self.leave_editor();
-        self.screen = Screen::Opening(path, 2);
+        let (tx, rx) = std::sync::mpsc::channel();
+        let (gpu, load_path, repaint) = (self.gpu.clone(), path.clone(), ctx.clone());
+        std::thread::Builder::new()
+            .name("open-project".into())
+            .spawn(move || {
+                let _ = tx.send(Editor::load_session(&load_path, gpu));
+                repaint.request_repaint();
+            })
+            .expect("spawn project loader");
+        self.screen = Screen::Opening(path, rx);
         self.set_window_mode(ctx, WindowMode::Editor);
         ctx.send_viewport_cmd(egui::ViewportCommand::Title(String::new()));
         ctx.request_repaint();
     }
 
-    pub fn open_project(&mut self, path: PathBuf, ctx: &egui::Context, rs: &egui_wgpu::RenderState) {
-        match Editor::open(&path, self.gpu.clone(), rs) {
+    fn open_project(&mut self, path: PathBuf, loaded: anyhow::Result<sf_session::Session>, ctx: &egui::Context) {
+        match loaded.map(|session| Editor::with_session(&path, session, self.gpu.clone())) {
             Ok(mut ed) => {
                 ed.fresh_recording = self.fresh_open.take().is_some_and(|f| f == path);
                 self.prefs.touch(&path);
@@ -276,6 +288,30 @@ impl eframe::App for App {
         self.leave_editor();
     }
 
+    /// The toolbar window grows and shrinks upwards from its bottom edge (menus, the recent
+    /// panel), which moves the bar in window coordinates. macOS sends no pointer event for a
+    /// resize, so egui would keep the old position: hover flips, the window resizes back and a
+    /// click in between is lost. Shift the pointer by the height change instead.
+    fn raw_input_hook(&mut self, _ctx: &egui::Context, raw: &mut egui::RawInput) {
+        let size = raw.screen_rect.map(|r| r.size());
+        let moved = raw.events.iter().any(|e| matches!(e, egui::Event::PointerMoved(_) | egui::Event::PointerGone));
+        if let (WindowMode::Picker, false, Some(new), Some(old), Some(pos)) = (self.window_mode, moved, size, self.last_size, self.last_pointer) {
+            if new.x == old.x && new.y != old.y {
+                raw.events.insert(0, egui::Event::PointerMoved(pos + egui::vec2(0.0, new.y - old.y)));
+            }
+        }
+        for e in &raw.events {
+            match e {
+                egui::Event::PointerMoved(p) => self.last_pointer = Some(*p),
+                egui::Event::PointerGone => self.last_pointer = None,
+                _ => {}
+            }
+        }
+        if size.is_some() {
+            self.last_size = size;
+        }
+    }
+
     fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
         match self.window_mode {
             WindowMode::Picker => [0.0, 0.0, 0.0, 0.0],
@@ -321,7 +357,7 @@ impl eframe::App for App {
         let mut go_home = false;
         let mut action: Option<PickerAction> = None;
         let mut outcome: Option<RecordingOutcome> = None;
-        let mut load_now: Option<PathBuf> = None;
+        let mut loaded: Option<(PathBuf, anyhow::Result<sf_session::Session>)> = None;
         match &mut self.screen {
             Screen::Picker(p) => {
                 // allow dragging the frameless window by its background
@@ -355,13 +391,12 @@ impl eframe::App for App {
                     self.prefs.touch(&p);
                 }
             }
-            Screen::Opening(path, frames) => {
+            Screen::Opening(path, rx) => {
                 opening_ui(ui, path);
-                if *frames == 0 {
-                    load_now = Some(path.clone());
-                } else {
-                    *frames -= 1;
-                    ctx.request_repaint();
+                match rx.try_recv() {
+                    Ok(r) => loaded = Some((path.clone(), r)),
+                    Err(std::sync::mpsc::TryRecvError::Empty) => {}
+                    Err(std::sync::mpsc::TryRecvError::Disconnected) => loaded = Some((path.clone(), Err(anyhow::anyhow!("the project loader stopped unexpectedly")))),
                 }
             }
         }
@@ -571,8 +606,8 @@ impl eframe::App for App {
                 }
             }
         }
-        if let Some(p) = load_now {
-            self.open_project(p, ctx, &rs);
+        if let Some((p, r)) = loaded {
+            self.open_project(p, r, ctx);
         }
         if let Some(p) = open_request {
             self.begin_open(p, ctx);

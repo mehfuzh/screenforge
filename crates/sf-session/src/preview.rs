@@ -1,7 +1,9 @@
 //! `QuickLook/Preview.png`: the thumbnail Screen Studio writes next to every project. The recent
 //! projects panel and Finder's Quick Look use it. Rendered headless from the project itself.
 
-use std::path::Path;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
 use anyhow::Result;
 use sf_render::{Compositor, Gpu};
@@ -33,19 +35,47 @@ pub fn write_quicklook_preview(project: &Path) -> Result<()> {
     let px = comp.read_pixels()?;
     let out = project.join(sf_project::package::QUICKLOOK_PREVIEW);
     std::fs::create_dir_all(out.parent().unwrap())?;
-    image::save_buffer(&out, &px, size.width, size.height, image::ColorType::Rgba8)?;
+    // write next to it and rename, so readers never see a half-written file
+    let tmp = out.with_file_name("Preview.tmp.png");
+    image::save_buffer(&tmp, &px, size.width, size.height, image::ColorType::Rgba8)?;
+    std::fs::rename(&tmp, &out)?;
     Ok(())
+}
+
+/// Projects with a preview being written in the background, with the number of writes.
+static PENDING: Mutex<Option<HashMap<PathBuf, usize>>> = Mutex::new(None);
+
+fn set_pending(project: &Path, delta: isize) {
+    let mut guard = PENDING.lock().unwrap_or_else(|e| e.into_inner());
+    let map = guard.get_or_insert_with(HashMap::new);
+    let n = map.entry(project.to_path_buf()).or_insert(0);
+    *n = (*n as isize + delta).max(0) as usize;
+    if *n == 0 {
+        map.remove(project);
+    }
+}
+
+/// True while `write_quicklook_preview_async` is still writing a preview for `project`.
+pub fn is_pending(project: &Path) -> bool {
+    PENDING.lock().unwrap_or_else(|e| e.into_inner()).as_ref().is_some_and(|m| m.contains_key(project))
 }
 
 /// `write_quicklook_preview` on a background thread; errors are logged, never fatal.
 pub fn write_quicklook_preview_async(project: &Path) {
     let project = project.to_path_buf();
-    std::thread::Builder::new()
+    set_pending(&project, 1);
+    let spawned = std::thread::Builder::new()
         .name("quicklook-preview".into())
-        .spawn(move || {
-            if let Err(e) = write_quicklook_preview(&project) {
-                tracing::warn!("QuickLook preview for {} failed: {e:#}", project.display());
+        .spawn({
+            let project = project.clone();
+            move || {
+                if let Err(e) = write_quicklook_preview(&project) {
+                    tracing::warn!("QuickLook preview for {} failed: {e:#}", project.display());
+                }
+                set_pending(&project, -1);
             }
-        })
-        .ok();
+        });
+    if spawned.is_err() {
+        set_pending(&project, -1);
+    }
 }
