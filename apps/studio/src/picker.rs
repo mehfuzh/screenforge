@@ -206,6 +206,8 @@ pub struct Picker {
     pub show_recent: bool,
     /// Screen rect of the recent panel (last frame), for click-outside detection.
     recent_rect: egui::Rect,
+    /// The bar, in window points (last frame).
+    pub bar_rect: egui::Rect,
     /// Height the window should have this frame (bar only, or bar + open panel/menu).
     pub wanted_height: f32,
     /// Cameras, microphones and windows being listed on a background thread.
@@ -216,7 +218,7 @@ pub struct Picker {
 
 impl Default for Picker {
     fn default() -> Self {
-        Picker { thumbs: None, inputs: Inputs::default(), mode: None, camera: None, microphone: None, mic_meter: None, bar_w: PILL_SIZE.x, system_audio: false, countdown_ms: 5000, status: None, show_recent: false, recent_rect: egui::Rect::NOTHING, wanted_height: BAR_WINDOW_H, devices_rx: None, menus_warm: false }
+        Picker { thumbs: None, inputs: Inputs::default(), mode: None, camera: None, microphone: None, mic_meter: None, bar_w: PILL_SIZE.x, system_audio: false, countdown_ms: 5000, status: None, show_recent: false, recent_rect: egui::Rect::NOTHING, bar_rect: egui::Rect::NOTHING, wanted_height: BAR_WINDOW_H, devices_rx: None, menus_warm: false }
     }
 }
 
@@ -294,6 +296,7 @@ impl Picker {
         // transparent window anchored to the bottom of the screen: the pill sits at the
         // bottom, menus and the recent-projects panel open upwards
         let pill = egui::Rect::from_center_size(pos2(full.center().x, full.bottom() - PILL_MARGIN - PILL_SIZE.y / 2.0), vec2(self.bar_w.min(full.width() - 2.0 * PILL_MARGIN), PILL_SIZE.y));
+        self.bar_rect = pill;
         crate::vibrancy::set(Some([pill.left(), pill.top(), pill.width(), pill.height()]), full.height(), PILL_RADIUS);
         let pal = theme::p();
         let tint = if crate::vibrancy::is_active() { pal.glass } else { pal.glass_solid };

@@ -166,12 +166,11 @@ impl Editor {
         self.audio.load(&self.session);
     }
 
-    /// Set every clip (and detached audio) to `speed`. The timeline zoom is scaled so the bar
-    /// keeps its on-screen width; clips show the speed as a label instead of shrinking.
+    /// Set every clip (and detached audio) to `speed`. Clips keep their width on the timeline
+    /// and show the speed as a label; the playhead crosses them faster.
     pub fn set_recording_speed(&mut self, speed: f64) {
         use sf_project::SceneAudioExt;
         let speed = speed.clamp(0.25, 16.0);
-        let before = self.duration_ms().max(1.0);
         self.edit(move |p| {
             let scene = &mut p.scenes[0];
             let n = scene.slices.len();
@@ -189,9 +188,6 @@ impl Editor {
                 scene.set_audio_clips(Some(cs));
             }
         });
-        let after = self.duration_ms().max(1.0);
-        self.timeline.px_per_sec = (self.timeline.px_per_sec * (before / after) as f32).clamp(5.0, 400.0);
-        self.timeline.scroll_x *= (before / after) as f32;
         self.set_status(&format!("Speed {speed}× for the whole recording"));
     }
 

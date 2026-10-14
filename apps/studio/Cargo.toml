@@ -40,6 +40,9 @@ parking_lot.workspace = true
 [target.'cfg(target_os = "linux")'.dependencies]
 # winit needs a windowing backend on Linux
 eframe = { workspace = true, features = ["x11", "wayland"] }
+# the toolbar's input region (clicks pass through its transparent part)
+raw-window-handle = "0.6"
+x11rb = { version = "0.13", features = ["shape"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"

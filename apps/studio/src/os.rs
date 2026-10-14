@@ -218,3 +218,55 @@ mod tests {
         assert!(data.path().join("Trash/info/Cross.screenstudio.trashinfo").is_file());
     }
 }
+
+/// Input region of a transparent X11 window: outside it, clicks go to the windows below. The
+/// floating toolbar keeps one size on Linux (resizing and moving an X11 window are two steps,
+/// so the bar jumped whenever a menu opened) and narrows its input to the bar instead.
+#[cfg(target_os = "linux")]
+pub struct InputRegion {
+    conn: x11rb::rust_connection::RustConnection,
+    window: u32,
+    /// Last region sent, in window pixels (`None` = the whole window).
+    applied: Option<Option<[i32; 4]>>,
+}
+
+#[cfg(target_os = "linux")]
+impl InputRegion {
+    /// `None` unless the window is an X11 window with a reachable X server.
+    pub fn new(handle: &impl raw_window_handle::HasWindowHandle) -> Option<Self> {
+        use raw_window_handle::RawWindowHandle;
+        let window = match handle.window_handle().ok()?.as_raw() {
+            RawWindowHandle::Xlib(h) => h.window as u32,
+            RawWindowHandle::Xcb(h) => h.window.get(),
+            _ => return None,
+        };
+        let (conn, _) = x11rb::connect(None).ok()?;
+        Some(InputRegion { conn, window, applied: None })
+    }
+
+    /// Take input only inside `rect` (window points), or everywhere for `None`.
+    pub fn set(&mut self, rect: Option<egui::Rect>, pixels_per_point: f32) {
+        use x11rb::connection::Connection as _;
+        use x11rb::protocol::shape::{ConnectionExt as _, SK, SO};
+        use x11rb::protocol::xproto::{ClipOrdering, Rectangle};
+        let px = rect.map(|r| {
+            let (x0, y0) = ((r.left() * pixels_per_point).floor() as i32, (r.top() * pixels_per_point).floor() as i32);
+            let (x1, y1) = ((r.right() * pixels_per_point).ceil() as i32, (r.bottom() * pixels_per_point).ceil() as i32);
+            [x0, y0, (x1 - x0).max(1), (y1 - y0).max(1)]
+        });
+        if self.applied == Some(px) {
+            return;
+        }
+        let sent = match px {
+            Some([x, y, w, h]) => {
+                let r = Rectangle { x: x as i16, y: y as i16, width: w as u16, height: h as u16 };
+                self.conn.shape_rectangles(SO::SET, SK::INPUT, ClipOrdering::UNSORTED, self.window, 0, 0, &[r]).is_ok()
+            }
+            // no mask: back to the window's full shape
+            None => self.conn.shape_mask(SO::SET, SK::INPUT, self.window, 0, 0, x11rb::NONE).is_ok(),
+        };
+        if sent && self.conn.flush().is_ok() {
+            self.applied = Some(px);
+        }
+    }
+}
