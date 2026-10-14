@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Pricing — ScreenForge</title>
 <meta name="description" content="ScreenForge is free to record and edit. The Creator plan is US$10 a month or US$29 once, verified offline, with a 24-hour refund.">
-<meta name="color-scheme" content="dark light">
+<meta name="color-scheme" content="light dark">
 <meta property="og:type" content="website">
 <meta property="og:title" content="Pricing — ScreenForge">
 <meta property="og:description" content="ScreenForge is free to record and edit. The Creator plan is US$10 a month or US$29 once, verified offline, with a 24-hour refund.">
@@ -22,8 +22,8 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;700;900&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
 <style>
-  /* Dark is the default; the light set below only applies when the OS asks
-     for it (and the page has not been pinned to dark via data-theme). */
+  /* Light is the default; the dark set below applies once the visitor
+     picks it with the toggle (stored in localStorage, set as data-theme). */
   :root {
     --ground: #15161e;
     --ink: #1e1f29;
@@ -43,7 +43,7 @@
     --body: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
     color-scheme: dark;
   }
-  :root[data-theme="light"] {
+  :root:not([data-theme="dark"]) {
     --ground: #ececf1;
     --ink: #f6f6fa;
     --panel: #ffffff;
@@ -104,6 +104,8 @@
     font-family: var(--mono); letter-spacing: .03em; text-transform: lowercase;
     transition: background .12s, color .12s;
   }
+  .mode-toggle button[data-set] { padding: 0 9px; }
+  .mode-toggle button svg { display: block; }
   .mode-toggle button + button { border-left: 1px solid var(--line-2); }
   .mode-toggle button[aria-pressed="true"] { background: var(--jade); color: var(--on-accent); }
   @media (max-width: 720px) {
@@ -404,8 +406,8 @@ gtag('config', 'G-ZYRJDJ736V');
       <a href="pricing.html">Pricing</a>
       <a class="nav-cta" href="download.html">Download</a>
       <div class="mode-toggle" role="group" aria-label="Color scheme">
-        <button type="button" data-set="dark" aria-pressed="true">dark</button>
-        <button type="button" data-set="light" aria-pressed="false">light</button>
+        <button type="button" data-set="light" aria-pressed="true" aria-label="Light theme" title="Light"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg></button>
+        <button type="button" data-set="dark" aria-pressed="false" aria-label="Dark theme" title="Dark"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg></button>
       </div>
     </div>
   </div>
@@ -512,7 +514,7 @@ gtag('config', 'G-ZYRJDJ736V');
     var btns = document.querySelectorAll('.mode-toggle button');
     function current() {
       if (root.dataset.theme) return root.dataset.theme;
-      return 'dark';
+      return 'light';
     }
     function paint() {
       var c = current();
