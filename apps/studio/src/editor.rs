@@ -35,6 +35,8 @@ pub struct Editor {
     /// The background music block is selected (⌫ removes the music).
     pub selected_music: bool,
     pub dirty: bool,
+    /// Time of the last change; unsaved changes are written shortly after editing stops.
+    last_edit: Option<Instant>,
     pub timeline: TimelineWidget,
     pub export: ExportDialog,
     pub undo: Vec<sf_project::Project>,
@@ -87,6 +89,7 @@ impl Editor {
             selected_audio: None,
             selected_music: false,
             dirty: false,
+            last_edit: None,
             timeline: TimelineWidget::default(),
             export: ExportDialog::default(),
             undo: vec![],
@@ -119,7 +122,12 @@ impl Editor {
     /// Re-render the preview on the next frame (after a live edit).
     pub fn invalidate_preview(&mut self) {
         self.last_rendered_ms = None;
+        self.mark_dirty();
+    }
+
+    fn mark_dirty(&mut self) {
         self.dirty = true;
+        self.last_edit = Some(Instant::now());
     }
 
     /// Snapshot for undo, then apply an edit to the project and rebuild derived state.
@@ -136,7 +144,7 @@ impl Editor {
     fn after_edit(&mut self) {
         self.session.rebuild();
         self.preview_size = self.session.output_size(1080);
-        self.dirty = true;
+        self.mark_dirty();
         self.last_rendered_ms = None;
         self.playhead_ms = self.playhead_ms.min(self.duration_ms());
         self.audio.update_timeline(&self.session);
@@ -230,14 +238,42 @@ impl Editor {
         }
     }
 
+    /// Write unsaved changes before the editor goes away (back to projects, another project,
+    /// quit). Skipped when the package is gone, e.g. it was just moved to the Trash.
+    pub fn save_if_dirty(&mut self) {
+        if self.dirty && self.path.exists() {
+            self.save();
+        }
+    }
+
+    /// Autosave once editing has paused (no drag in progress), so changes survive a crash or a
+    /// force quit too. Only the project files are written; the QuickLook preview is left for
+    /// explicit saves and leaving the editor.
+    fn autosave(&mut self, ctx: &egui::Context) {
+        const DELAY: std::time::Duration = std::time::Duration::from_millis(1500);
+        let Some(t) = self.last_edit.filter(|_| self.dirty) else { return };
+        let since = t.elapsed();
+        if since < DELAY || ctx.input(|i| i.pointer.any_down()) || !self.path.exists() {
+            ctx.request_repaint_after(DELAY.saturating_sub(since).max(std::time::Duration::from_millis(100)));
+            return;
+        }
+        self.write_project(false);
+    }
+
     pub fn save(&mut self) {
+        self.write_project(true);
+    }
+
+    fn write_project(&mut self, explicit: bool) {
         let src = self.session.timeline.output_to_source(self.playhead_ms).unwrap_or(0.0);
         self.session.pkg.project.data.insert("last-playback-position-source-time-ms".into(), serde_json::json!(src));
         match self.session.pkg.save() {
             Ok(()) => {
-                sf_session::preview::write_quicklook_preview_async(&self.session.pkg.path);
                 self.dirty = false;
-                self.set_status("Saved");
+                if explicit {
+                    sf_session::preview::write_quicklook_preview_async(&self.session.pkg.path);
+                    self.set_status("Saved");
+                }
             }
             Err(e) => self.set_status(format!("Save failed: {e}")),
         }
@@ -308,6 +344,7 @@ impl Editor {
     }
 
     fn tick(&mut self, ctx: &egui::Context) {
+        self.autosave(ctx);
         // audio decodes in the background: keep drawing until the waveform can show
         if self.audio.is_loading() {
             ctx.request_repaint_after(std::time::Duration::from_millis(100));

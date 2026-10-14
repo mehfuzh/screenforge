@@ -211,6 +211,7 @@ impl App {
     /// Switch to the editor window and show "Opening …"; the project loads a couple of frames
     /// later (`open_project`), so the window never sits empty while it does.
     fn begin_open(&mut self, path: PathBuf, ctx: &egui::Context) {
+        self.leave_editor();
         self.screen = Screen::Opening(path, 2);
         self.set_window_mode(ctx, WindowMode::Editor);
         ctx.send_viewport_cmd(egui::ViewportCommand::Title(String::new()));
@@ -237,7 +238,15 @@ impl App {
         }
     }
 
+    /// Save the open project's unsaved changes before the editor is replaced or the app quits.
+    fn leave_editor(&mut self) {
+        if let Screen::Editor(ed) = &mut self.screen {
+            ed.save_if_dirty();
+        }
+    }
+
     fn show_picker(&mut self, ctx: &egui::Context) {
+        self.leave_editor();
         let mut picker = Picker::default();
         picker.load_inputs();
         self.screen = Screen::Picker(picker);
@@ -263,6 +272,10 @@ fn ed_name(p: &std::path::Path) -> String {
 }
 
 impl eframe::App for App {
+    fn on_exit(&mut self) {
+        self.leave_editor();
+    }
+
     fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
         match self.window_mode {
             WindowMode::Picker => [0.0, 0.0, 0.0, 0.0],
