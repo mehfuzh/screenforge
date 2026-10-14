@@ -4,11 +4,11 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Pricing — ScreenForge</title>
-<meta name="description" content="ScreenForge is free to record and edit. The Creator plan is US$10 a month or US$29 once, verified offline, with a 14-day refund.">
+<meta name="description" content="ScreenForge is free to record and edit. The Creator plan is US$10 a month or US$29 once, verified offline, with a 24-hour refund.">
 <meta name="color-scheme" content="dark light">
 <meta property="og:type" content="website">
 <meta property="og:title" content="Pricing — ScreenForge">
-<meta property="og:description" content="ScreenForge is free to record and edit. The Creator plan is US$10 a month or US$29 once, verified offline, with a 14-day refund.">
+<meta property="og:description" content="ScreenForge is free to record and edit. The Creator plan is US$10 a month or US$29 once, verified offline, with a 24-hour refund.">
 <meta property="og:image" content="https://screenforge.studio/og.png?v=2">
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
@@ -234,7 +234,7 @@
   .plan { border: 1px solid var(--jade-deep); background: var(--panel); padding: 28px 28px 30px; }
   .plan .name {
     font-family: var(--mono); font-size: 11.5px; letter-spacing: .14em;
-    text-transform: uppercase; color: var(--gold); margin-bottom: 16px;
+    text-transform: uppercase; color: var(--jade); margin-bottom: 16px;
   }
   .plan .fig {
     font-family: var(--display); font-weight: 900; color: var(--white);
@@ -244,19 +244,19 @@
   .plan .per { font-family: var(--mono); font-size: 12.5px; color: var(--dim); margin: 12px 0 22px; }
   .plan ul { list-style: none; margin: 0 0 24px; }
   .plan li { font-size: 14.5px; margin-bottom: 9px; padding-left: 20px; position: relative; }
-  .plan li::before { content: "▪"; position: absolute; left: 0; color: var(--gold); }
+  .plan li::before { content: "▪"; position: absolute; left: 0; color: var(--jade); }
   .plan .foot { font-size: 13px; color: var(--dim); line-height: 1.5; margin-top: 14px; }
   .buy {
-    display: block; text-align: center; color: var(--gold);
-    background: rgba(255,225,107,.07);
-    background: color-mix(in srgb, var(--gold) 7%, transparent);
+    display: block; text-align: center; color: var(--jade);
+    background: rgba(189,147,249,.07);
+    background: color-mix(in srgb, var(--jade) 7%, transparent);
     font-family: var(--mono); font-size: 13.5px; font-weight: 600;
     letter-spacing: .02em; padding: 13px 18px;
-    border: 1px solid rgba(255,225,107,.45);
-    border-color: color-mix(in srgb, var(--gold) 45%, transparent);
+    border: 1px solid rgba(189,147,249,.45);
+    border-color: color-mix(in srgb, var(--jade) 45%, transparent);
     transition: background .15s, border-color .15s;
   }
-  .buy:hover { background: color-mix(in srgb, var(--gold) 13%, transparent); border-color: var(--gold); }
+  .buy:hover { background: color-mix(in srgb, var(--jade) 13%, transparent); border-color: var(--jade); }
   .free { display: flex; flex-direction: column; gap: 14px; }
   .free .row { display: flex; gap: 12px; align-items: baseline; font-size: 15px; }
   .free .row b { font-family: var(--mono); font-size: 11px; letter-spacing: .12em; text-transform: uppercase; color: var(--jade); flex: none; width: 92px; }
@@ -281,7 +281,6 @@
   .foot-in { display: flex; flex-wrap: wrap; gap: 14px 24px; align-items: center; }
   .foot-in .r { margin-left: auto; display: flex; flex-wrap: wrap; align-items: center; gap: 16px; }
   footer a:hover { color: var(--jade); }
-  footer .lic { color: var(--jade); border: 1px solid color-mix(in srgb, var(--jade) 32%, transparent); padding: 2px 8px; line-height: 1.6; font-size: 11px; letter-spacing: .04em; }
 
   @media (max-width: 560px) {
     .wrap { padding: 0 16px; }
@@ -385,6 +384,14 @@
     } catch (e) {}
   })();
 </script>
+<!-- Google tag (gtag.js) -->
+<script async src="https://www.googletagmanager.com/gtag/js?id=G-ZYRJDJ736V"></script>
+<script>
+window.dataLayer = window.dataLayer || [];
+function gtag(){dataLayer.push(arguments);}
+gtag('js', new Date());
+gtag('config', 'G-ZYRJDJ736V');
+</script>
 </head>
 <body>
 
@@ -407,7 +414,7 @@
 <main class="doc wide">
   <div class="eyebrow">Pricing</div>
   <h1>Pricing that fits <em>how you work.</em></h1>
-  <p class="stamp">US$10 a month or US$29 once · verified offline · 14-day refund</p>
+  <p class="stamp">US$10 a month or US$29 once · verified offline · 24-hour refund</p>
 
   <div class="plans" style="margin-top:0">
     <div class="plan lite">
@@ -469,7 +476,7 @@
     </div>
     <div>
       <h3>Can I get a refund?</h3>
-      <p>Yes, within 14 days of the purchase. Email <a href="mailto:license@screenforge.studio">license@screenforge.studio</a> from the address you paid with and the payment is returned, no questions asked.</p>
+      <p>Yes, within 24 hours of the purchase. Email <a href="mailto:license@screenforge.studio">license@screenforge.studio</a> from the address you paid with and the payment is returned, no questions asked.</p>
     </div>
           <div>
         <h3>Why pay if the source is open?</h3>
@@ -488,13 +495,12 @@
 
 <footer>
   <div class="wrap foot-in">
-    <span class="lic">Apache-2.0</span>
-    <span>ScreenForge</span>
+    <span>© 2026 Smartloop Inc. All rights reserved.</span>
     <div class="r">
       <a href="https://github.com/mehfuzh/screenforge">github</a>
-      <a href="https://github.com/mehfuzh/screenforge/releases/latest">releases</a>
       <a href="privacy.html">privacy</a>
       <a href="terms.html">terms</a>
+      <a href="mailto:support@screenforge.studio">support@screenforge.studio</a>
       <span>Made in San Francisco, CA</span>
     </div>
   </div>
