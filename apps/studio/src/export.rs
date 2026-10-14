@@ -13,6 +13,11 @@ use crate::editor::Editor;
 use crate::theme;
 use crate::widgets;
 
+/// Content width of the export dialog.
+pub const DIALOG_W: f32 = 440.0;
+/// Content width of the export progress / result dialog.
+pub const PROGRESS_W: f32 = 340.0;
+
 pub enum Msg {
     Progress(sf_export::Progress),
     Done(Result<PathBuf, String>),
@@ -98,7 +103,7 @@ impl ExportDialog {
                 ctx.request_repaint_after(std::time::Duration::from_millis(200));
             }
         }
-        if self.open && ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+        if (self.open || self.job.is_some()) && ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
             if let Some((_, _, cancel)) = &self.job {
                 cancel.store(true, Ordering::Relaxed);
             } else {
@@ -130,46 +135,51 @@ impl ExportDialog {
         }
     }
 
-    /// Full-window progress / result panel shown while `is_busy()`.
+    /// Progress / result shown in the export dialog while `is_busy()`.
     pub fn compact_ui(&mut self, ui: &mut egui::Ui) {
         let pal = theme::p();
-        ui.add_space(6.0);
         if self.job.is_some() {
             let p = self.progress;
             let frac = p.map(|p| p.frame as f32 / p.total_frames.max(1) as f32).unwrap_or(0.0);
-            ui.label(RichText::new("Exporting…").size(17.0).strong().color(pal.text));
-            ui.add_space(10.0);
+            ui.horizontal(|ui| {
+                ui.label(RichText::new("Exporting…").size(15.0).strong().color(pal.text));
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.label(RichText::new(format!("{:.0}%", frac * 100.0)).size(13.0).color(pal.text_dim));
+                });
+            });
+            ui.add_space(6.0);
             // full-width bar painted by hand (egui's ProgressBar shrinks to its label here)
-            let (bar, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 8.0), egui::Sense::hover());
+            let (bar, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 6.0), egui::Sense::hover());
             ui.painter().rect_filled(bar, egui::CornerRadius::same(2), pal.card_3);
             let fill = egui::Rect::from_min_size(bar.min, egui::vec2(bar.width() * frac.clamp(0.0, 1.0), bar.height()));
             ui.painter().rect_filled(fill, egui::CornerRadius::same(2), pal.accent);
-            ui.add_space(6.0);
-            match (p, self.started) {
-                (Some(p), Some(t)) => {
-                    let el = t.elapsed().as_secs_f64();
-                    let eta = if frac > 0.02 { el / frac as f64 - el } else { 0.0 };
-                    widgets::hint(ui, &format!("{:.0}% · frame {} of {} · {:.0}s elapsed · about {:.0}s left", frac * 100.0, p.frame, p.total_frames, el, eta));
-                }
-                _ => widgets::hint(ui, "Preparing…"),
-            }
-            ui.add_space(10.0);
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if widgets::secondary_button(ui, "Cancel  (Esc)").clicked() {
-                    if let Some((_, _, cancel)) = &self.job {
-                        cancel.store(true, Ordering::Relaxed);
+            ui.add_space(8.0);
+            ui.horizontal(|ui| {
+                match (p, self.started) {
+                    (Some(_), Some(t)) if frac > 0.02 => {
+                        let el = t.elapsed().as_secs_f64();
+                        widgets::hint(ui, &format!("About {:.0}s left", el / frac as f64 - el));
                     }
+                    _ => widgets::hint(ui, "Preparing…"),
                 }
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if widgets::secondary_button(ui, "Cancel").on_hover_text("Esc").clicked() {
+                        if let Some((_, _, cancel)) = &self.job {
+                            cancel.store(true, Ordering::Relaxed);
+                        }
+                    }
+                });
             });
             return;
         }
         if let Some(r) = self.result.clone() {
             match &r {
                 Ok(p) => {
-                    ui.label(RichText::new("Export complete").size(17.0).strong().color(pal.text));
-                    ui.add_space(4.0);
-                    widgets::hint(ui, &p.display().to_string());
-                    ui.add_space(12.0);
+                    ui.label(RichText::new("Export complete").size(15.0).strong().color(pal.text));
+                    ui.add_space(2.0);
+                    let name = p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                    ui.label(RichText::new(name).size(13.0).color(pal.text_dim)).on_hover_text(p.display().to_string());
+                    ui.add_space(10.0);
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if widgets::accent_button(ui, "Done").clicked() {
                             self.result = None;
@@ -180,10 +190,10 @@ impl ExportDialog {
                     });
                 }
                 Err(e) => {
-                    ui.colored_label(pal.danger, RichText::new("Export failed").size(17.0).strong());
-                    ui.add_space(4.0);
+                    ui.colored_label(pal.danger, RichText::new("Export failed").size(15.0).strong());
+                    ui.add_space(2.0);
                     ui.label(e);
-                    ui.add_space(12.0);
+                    ui.add_space(10.0);
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if widgets::accent_button(ui, "Close").clicked() {
                             self.result = None;
@@ -194,14 +204,9 @@ impl ExportDialog {
         }
     }
 
-    /// Export settings, drawn into the compact export window (the editor is hidden while it
-    /// is open). Escape or the window's close button dismisses it.
+    /// Export settings, drawn in the export dialog over the editor. Escape, Cancel or a click
+    /// outside dismisses it.
     pub fn settings_ui(&mut self, ed: &mut Editor, ui: &mut egui::Ui) {
-        if ui.input(|i| i.viewport().close_requested()) {
-            ui.ctx().send_viewport_cmd(egui::ViewportCommand::CancelClose);
-            self.open = false;
-            return;
-        }
             ui.label(RichText::new("Export").size(18.0).strong());
             ui.add_space(4.0);
             let left = sf_license::free_exports_left();

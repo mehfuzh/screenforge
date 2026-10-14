@@ -163,13 +163,22 @@ pub fn accent_button(ui: &mut Ui, text: &str) -> Response {
     ui.add(egui::Button::new(RichText::new(text).size(14.0).strong().color(Color32::WHITE)).fill(fill).corner_radius(CornerRadius::same(BUTTON_RADIUS)).min_size(vec2(0.0, BUTTON_H)))
 }
 
-/// Square accent button holding an icon (same height and corners as `accent_button`).
+/// Square icon button for the primary action (same height and corners as `accent_button`):
+/// quiet card fill at rest, accent only while hovered or pressed so it doesn't shout.
 pub fn accent_icon_button(ui: &mut Ui, icon: Icon, tip: &str) -> Response {
     let (rect, resp) = ui.allocate_exact_size(vec2(BUTTON_H + 4.0, BUTTON_H), Sense::click());
     let pal = theme::p();
-    let fill = if !ui.is_enabled() { pal.card_3 } else if resp.hovered() { pal.accent_hover } else { pal.accent };
+    let (fill, fg) = if !ui.is_enabled() {
+        (pal.card_3, pal.text_dim)
+    } else if resp.is_pointer_button_down_on() {
+        (pal.accent_hover, pal.clip_text)
+    } else if resp.hovered() {
+        (pal.accent, pal.clip_text)
+    } else {
+        (pal.card_2, pal.text)
+    };
     ui.painter().rect_filled(rect, CornerRadius::same(BUTTON_RADIUS), fill);
-    paint_icon(ui.painter(), Rect::from_center_size(rect.center(), vec2(16.0, 16.0)), icon, pal.clip_text);
+    paint_icon(ui.painter(), Rect::from_center_size(rect.center(), vec2(16.0, 16.0)), icon, fg);
     resp.on_hover_text(tip)
 }
 
@@ -252,6 +261,8 @@ pub enum Icon {
     Scissors,
     /// Arrow rising out of a tray (export / share).
     Export,
+    /// Window outline with a panel on its right edge (sidebar toggle).
+    Sidebar,
 }
 
 /// Microphone icon whose capsule fills from the bottom with the live input `level` (0..1).
@@ -466,6 +477,12 @@ pub fn paint_icon(p: &egui::Painter, rect: Rect, icon: Icon, color: Color32) {
                 let x = -0.85 + i as f32 * 0.34;
                 line((x, -h * 0.8), (x, h * 0.8));
             }
+        }
+        Icon::Sidebar => {
+            p.rect_stroke(rr(-0.9, -0.75, 0.9, 0.75), 2.0, s, egui::StrokeKind::Middle);
+            line((0.3, -0.75), (0.3, 0.75));
+            line((0.5, -0.4), (0.7, -0.4));
+            line((0.5, -0.1), (0.7, -0.1));
         }
         Icon::Scissors => {
             p.circle_stroke(pos2(c.x - 0.5 * r, c.y + 0.5 * r), 0.3 * r, s);

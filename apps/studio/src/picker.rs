@@ -229,17 +229,20 @@ impl Picker {
         self.menus_warm = false;
     }
 
-    /// Lay out the menus' text once so its glyphs are rasterized before a menu first opens.
-    fn warm_menu_text(&self, ui: &Ui) {
+    /// Lay out the menus' and the recent panel's text once so its glyphs are rasterized before
+    /// a menu or the panel first opens (a new glyph or size rebuilds the font atlas mid-frame).
+    fn warm_menu_text(&self, ui: &Ui, prefs: &Prefs) {
         let color = theme::p().on_glass;
-        let fonts = [egui::TextStyle::Body.resolve(ui.style()), egui::TextStyle::Button.resolve(ui.style()), egui::TextStyle::Small.resolve(ui.style())];
+        let fonts = [egui::TextStyle::Body.resolve(ui.style()), egui::TextStyle::Button.resolve(ui.style()), egui::TextStyle::Small.resolve(ui.style()), FontId::proportional(11.0), FontId::proportional(12.0), FontId::proportional(13.0)];
         let mut texts: Vec<String> = [
             "Don't record camera", "Don't record microphone", "Don't record system audio", "Record system audio from all apps",
             "Recording countdown", "None", "3 seconds", "5 seconds", "10 seconds", "Appearance", "Match system", "Light", "Dark", "Osaka Jade", "Quit ScreenForge",
+            "RECENT PROJECTS", "Open project…", "No projects yet. Record something or open a .screenstudio package.", "Loading…", "No preview", "0123456789 min h d ago", "Move to Trash",
         ]
         .map(String::from)
         .to_vec();
         texts.extend(self.inputs.cameras.iter().chain(&self.inputs.microphones).map(|d| d.name.clone()));
+        texts.extend(prefs.recent.iter().filter_map(|p| p.file_stem()).map(|s| s.to_string_lossy().into_owned()));
         ui.fonts_mut(|f| {
             for t in &texts {
                 for font in &fonts {
@@ -263,7 +266,7 @@ impl Picker {
             }
         }
         if !self.menus_warm {
-            self.warm_menu_text(ui);
+            self.warm_menu_text(ui, prefs);
             self.menus_warm = true;
         }
         if self.thumbs.is_none() {
@@ -416,7 +419,7 @@ impl Picker {
         // Menus open above the bar, so the window must be tall first. Grow it while the pointer
         // is on a menu button: a click then opens the menu at once instead of waiting a few
         // frames for the window to resize.
-        let menu_hover = cam_menu.hovered() || mic_menu.hovered() || sys_menu.hovered() || gear.hovered();
+        let menu_hover = cam_menu.hovered() || mic_menu.hovered() || sys_menu.hovered() || gear.hovered() || folder.hovered();
         let any_menu = egui::Popup::is_any_open(ui.ctx()) || menu_hover;
         if self.show_recent {
             let h = RECENT_WINDOW_H - 8.0 - 4.0;

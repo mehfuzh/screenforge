@@ -14,6 +14,9 @@ pub enum Screen {
     /// Countdown / recording HUD in the floating window.
     Recording(RecordingScreen),
     Editor(Box<Editor>),
+    /// The editor window is up and shows "Opening …" while the project loads; the count is
+    /// the frames left before loading starts (the resized window paints first).
+    Opening(PathBuf, u8),
 }
 
 pub struct App {
@@ -22,8 +25,6 @@ pub struct App {
     pub error: Option<String>,
     pub prefs: Prefs,
     window_mode: WindowMode,
-    /// Height the export settings window last needed.
-    export_settings_h: f32,
     picker_height: f32,
     placed_once: bool,
     tray: Option<crate::tray::Tray>,
@@ -50,15 +51,7 @@ pub struct App {
 enum WindowMode {
     Picker,
     Editor,
-    /// Compact progress window while an export runs (the editor is hidden meanwhile).
-    Exporting,
-    /// Export settings in a window of their own; the editor is hidden until it closes.
-    ExportSettings,
 }
-
-pub const EXPORT_WINDOW_SIZE: [f32; 2] = [480.0, 210.0];
-/// Width of the export settings window (its height follows the content).
-pub const EXPORT_SETTINGS_W: f32 = 484.0;
 
 #[derive(Default, serde::Serialize, serde::Deserialize)]
 pub struct Prefs {
@@ -105,10 +98,8 @@ impl App {
         let mut picker = Picker::default();
         picker.load_inputs();
         let perm_setup = (crate::permissions::PermissionsSetup::needed() || std::env::var_os("SF_SHOW_PERMISSIONS").is_some()).then(crate::permissions::PermissionsSetup::start);
-        let mut app = App { gpu, screen: Screen::Picker(picker), error: None, prefs, window_mode: WindowMode::Picker, export_settings_h: 560.0, picker_height: crate::picker::BAR_WINDOW_H, placed_once: false, tray: None, tray_tried: false, area_select: None, window_select: None, titlebar_fix: 0, perm_setup, confirm_close: None, quitting: false, fresh_open: None, pending_open: std::env::args().nth(1).map(PathBuf::from).filter(|p| p.is_dir() || p.extension().is_some_and(|e| e == "screenstudio")) };
-        if let Some(p) = std::env::args().nth(1) {
-            app.open_project(PathBuf::from(p), &cc.egui_ctx, rs);
-        }
+        let app = App { gpu, screen: Screen::Picker(picker), error: None, prefs, window_mode: WindowMode::Picker, picker_height: crate::picker::BAR_WINDOW_H, placed_once: false, tray: None, tray_tried: false, area_select: None, window_select: None, titlebar_fix: 0, perm_setup, confirm_close: None, quitting: false, fresh_open: None, pending_open: std::env::args().nth(1).map(PathBuf::from).filter(|p| p.is_dir() || p.extension().is_some_and(|e| e == "screenstudio")) };
+        // a project on the command line opens on the first frame (`pending_open`)
         app
     }
 
@@ -138,20 +129,6 @@ impl App {
                 ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition([((mon.x - w) / 2.0).max(0.0), ((mon.y - h) / 2.0 - 10.0).max(0.0)].into()));
                 ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
                 self.titlebar_fix = 3;
-            }
-            WindowMode::Exporting => {
-                let mon = ctx.input(|i| i.viewport().monitor_size).unwrap_or(egui::vec2(1920.0, 1080.0));
-                let [w, h] = EXPORT_WINDOW_SIZE;
-                ctx.send_viewport_cmd(egui::ViewportCommand::Resizable(false));
-                Self::set_fixed_size(ctx, w, h);
-                ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition([((mon.x - w) / 2.0).max(0.0), ((mon.y - h) / 2.0).max(0.0)].into()));
-            }
-            WindowMode::ExportSettings => {
-                let mon = ctx.input(|i| i.viewport().monitor_size).unwrap_or(egui::vec2(1920.0, 1080.0));
-                let (w, h) = (EXPORT_SETTINGS_W, self.export_settings_h);
-                ctx.send_viewport_cmd(egui::ViewportCommand::Resizable(false));
-                Self::set_fixed_size(ctx, w, h);
-                ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition([((mon.x - w) / 2.0).max(0.0), ((mon.y - h) / 2.0 - 40.0).max(0.0)].into()));
             }
             WindowMode::Picker => {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Decorations(false));
@@ -231,6 +208,16 @@ impl App {
         }
     }
 
+    /// Switch to the editor window and show "Opening …"; the project loads a couple of frames
+    /// later (`open_project`), so the window never sits empty while it does.
+    fn begin_open(&mut self, path: PathBuf, ctx: &egui::Context) {
+        self.leave_editor();
+        self.screen = Screen::Opening(path, 2);
+        self.set_window_mode(ctx, WindowMode::Editor);
+        ctx.send_viewport_cmd(egui::ViewportCommand::Title(String::new()));
+        ctx.request_repaint();
+    }
+
     pub fn open_project(&mut self, path: PathBuf, ctx: &egui::Context, rs: &egui_wgpu::RenderState) {
         match Editor::open(&path, self.gpu.clone(), rs) {
             Ok(mut ed) => {
@@ -242,11 +229,24 @@ impl App {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Title(String::new()));
                 let _ = ed_name(&path);
             }
-            Err(e) => self.error = Some(format!("Could not open {}:\n{e:#}", path.display())),
+            Err(e) => {
+                if matches!(self.screen, Screen::Opening(..)) {
+                    self.show_picker(ctx);
+                }
+                self.error = Some(format!("Could not open {}:\n{e:#}", path.display()));
+            }
+        }
+    }
+
+    /// Save the open project's unsaved changes before the editor is replaced or the app quits.
+    fn leave_editor(&mut self) {
+        if let Screen::Editor(ed) = &mut self.screen {
+            ed.save_if_dirty();
         }
     }
 
     fn show_picker(&mut self, ctx: &egui::Context) {
+        self.leave_editor();
         let mut picker = Picker::default();
         picker.load_inputs();
         self.screen = Screen::Picker(picker);
@@ -257,15 +257,29 @@ impl App {
     }
 }
 
+/// Placeholder while a project loads: its name and a spinner, centred on the editor background.
+fn opening_ui(ui: &mut egui::Ui, path: &std::path::Path) {
+    let pal = crate::theme::p();
+    let rect = ui.max_rect();
+    ui.painter().rect_filled(rect, 0.0, pal.bg);
+    let c = rect.center();
+    egui::Spinner::new().size(22.0).color(pal.text_dim).paint_at(ui, egui::Rect::from_center_size(egui::pos2(c.x, c.y - 22.0), egui::vec2(22.0, 22.0)));
+    ui.painter().text(egui::pos2(c.x, c.y + 10.0), egui::Align2::CENTER_CENTER, format!("Opening {}", ed_name(path)), egui::FontId::proportional(14.0), pal.text_dim);
+}
+
 fn ed_name(p: &std::path::Path) -> String {
     p.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default()
 }
 
 impl eframe::App for App {
+    fn on_exit(&mut self) {
+        self.leave_editor();
+    }
+
     fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
         match self.window_mode {
             WindowMode::Picker => [0.0, 0.0, 0.0, 0.0],
-            WindowMode::Editor | WindowMode::Exporting | WindowMode::ExportSettings => {
+            WindowMode::Editor => {
                 let c = crate::theme::p().bg;
                 [c.r() as f32 / 255.0, c.g() as f32 / 255.0, c.b() as f32 / 255.0, 1.0]
             }
@@ -307,7 +321,7 @@ impl eframe::App for App {
         let mut go_home = false;
         let mut action: Option<PickerAction> = None;
         let mut outcome: Option<RecordingOutcome> = None;
-        let mut want_mode: Option<WindowMode> = None;
+        let mut load_now: Option<PathBuf> = None;
         match &mut self.screen {
             Screen::Picker(p) => {
                 // allow dragging the frameless window by its background
@@ -328,37 +342,6 @@ impl eframe::App for App {
                 }
                 outcome = Some(r.ui(ui, ctx));
             }
-            Screen::Editor(ed) if ed.export.open && !ed.export.is_busy() => {
-                want_mode = Some(WindowMode::ExportSettings);
-                let mut ex = std::mem::take(&mut ed.export);
-                // the editor (which polls otherwise) is hidden: drain the activation result here
-                ex.poll(ctx);
-                let resp = egui::Frame::NONE.fill(crate::theme::p().bg).inner_margin(egui::Margin { left: 22, right: 22, top: 34, bottom: 18 }).show(ui, |ui| {
-                    ui.set_width(EXPORT_SETTINGS_W - 44.0);
-                    ex.settings_ui(ed, ui);
-                });
-                ed.export = ex;
-                // the window follows the content (the license form can expand)
-                let need = resp.response.rect.height().ceil();
-                if self.window_mode == WindowMode::ExportSettings && (need - self.export_settings_h).abs() > 1.0 {
-                    self.export_settings_h = need;
-                    Self::set_fixed_size(ctx, EXPORT_SETTINGS_W, need);
-                }
-            }
-            Screen::Editor(ed) if ed.export.is_busy() || matches!(self.window_mode, WindowMode::Exporting | WindowMode::ExportSettings) => {
-                ed.export.poll(ctx);
-                if ed.export.is_busy() {
-                    want_mode = Some(WindowMode::Exporting);
-                    // top margin clears the traffic lights (transparent title bar)
-                    egui::Frame::NONE.fill(crate::theme::p().bg).inner_margin(egui::Margin { left: 22, right: 22, top: 34, bottom: 14 }).show(ui, |ui| {
-                        ui.set_min_height(EXPORT_WINDOW_SIZE[1] - 28.0);
-                        ed.export.compact_ui(ui);
-                    });
-                } else {
-                    // export finished or was dismissed: bring the editor back
-                    want_mode = Some(WindowMode::Editor);
-                }
-            }
             Screen::Editor(ed) => {
                 if ed.ui(ui, &rs) {
                     if ed.fresh_recording {
@@ -370,6 +353,15 @@ impl eframe::App for App {
                 if let Some(p) = ed.renamed_to.take() {
                     self.prefs.recent.retain(|r| r.exists());
                     self.prefs.touch(&p);
+                }
+            }
+            Screen::Opening(path, frames) => {
+                opening_ui(ui, path);
+                if *frames == 0 {
+                    load_now = Some(path.clone());
+                } else {
+                    *frames -= 1;
+                    ctx.request_repaint();
                 }
             }
         }
@@ -579,11 +571,11 @@ impl eframe::App for App {
                 }
             }
         }
-        if let Some(m) = want_mode {
-            self.set_window_mode(ctx, m);
+        if let Some(p) = load_now {
+            self.open_project(p, ctx, &rs);
         }
         if let Some(p) = open_request {
-            self.open_project(p, ctx, &rs);
+            self.begin_open(p, ctx);
         }
 
         if let Some(err) = self.error.clone() {

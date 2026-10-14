@@ -32,13 +32,19 @@ pub struct Editor {
     pub selected_zoom: Option<String>,
     /// Selected detached audio clip (id).
     pub selected_audio: Option<String>,
+    /// The background music block is selected (⌫ removes the music).
+    pub selected_music: bool,
     pub dirty: bool,
+    /// Time of the last change; unsaved changes are written shortly after editing stops.
+    last_edit: Option<Instant>,
     pub timeline: TimelineWidget,
     pub export: ExportDialog,
     pub undo: Vec<sf_project::Project>,
     pub redo: Vec<sf_project::Project>,
     pub status: Option<(String, Instant)>,
     pub section: Section,
+    /// Right-hand sidebar (icon rail + inspector) is shown; toggled from the title bar or ⌘\.
+    pub sidebar_open: bool,
     pub audio: AudioPlayer,
     pub preview_quality: PreviewQuality,
     pub preview_scale: f32,
@@ -81,7 +87,9 @@ impl Editor {
             selected_slice: None,
             selected_zoom: None,
             selected_audio: None,
+            selected_music: false,
             dirty: false,
+            last_edit: None,
             timeline: TimelineWidget::default(),
             export: ExportDialog::default(),
             undo: vec![],
@@ -93,6 +101,7 @@ impl Editor {
                 Ok("animations") => Section::Animations,
                 _ => Section::General,
             },
+            sidebar_open: true,
             audio,
             preview_quality: PreviewQuality::Full,
             preview_scale: 1.0,
@@ -113,7 +122,12 @@ impl Editor {
     /// Re-render the preview on the next frame (after a live edit).
     pub fn invalidate_preview(&mut self) {
         self.last_rendered_ms = None;
+        self.mark_dirty();
+    }
+
+    fn mark_dirty(&mut self) {
         self.dirty = true;
+        self.last_edit = Some(Instant::now());
     }
 
     /// Snapshot for undo, then apply an edit to the project and rebuild derived state.
@@ -130,7 +144,7 @@ impl Editor {
     fn after_edit(&mut self) {
         self.session.rebuild();
         self.preview_size = self.session.output_size(1080);
-        self.dirty = true;
+        self.mark_dirty();
         self.last_rendered_ms = None;
         self.playhead_ms = self.playhead_ms.min(self.duration_ms());
         self.audio.update_timeline(&self.session);
@@ -224,14 +238,42 @@ impl Editor {
         }
     }
 
+    /// Write unsaved changes before the editor goes away (back to projects, another project,
+    /// quit). Skipped when the package is gone, e.g. it was just moved to the Trash.
+    pub fn save_if_dirty(&mut self) {
+        if self.dirty && self.path.exists() {
+            self.save();
+        }
+    }
+
+    /// Autosave once editing has paused (no drag in progress), so changes survive a crash or a
+    /// force quit too. Only the project files are written; the QuickLook preview is left for
+    /// explicit saves and leaving the editor.
+    fn autosave(&mut self, ctx: &egui::Context) {
+        const DELAY: std::time::Duration = std::time::Duration::from_millis(1500);
+        let Some(t) = self.last_edit.filter(|_| self.dirty) else { return };
+        let since = t.elapsed();
+        if since < DELAY || ctx.input(|i| i.pointer.any_down()) || !self.path.exists() {
+            ctx.request_repaint_after(DELAY.saturating_sub(since).max(std::time::Duration::from_millis(100)));
+            return;
+        }
+        self.write_project(false);
+    }
+
     pub fn save(&mut self) {
+        self.write_project(true);
+    }
+
+    fn write_project(&mut self, explicit: bool) {
         let src = self.session.timeline.output_to_source(self.playhead_ms).unwrap_or(0.0);
         self.session.pkg.project.data.insert("last-playback-position-source-time-ms".into(), serde_json::json!(src));
         match self.session.pkg.save() {
             Ok(()) => {
-                sf_session::preview::write_quicklook_preview_async(&self.session.pkg.path);
                 self.dirty = false;
-                self.set_status("Saved");
+                if explicit {
+                    sf_session::preview::write_quicklook_preview_async(&self.session.pkg.path);
+                    self.set_status("Saved");
+                }
             }
             Err(e) => self.set_status(format!("Save failed: {e}")),
         }
@@ -302,6 +344,11 @@ impl Editor {
     }
 
     fn tick(&mut self, ctx: &egui::Context) {
+        self.autosave(ctx);
+        // audio decodes in the background: keep drawing until the waveform can show
+        if self.audio.is_loading() {
+            ctx.request_repaint_after(std::time::Duration::from_millis(100));
+        }
         if self.playing {
             if self.audio.has_audio() && self.audio.available {
                 self.playhead_ms = self.audio.position_ms();
@@ -325,11 +372,13 @@ impl Editor {
     }
 
     fn shortcuts(&mut self, ctx: &egui::Context) {
-        if ctx.memory(|m| m.focused().is_some()) {
+        // the export dialog is modal: its own keys (Esc) are handled in ExportDialog::poll
+        if ctx.memory(|m| m.focused().is_some()) || self.export.open || self.export.is_busy() {
             return;
         }
         let frame = 1000.0 / 60.0;
         let (mut split, mut del, mut undo, mut redo, mut save, mut export, mut prev_b, mut next_b, mut toggle) = (false, false, false, false, false, false, false, false, false);
+        let mut toggle_sidebar = false;
         let mut section: Option<Section> = None;
         ctx.input_mut(|i| {
             toggle = i.consume_key(egui::Modifiers::NONE, egui::Key::Space);
@@ -347,6 +396,7 @@ impl Editor {
             export = i.consume_key(egui::Modifiers::COMMAND | egui::Modifiers::SHIFT, egui::Key::E) || i.consume_key(egui::Modifiers::COMMAND, egui::Key::E);
             prev_b = i.consume_key(egui::Modifiers::NONE, egui::Key::OpenBracket);
             next_b = i.consume_key(egui::Modifiers::NONE, egui::Key::CloseBracket);
+            toggle_sidebar = i.consume_key(egui::Modifiers::COMMAND, egui::Key::Backslash);
             if i.consume_key(egui::Modifiers::COMMAND, egui::Key::Equals) { self.timeline.px_per_sec = (self.timeline.px_per_sec * 1.25).min(400.0); }
             if i.consume_key(egui::Modifiers::COMMAND, egui::Key::Minus) { self.timeline.px_per_sec = (self.timeline.px_per_sec / 1.25).max(5.0); }
             for (n, key) in [egui::Key::Num1, egui::Key::Num2, egui::Key::Num3, egui::Key::Num4, egui::Key::Num5, egui::Key::Num7, egui::Key::Num8, egui::Key::Num9, egui::Key::Num0].iter().enumerate() {
@@ -364,7 +414,11 @@ impl Editor {
         if export { self.export.open = true; }
         if prev_b { crate::timeline::jump_boundary(self, false); }
         if next_b { crate::timeline::jump_boundary(self, true); }
-        if let Some(s) = section { self.section = s; }
+        if toggle_sidebar { self.sidebar_open = !self.sidebar_open; }
+        if let Some(s) = section {
+            self.section = s;
+            self.sidebar_open = true;
+        }
         if !self.playing {
             self.audio.seek(self.playhead_ms);
         }
@@ -401,6 +455,12 @@ impl Editor {
     }
 
     pub fn delete_selected(&mut self) {
+        if std::mem::take(&mut self.selected_music) {
+            self.edit(|p| p.config.audio.background_audio_file_name = None);
+            self.reload_audio();
+            self.set_status("Removed background music");
+            return;
+        }
         if let Some(id) = self.selected_audio.take() {
             self.edit(move |p| {
                 use sf_project::SceneAudioExt;
@@ -481,6 +541,11 @@ impl Editor {
                     self.remove_requested = true;
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    let tip = if self.sidebar_open { "Hide sidebar (⌘\\)" } else { "Show sidebar (⌘\\)" };
+                    if widgets::icon_button(ui, widgets::Icon::Sidebar, 18.0, tip).clicked() {
+                        self.sidebar_open = !self.sidebar_open;
+                    }
+                    ui.add_space(6.0);
                     if widgets::accent_icon_button(ui, widgets::Icon::Export, "Export (⌘E)").clicked() {
                         self.export.open = true;
                     }
@@ -499,7 +564,7 @@ impl Editor {
                         self.undo();
                     }
                     ui.add_space(6.0);
-                    widgets::icon_button(ui, widgets::Icon::Command, 16.0, "Shortcuts: Space play · S split · ⌫ delete · ⌘Z undo · ⌘S save · ⌘⇧E export · [ ] jump cuts · ⌘1…⌘0 sidebar");
+                    widgets::icon_button(ui, widgets::Icon::Command, 16.0, "Shortcuts: Space play · S split · ⌫ delete · ⌘Z undo · ⌘S save · ⌘⇧E export · [ ] jump cuts · ⌘1…⌘0 sidebar · ⌘\\ toggle sidebar");
                     if let Some((s, t)) = &self.status {
                         if t.elapsed().as_secs() < 4 {
                             ui.label(RichText::new(s).color(theme::p().text_dim));
@@ -509,8 +574,9 @@ impl Editor {
             });
         });
 
-        // ── right: icon rail + sidebar card ──
-        egui::Panel::right("sidebar").resizable(true).default_size(430.0).min_size(360.0).frame(egui::Frame::default().fill(theme::p().bg).inner_margin(egui::Margin { left: 0, right: 12, top: 8, bottom: 12 })).show(root, |ui| {
+        // ── right: icon rail + sidebar card (collapsible; dragging it shut also hides it) ──
+        let mut sidebar_open = self.sidebar_open;
+        egui::Panel::right("sidebar").resizable(true).default_size(430.0).min_size(360.0).frame(egui::Frame::default().fill(theme::p().bg).inner_margin(egui::Margin { left: 0, right: 12, top: 8, bottom: 12 })).show_collapsible(root, &mut sidebar_open, |ui| {
             ui.horizontal_top(|ui| {
                 ui.vertical(|ui| {
                     ui.add_space(8.0);
@@ -531,6 +597,7 @@ impl Editor {
                 sidebar::ui(self, &mut inner, self.section);
             });
         });
+        self.sidebar_open = sidebar_open;
 
         // ── bottom: transport + timeline ──
         egui::Panel::bottom("timeline").resizable(true).default_size(280.0).min_size(200.0).frame(egui::Frame::default().fill(theme::p().bg).inner_margin(egui::Margin { left: 12, right: 12, top: 4, bottom: 10 })).show(root, |ui| {
@@ -584,10 +651,41 @@ impl Editor {
             widgets::roadmap(&mut rail_ui, |ui| widgets::rail_icon(ui, widgets::Icon::Mask, false, "Mask"));
         });
 
-        // the export settings open in their own compact window (see App::ui)
-        self.export.poll(ctx);
+        self.export_modal(ctx);
 
         go_home
+    }
+
+    /// Export dialog over the dimmed editor, like Screen Studio's: settings first, then the
+    /// progress and result of the running export in the same dialog.
+    fn export_modal(&mut self, ctx: &egui::Context) {
+        let mut ex = std::mem::take(&mut self.export);
+        ex.poll(ctx);
+        if ex.open || ex.is_busy() {
+            // opening the dialog (button or ⌘E) stops playback behind it
+            if self.playing {
+                self.pause();
+            }
+            let pal = theme::p();
+            let frame = egui::Frame::NONE.fill(pal.bg).stroke(egui::Stroke::new(1.0, pal.border)).corner_radius(theme::RADIUS).inner_margin(egui::Margin::symmetric(22, 18)).shadow(ctx.global_style().visuals.window_shadow);
+            // progress gets its own (smaller) modal: an egui area keeps its last size per id
+            let busy = ex.is_busy();
+            let id = egui::Id::new(if busy { "export_progress" } else { "export_dialog" });
+            let resp = egui::Modal::new(id).frame(frame).show(ctx, |ui| {
+                if busy {
+                    ui.set_width(crate::export::PROGRESS_W);
+                    ex.compact_ui(ui);
+                } else {
+                    ui.set_width(crate::export::DIALOG_W);
+                    ex.settings_ui(self, ui);
+                }
+            });
+            // clicking the backdrop dismisses the settings (never a running export)
+            if resp.backdrop_response.clicked() && !ex.is_busy() {
+                ex.open = false;
+            }
+        }
+        self.export = ex;
     }
 
     /// Rename the project: updates `project.name`, renames the package folder on disk and
