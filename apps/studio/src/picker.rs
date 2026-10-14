@@ -131,15 +131,31 @@ pub struct RecordRequest {
 }
 
 /// Thumbnails decoded on a background thread (the QuickLook previews are full-size PNGs).
+/// A project whose preview is still being written (just saved in the editor) is decoded
+/// again once the write finishes.
 pub struct ThumbCache {
+    tx: std::sync::mpsc::Sender<(PathBuf, egui::ColorImage)>,
     rx: std::sync::mpsc::Receiver<(PathBuf, egui::ColorImage)>,
     pub textures: std::collections::HashMap<PathBuf, egui::TextureHandle>,
-    done: bool,
+    /// Projects whose preview is being written; reloaded when the write finishes.
+    pub refreshing: Vec<PathBuf>,
+    /// Decode threads still running.
+    decoding: std::sync::Arc<std::sync::atomic::AtomicUsize>,
 }
 
 impl ThumbCache {
     pub fn start(paths: Vec<PathBuf>) -> Self {
         let (tx, rx) = std::sync::mpsc::channel();
+        let refreshing = paths.iter().filter(|p| sf_session::preview::is_pending(p)).cloned().collect();
+        let cache = ThumbCache { tx, rx, textures: Default::default(), refreshing, decoding: Default::default() };
+        cache.decode(paths);
+        cache
+    }
+
+    fn decode(&self, paths: Vec<PathBuf>) {
+        let tx = self.tx.clone();
+        let decoding = self.decoding.clone();
+        decoding.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         std::thread::spawn(move || {
             for p in paths {
                 let preview = p.join("QuickLook").join("Preview.png");
@@ -151,29 +167,25 @@ impl ThumbCache {
                     break;
                 }
             }
+            decoding.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
         });
-        ThumbCache { rx, textures: Default::default(), done: false }
     }
 
-    /// True once the decoding thread has hung up.
-    pub fn rx_done(&self) -> bool {
-        self.done
+    /// True while thumbnails are still decoding or previews are still being written.
+    pub fn busy(&self) -> bool {
+        self.decoding.load(std::sync::atomic::Ordering::SeqCst) > 0 || !self.refreshing.is_empty()
     }
 
-    /// Upload any thumbnails that finished decoding.
+    /// Upload any thumbnails that finished decoding, and reload those whose preview was rewritten.
     pub fn pump(&mut self, ctx: &egui::Context) {
-        loop {
-            match self.rx.try_recv() {
-                Ok((p, ci)) => {
-                    let name = format!("thumb:{}", p.display());
-                    self.textures.insert(p, ctx.load_texture(name, ci, egui::TextureOptions::LINEAR));
-                }
-                Err(std::sync::mpsc::TryRecvError::Empty) => break,
-                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                    self.done = true;
-                    break;
-                }
-            }
+        let (pending, done): (Vec<PathBuf>, Vec<PathBuf>) = std::mem::take(&mut self.refreshing).into_iter().partition(|p| sf_session::preview::is_pending(p));
+        self.refreshing = pending;
+        if !done.is_empty() {
+            self.decode(done);
+        }
+        while let Ok((p, ci)) = self.rx.try_recv() {
+            let name = format!("thumb:{}", p.display());
+            self.textures.insert(p, ctx.load_texture(name, ci, egui::TextureOptions::LINEAR));
         }
     }
 }
@@ -274,7 +286,7 @@ impl Picker {
         }
         if let Some(t) = self.thumbs.as_mut() {
             t.pump(ui.ctx());
-            if !t.rx_done() {
+            if t.busy() {
                 ui.ctx().request_repaint_after(std::time::Duration::from_millis(50));
             }
         }
@@ -418,23 +430,32 @@ impl Picker {
 
         // Menus open above the bar, so the window must be tall first. Grow it while the pointer
         // is on a menu button: a click then opens the menu at once instead of waiting a few
-        // frames for the window to resize.
-        let menu_hover = cam_menu.hovered() || mic_menu.hovered() || sys_menu.hovered() || gear.hovered() || folder.hovered();
+        // frames for the window to resize. Tested against this frame's button rects: egui's
+        // hover state uses last frame's layout, which is off by the resize just made.
+        let pointer = ui.input(|i| i.pointer.latest_pos());
+        let menu_hover = pointer.is_some_and(|p| [&cam_menu, &mic_menu, &sys_menu, &gear, &folder].iter().any(|r| r.rect.contains(p)));
         let any_menu = egui::Popup::is_any_open(ui.ctx()) || menu_hover;
         if self.show_recent {
             let h = RECENT_WINDOW_H - 8.0 - 4.0;
             let panel = egui::Rect::from_min_size(pos2(pill.left(), pill.top() - 8.0 - h), vec2(pill.width(), h));
             self.recent_panel(ui, panel, prefs, &mut action);
         }
-        self.wanted_height = if self.show_recent { PILL_MARGIN + PILL_SIZE.y + RECENT_WINDOW_H } else if any_menu { MENU_WINDOW_H } else { BAR_WINDOW_H };
+        let wanted = if self.show_recent { PILL_MARGIN + PILL_SIZE.y + RECENT_WINDOW_H } else if any_menu { MENU_WINDOW_H } else { BAR_WINDOW_H };
+        // never shrink mid-click: resizing moves the bar in window coordinates, and the release
+        // would land somewhere else and lose the click
+        self.wanted_height = if ui.input(|i| i.pointer.any_down()) { wanted.max(self.wanted_height) } else { wanted };
         if let Some(s) = &self.status {
             let w = 520.0;
             let r = egui::Rect::from_center_size(pos2(pill.center().x, pill.top() - 22.0), vec2(w, 28.0));
             ui.painter().rect_filled(r, CornerRadius::same(8), theme::p().glass_solid);
             ui.painter().text(r.center(), Align2::CENTER_CENTER, s, FontId::proportional(13.0), theme::p().text_dim);
         }
-        // clicking anything else on the bar (mode buttons, input menus, settings) or picking a
-        // project hides the recent panel
+        // Esc, clicking anything else on the bar (mode buttons, input menus, settings) or
+        // picking a project hides the recent panel
+        if self.show_recent && ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+            self.show_recent = false;
+            ui.ctx().request_repaint();
+        }
         if self.show_recent && !folder_clicked {
             let other_click = ui.input(|i| i.pointer.any_click()) && !self.pointer_in_recent(ui);
             if action.is_some() || egui::Popup::is_any_open(ui.ctx()) || other_click {
@@ -468,12 +489,13 @@ impl Picker {
             inner.label(RichText::new("No projects yet. Record something or open a .screenstudio package.").color(theme::p().text_dim));
             return;
         }
-        let thumbs = self.thumbs.as_ref().map(|t| &t.textures);
+        let thumbs = self.thumbs.as_ref();
         egui::ScrollArea::horizontal().show(&mut inner, |ui| {
             ui.horizontal(|ui| {
                 for path in &recent {
-                    let tex = thumbs.and_then(|t| t.get(path));
-                    let (card, trash) = project_card(ui, path, tex);
+                    let tex = thumbs.and_then(|t| t.textures.get(path));
+                    let refreshing = thumbs.is_some_and(|t| t.refreshing.contains(path));
+                    let (card, trash) = project_card(ui, path, tex, refreshing);
                     if trash {
                         *action = Some(PickerAction::RemoveProject(path.clone()));
                     } else if card.clicked() {
@@ -602,8 +624,9 @@ fn bar_menu(resp: &egui::Response, align: egui::RectAlign, add: impl FnOnce(&mut
 
 
 /// Thumbnail card for a recent project (uses the package's QuickLook preview).
-/// Returns the card response and whether its trash button was clicked.
-fn project_card(ui: &mut Ui, path: &std::path::Path, tex: Option<&egui::TextureHandle>) -> (egui::Response, bool) {
+/// `refreshing`: a new preview is being written (the project was just saved); a spinner sits
+/// over the old one. Returns the card response and whether its trash button was clicked.
+fn project_card(ui: &mut Ui, path: &std::path::Path, tex: Option<&egui::TextureHandle>, refreshing: bool) -> (egui::Response, bool) {
     let name = path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
     let size = vec2(176.0, 150.0);
     let (rect, resp) = ui.allocate_exact_size(size, Sense::click());
@@ -639,6 +662,11 @@ fn project_card(ui: &mut Ui, path: &std::path::Path, tex: Option<&egui::TextureH
         p.text(thumb.center(), Align2::CENTER_CENTER, if path.join("QuickLook/Preview.png").is_file() { "Loading…" } else { "No preview" }, FontId::proportional(12.0), theme::p().text_dim);
     }
     p.rect_stroke(thumb, 8.0, Stroke::new(3.0, theme::p().glass_solid), egui::StrokeKind::Outside);
+    if refreshing && drawn {
+        let badge = egui::Rect::from_min_size(pos2(thumb.left() + 6.0, thumb.bottom() - 30.0), vec2(24.0, 24.0));
+        p.rect_filled(badge, CornerRadius::same(2), theme::p().glass_solid);
+        egui::Spinner::new().size(14.0).color(theme::p().text_dim).paint_at(ui, badge.shrink(5.0));
+    }
     if card_hovered {
         p.rect_filled(trash_rect, CornerRadius::same(2), if trash.hovered() { theme::p().danger } else { theme::p().glass_solid });
         widgets::paint_icon(p, trash_rect.shrink(5.0), widgets::Icon::Trash, if trash.hovered() { Color32::WHITE } else { theme::p().on_glass });

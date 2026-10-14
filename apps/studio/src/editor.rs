@@ -55,6 +55,9 @@ pub struct Editor {
     /// The Trash button was pressed: the app asks for confirmation, then moves the project to
     /// the Trash and goes back to the toolbar.
     pub remove_requested: bool,
+    /// The project was autosaved since the QuickLook preview was last written; leaving the
+    /// editor writes a fresh one so the recent-projects thumbnail shows the edits.
+    preview_stale: bool,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -64,15 +67,22 @@ pub enum PreviewQuality {
 }
 
 impl Editor {
-    pub fn open(path: &Path, gpu: Gpu, _rs: &egui_wgpu::RenderState) -> Result<Self> {
-        let mut session = Session::open(path, gpu.clone())?;
+    /// The slow part of opening a project (package, cursor track, sprites); safe to run on a
+    /// background thread so the "Opening …" screen keeps animating.
+    pub fn load_session(path: &Path, gpu: Gpu) -> Result<Session> {
+        let mut session = Session::open(path, gpu)?;
         session.decode_max_width = Some(1440);
+        Ok(session)
+    }
+
+    /// Finish opening on the UI thread with a session from `load_session`.
+    pub fn with_session(path: &Path, session: Session, gpu: Gpu) -> Self {
         let preview_size = session.output_size(1080);
         let compositor = Compositor::new(gpu);
         let audio = AudioPlayer::new();
         audio.load(&session);
         let start_ms = session.pkg.project.data.get("last-playback-position-source-time-ms").and_then(|v| v.as_f64()).and_then(|src| session.timeline.source_to_output(src)).unwrap_or(0.0);
-        Ok(Editor {
+        Editor {
             fresh_recording: false,
             path: path.to_path_buf(),
             session,
@@ -108,7 +118,8 @@ impl Editor {
             title_edit: None,
             renamed_to: None,
             remove_requested: false,
-        })
+            preview_stale: false,
+        }
     }
 
     pub fn duration_ms(&self) -> f64 {
@@ -241,14 +252,14 @@ impl Editor {
     /// Write unsaved changes before the editor goes away (back to projects, another project,
     /// quit). Skipped when the package is gone, e.g. it was just moved to the Trash.
     pub fn save_if_dirty(&mut self) {
-        if self.dirty && self.path.exists() {
+        if (self.dirty || self.preview_stale) && self.path.exists() {
             self.save();
         }
     }
 
     /// Autosave once editing has paused (no drag in progress), so changes survive a crash or a
     /// force quit too. Only the project files are written; the QuickLook preview is left for
-    /// explicit saves and leaving the editor.
+    /// explicit saves and leaving the editor (`preview_stale`).
     fn autosave(&mut self, ctx: &egui::Context) {
         const DELAY: std::time::Duration = std::time::Duration::from_millis(1500);
         let Some(t) = self.last_edit.filter(|_| self.dirty) else { return };
@@ -272,7 +283,10 @@ impl Editor {
                 self.dirty = false;
                 if explicit {
                     sf_session::preview::write_quicklook_preview_async(&self.session.pkg.path);
+                    self.preview_stale = false;
                     self.set_status("Saved");
+                } else {
+                    self.preview_stale = true;
                 }
             }
             Err(e) => self.set_status(format!("Save failed: {e}")),
