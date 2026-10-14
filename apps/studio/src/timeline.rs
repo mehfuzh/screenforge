@@ -18,6 +18,7 @@ const MARKER_H: f32 = 22.0;
 const CLIP_H: f32 = 62.0;
 const AUDIO_H: f32 = 44.0;
 const ZOOM_H: f32 = 48.0;
+const MUSIC_H: f32 = 36.0;
 const GAP: f32 = 8.0;
 const HANDLE_W: f32 = 6.0;
 const SNAP_PX: f32 = 6.0;
@@ -96,9 +97,15 @@ impl Default for TimelineWidget {
 impl TimelineWidget {
     pub fn ui(&mut self, ed: &mut Editor, ui: &mut egui::Ui) {
         let avail = ui.available_size();
+        // lanes stack: an optional lane (audio, zooms) is only laid out while it has content, so
+        // deleting its last item collapses it and the lanes below move up
         let has_zooms = !ed.session.pkg.project.scenes[0].zooms.is_empty();
+        let show_audio_lane = audio_lane_visible(ed);
+        let show_music_lane = music_lane_visible(ed);
         let zoom_track_h = if has_zooms { ZOOM_H + GAP } else { 0.0 };
-        let (rect, resp) = ui.allocate_exact_size(vec2(avail.x, avail.y.max(RULER_H + MARKER_H + CLIP_H + AUDIO_H + zoom_track_h + GAP * 3.0)), Sense::click_and_drag());
+        let audio_track_h = if show_audio_lane { AUDIO_H + GAP } else { 0.0 };
+        let music_track_h = if show_music_lane { MUSIC_H + GAP } else { 0.0 };
+        let (rect, resp) = ui.allocate_exact_size(vec2(avail.x, avail.y.max(RULER_H + MARKER_H + CLIP_H + audio_track_h + music_track_h + zoom_track_h + GAP * 2.0)), Sense::click_and_drag());
         let painter = ui.painter_at(rect);
         painter.rect_filled(rect, 0.0, theme::p().bg);
 
@@ -345,17 +352,22 @@ impl TimelineWidget {
             }
         }
 
-        // audio track: its own lane only when detached (or when nothing was recorded, to show
-        // background music); linked audio is drawn inside the video clips above
+        // audio track: its own lane only while detached clips remain; linked audio is drawn
+        // inside the video clips above
         let audio_top = clip_top + CLIP_H + GAP;
-        let show_lane = !audio_in_clips;
-        if show_lane {
+        if show_audio_lane {
             self.audio_track_ui(ed, ui, rect, audio_top, x_of, ms_of, &mut seek_to);
         }
 
+        // background music: a lane of its own, whether or not audio was recorded
+        let music_top = if show_audio_lane { audio_top + AUDIO_H + GAP } else { audio_top };
+        if show_music_lane {
+            self.music_track_ui(ed, ui, rect, music_top, x_of, ms_of, &mut seek_to);
+        }
+
         // zoom track (only shown once the project has zooms; add them from the tool rail,
-        // the sidebar, or the empty-space context menu below the audio track)
-        let zoom_top = if show_lane { audio_top + AUDIO_H + GAP } else { audio_top };
+        // the sidebar, or the empty-space context menu below the other lanes)
+        let zoom_top = if show_music_lane { music_top + MUSIC_H + GAP } else { music_top };
         let track_rect = if has_zooms { Rect::from_min_max(pos2(rect.left(), zoom_top), pos2(rect.right(), zoom_top + ZOOM_H)) } else { Rect::from_min_max(pos2(rect.left(), zoom_top), pos2(rect.right(), rect.bottom().max(zoom_top))) };
         if has_zooms {
             painter.rect(track_rect.shrink2(vec2(1.5, 0.0)), 10.0, theme::p().track_empty, Stroke::new(1.0, theme::p().border), egui::StrokeKind::Inside);
@@ -459,6 +471,11 @@ impl TimelineWidget {
             }
         }
 
+        // one selection at a time: picking a clip, zoom or audio clip deselects the music
+        if ed.selected_slice.is_some() || ed.selected_zoom.is_some() || ed.selected_audio.is_some() || !show_music_lane {
+            ed.selected_music = false;
+        }
+
         // snap guide
         if let Some(x) = self.snap_x {
             if x >= rect.left() && x <= rect.right() {
@@ -493,28 +510,51 @@ impl TimelineWidget {
         }
     }
 
+    /// Background music lane: one block over the whole video (the track loops), dimmed while
+    /// muted. Click scrubs; right-click mutes, sets the volume or removes the music.
+    #[allow(clippy::too_many_arguments)]
+    fn music_track_ui(&mut self, ed: &mut Editor, ui: &mut egui::Ui, rect: Rect, top: f32, x_of: impl Fn(f64) -> f32 + Copy, ms_of: impl Fn(f32) -> f64 + Copy, seek_to: &mut Option<f64>) {
+        let painter = ui.painter_at(rect);
+        let track_rect = Rect::from_min_max(pos2(rect.left(), top), pos2(rect.right(), top + MUSIC_H));
+        painter.rect(track_rect.shrink2(vec2(1.5, 0.0)), 10.0, theme::p().track_empty, Stroke::new(1.0, theme::p().border), egui::StrokeKind::Inside);
+        let a = ed.session.pkg.project.config.audio.clone();
+        let name = a.background_audio_file_name.as_deref().map(sf_session::assets::background_audio_label).unwrap_or_default();
+        let x0 = x_of(0.0);
+        let x1 = x_of(ed.duration_ms());
+        let block = Rect::from_min_max(pos2(x0 + 1.5, top + 3.0), pos2(x1 - 1.5, top + MUSIC_H - 3.0));
+        let selected = ed.selected_music;
+        if block.intersect(rect).width() > 0.0 {
+            let color = if a.mute_background_audio { theme::p().accent.gamma_multiply(0.4) } else { theme::p().accent };
+            glass_block(&painter, block, 8.0, color, selected);
+            let label = if a.mute_background_audio { format!("Music · {name} · muted") } else { format!("Music · {name} · {:.0}%", a.background_audio_volume * 100.0) };
+            let lx = block.left().max(rect.left()) + 12.0;
+            let text_rect = Rect::from_min_max(pos2(lx, block.top()), pos2(block.right().min(rect.right()) - 8.0, block.bottom()));
+            painter.with_clip_rect(text_rect).text(pos2(lx, block.center().y), egui::Align2::LEFT_CENTER, label, egui::FontId::proportional(13.0), theme::p().text);
+        }
+        let lane = ui.interact(track_rect, ui.id().with("musictrack"), Sense::click_and_drag());
+        if let Some(p) = lane.interact_pointer_pos() {
+            // clicking (or right-clicking) the block selects the music, so ⌫ removes it
+            if (lane.clicked() || lane.secondary_clicked()) && p.x >= block.left() && p.x <= block.right() {
+                ed.selected_music = true;
+                ed.selected_slice = None;
+                ed.selected_zoom = None;
+                ed.selected_audio = None;
+            }
+            if lane.clicked() || lane.drag_started() || lane.dragged() {
+                *seek_to = Some(ms_of(p.x));
+            }
+        }
+        lane.context_menu(|ui| music_menu(ed, ui));
+    }
+
+    #[allow(clippy::too_many_arguments)]
     fn audio_track_ui(&mut self, ed: &mut Editor, ui: &mut egui::Ui, rect: Rect, top: f32, x_of: impl Fn(f64) -> f32 + Copy, ms_of: impl Fn(f32) -> f64 + Copy, seek_to: &mut Option<f64>) {
         let painter = ui.painter_at(rect);
         let track_rect = Rect::from_min_max(pos2(rect.left(), top), pos2(rect.right(), top + AUDIO_H));
         painter.rect(track_rect.shrink2(vec2(1.5, 0.0)), 10.0, theme::p().track_empty, Stroke::new(1.0, theme::p().border), egui::StrokeKind::Inside);
         let tracks = crate::audio::AudioPlayer::available_tracks(&ed.session);
         let base_id = ui.id().with("audiotrack");
-        let music = {
-            let a = &ed.session.pkg.project.config.audio;
-            a.background_audio_file_name.as_deref().filter(|_| !a.mute_background_audio && ed.session.background_audio_path().is_some()).map(sf_session::assets::background_audio_label)
-        };
         if tracks.is_empty() {
-            match &music {
-                Some(name) => {
-                    // the whole lane shows the looping background track
-                    let lane = track_rect.shrink2(vec2(3.0, 4.0));
-                    glass_block(&painter, lane, 8.0, theme::p().accent, false);
-                    painter.text(pos2(lane.left() + 12.0, lane.center().y), egui::Align2::LEFT_CENTER, format!("Music · {name}"), egui::FontId::proportional(13.0), theme::p().text);
-                }
-                None => {
-                    painter.text(track_rect.center(), egui::Align2::CENTER_CENTER, "No audio recorded", egui::FontId::proportional(13.0), theme::p().text_dim);
-                }
-            }
             return;
         }
         let main_track = tracks[0].clone();
@@ -801,6 +841,44 @@ fn audio_menu(ed: &mut Editor, ui: &mut egui::Ui, id: &str, at_ms: f64) {
     }
 }
 
+/// The recorded-audio lane has something to show: detached clips that are left.
+fn audio_lane_visible(ed: &Editor) -> bool {
+    !crate::audio::AudioPlayer::available_tracks(&ed.session).is_empty() && ed.session.pkg.project.scenes[0].audio_clips().is_some_and(|cs| !cs.is_empty())
+}
+
+/// A background track is chosen and found (shown even while muted).
+fn music_lane_visible(ed: &Editor) -> bool {
+    ed.session.pkg.project.config.audio.background_audio_file_name.is_some() && ed.session.background_audio_path().is_some()
+}
+
+fn music_menu(ed: &mut Editor, ui: &mut egui::Ui) {
+    let a = ed.session.pkg.project.config.audio.clone();
+    if ui.button(if a.mute_background_audio { "Unmute music" } else { "Mute music" }).clicked() {
+        ed.edit(|p| p.config.audio.mute_background_audio = !p.config.audio.mute_background_audio);
+        ed.reload_audio();
+        ui.close();
+    }
+    ui.menu_button("Volume", |ui| {
+        for v in [0.05, 0.1, 0.2, 0.3, 0.5, 0.75, 1.0] {
+            if ui.selectable_label((a.background_audio_volume - v).abs() < 1e-6, format!("{:.0}%", v * 100.0)).clicked() {
+                ed.edit(move |p| {
+                    p.config.audio.background_audio_volume = v;
+                    p.config.audio.mute_background_audio = false;
+                });
+                ed.reload_audio();
+                ui.close();
+            }
+        }
+    });
+    ui.separator();
+    if ui.button("Remove music").clicked() {
+        ed.selected_music = false;
+        ed.edit(|p| p.config.audio.background_audio_file_name = None);
+        ed.reload_audio();
+        ui.close();
+    }
+}
+
 // ───────────── drag helpers ─────────────
 
 /// Allowed source range for trimming slice `index`: the previous slice's end (if it precedes
@@ -1057,6 +1135,14 @@ fn clip_menu(ed: &mut Editor, ui: &mut egui::Ui, index: usize, at_ms: f64) {
             let clips = sf_project::audio_clips::clips_from_slices(&ed.session.pkg.project.scenes[0], &rec_tracks);
             ed.edit(move |p| p.scenes[0].set_audio_clips(Some(clips)));
             ed.set_status("Audio detached: edit it on its own track");
+            ui.close();
+        }
+        ui.separator();
+    } else if !rec_tracks.is_empty() {
+        // also reachable here because the audio lane disappears once its last clip is deleted
+        if ui.button("Relink audio to video").clicked() {
+            ed.selected_audio = None;
+            ed.edit(|p| p.scenes[0].set_audio_clips(None));
             ui.close();
         }
         ui.separator();
