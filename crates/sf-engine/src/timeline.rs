@@ -101,6 +101,38 @@ impl Timeline {
         self.span_at_output(t).map(|s| 1.0 / s.time_scale).unwrap_or(1.0)
     }
 
+    /// Length of the timeline view (ms): every slice at its source length.
+    pub fn view_duration_ms(&self) -> f64 {
+        self.spans.iter().map(|s| s.source_duration_ms()).sum()
+    }
+
+    /// Position of output time `t` on the timeline view, where slices keep their source
+    /// length: a sped-up slice does not shrink, the playhead crosses it faster instead.
+    /// Outside the slices the view runs 1:1 with output time.
+    pub fn output_to_view(&self, t: f64) -> f64 {
+        let mut view = 0.0;
+        for s in &self.spans {
+            if t < s.output_end_ms {
+                return if t <= s.output_start_ms { view + (t - s.output_start_ms) } else { view + (t - s.output_start_ms) / s.time_scale };
+            }
+            view += s.source_duration_ms();
+        }
+        view + (t - self.duration_ms())
+    }
+
+    /// Inverse of [`Self::output_to_view`].
+    pub fn view_to_output(&self, v: f64) -> f64 {
+        let mut view = 0.0;
+        for s in &self.spans {
+            let len = s.source_duration_ms();
+            if v < view + len {
+                return if v <= view { s.output_start_ms + (v - view) } else { s.output_start_ms + (v - view) * s.time_scale };
+            }
+            view += len;
+        }
+        self.duration_ms() + (v - view)
+    }
+
     /// Is `t_src` in a slice boundary region, i.e. is the previous source ms cut? Used to
     /// reset springs across cuts so the camera does not fly across a jump.
     pub fn is_cut_at_output(&self, t: f64, epsilon_ms: f64) -> bool {
@@ -197,6 +229,21 @@ mod tests {
         assert_eq!(tl.speed_at_output(1200.0), 2.0);
         assert!(tl.is_cut_at_output(1000.5, 5.0));
         assert!(!tl.is_cut_at_output(500.0, 5.0));
+    }
+
+    #[test]
+    fn view_keeps_source_length() {
+        let tl = Timeline::from_slices(&slices());
+        assert_eq!(tl.view_duration_ms(), 2000.0);
+        assert_eq!(tl.output_to_view(500.0), 500.0);
+        assert_eq!(tl.output_to_view(1000.0), 1000.0);
+        assert_eq!(tl.output_to_view(1250.0), 1500.0);
+        assert_eq!(tl.output_to_view(1500.0), 2000.0);
+        assert_eq!(tl.output_to_view(1600.0), 2100.0);
+        assert_eq!(tl.output_to_view(-10.0), -10.0);
+        for v in [-10.0, 0.0, 400.0, 1000.0, 1500.0, 1999.0, 2000.0, 2100.0] {
+            assert!((tl.output_to_view(tl.view_to_output(v)) - v).abs() < 1e-9, "{v}");
+        }
     }
 
     #[test]

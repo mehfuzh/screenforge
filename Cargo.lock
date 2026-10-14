@@ -4618,6 +4618,7 @@ dependencies = [
  "objc2-foundation 0.3.2",
  "objc2-quartz-core 0.3.2",
  "parking_lot",
+ "raw-window-handle",
  "rfd",
  "serde",
  "serde_json",
@@ -4633,6 +4634,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "wgpu",
+ "x11rb",
 ]
 
 [[package]]

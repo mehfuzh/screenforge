@@ -1,4 +1,7 @@
-//! Timeline: slices (clips) on the output time axis, zoom track, playhead, scrubbing.
+//! Timeline: slices (clips) at their source length, zoom track, playhead, scrubbing.
+//!
+//! Positions are output time, drawn on the timeline's view axis (`Timeline::output_to_view`):
+//! a sped-up clip keeps its width and the playhead crosses it faster.
 //!
 //! Editing surface: clip edges trim (ripple), zoom items select/move/resize, context menus,
 //! snapping to the playhead and other item edges (hold Shift to disable).
@@ -29,6 +32,23 @@ const SNAP_LINE: Color32 = Color32::from_rgb(0xff, 0xd1, 0x5c);
 pub const SPEEDS: [f64; 11] = [0.5, 0.75, 1.0, 1.2, 1.4, 1.6, 1.8, 2.0, 3.0, 4.0, 8.0];
 pub const ZOOM_LEVELS: [f64; 6] = [1.25, 1.5, 2.0, 2.5, 3.0, 4.0];
 
+/// Screen x ↔ view ms (`Timeline::output_to_view`) for the current zoom and scroll.
+#[derive(Clone, Copy)]
+struct ViewMap {
+    left: f32,
+    px_per_sec: f32,
+    scroll_x: f32,
+}
+
+impl ViewMap {
+    fn x(&self, view_ms: f64) -> f32 {
+        self.left + 12.0 + (view_ms / 1000.0) as f32 * self.px_per_sec - self.scroll_x
+    }
+    fn view_ms(&self, x: f32) -> f64 {
+        ((x - self.left - 12.0 + self.scroll_x) / self.px_per_sec * 1000.0) as f64
+    }
+}
+
 #[derive(Clone, Copy, PartialEq)]
 enum DragKind {
     /// Trim a clip edge; `left` = source start.
@@ -50,7 +70,6 @@ struct Drag {
     /// Original output range (clips only).
     out0: f64,
     out1: f64,
-    time_scale: f64,
     /// Allowed source range for the item (neighbours / recording).
     lo: f64,
     hi: f64,
@@ -109,10 +128,10 @@ impl TimelineWidget {
         let painter = ui.painter_at(rect);
         painter.rect_filled(rect, 0.0, theme::p().bg);
 
-        let duration = ed.duration_ms().max(1.0);
+        let view_len = ed.session.timeline.view_duration_ms().max(1.0);
         // auto-fit zoom the first time
         if self.px_per_sec == 40.0 && self.scroll_x == 0.0 {
-            let fit = (rect.width() - 24.0) / (duration as f32 / 1000.0);
+            let fit = (rect.width() - 24.0) / (view_len as f32 / 1000.0);
             if fit.is_finite() && fit > 0.0 {
                 self.px_per_sec = fit.clamp(5.0, 400.0);
             }
@@ -144,18 +163,19 @@ impl TimelineWidget {
             }
             self.scroll_x -= pan;
         }
-        let content_w = duration as f32 / 1000.0 * self.px_per_sec + 24.0;
+        let content_w = view_len as f32 / 1000.0 * self.px_per_sec + 24.0;
         self.scroll_x = self.scroll_x.clamp(0.0, (content_w - rect.width()).max(0.0));
-        let (pps, sx, left) = (self.px_per_sec, self.scroll_x, rect.left());
-        let x_of = move |ms: f64| left + 12.0 + ms as f32 / 1000.0 * pps - sx;
-        let ms_of = move |x: f32| ((x - left - 12.0 + sx) / pps * 1000.0) as f64;
+        let map = ViewMap { left: rect.left(), px_per_sec: self.px_per_sec, scroll_x: self.scroll_x };
 
         // live drag update (before drawing so this frame reflects it)
         self.snap_x = None;
         if let Some(mut drag) = self.drag.take() {
             let (down, pos, shift) = ui.input(|i| (i.pointer.primary_down(), i.pointer.latest_pos(), i.modifiers.shift));
             if let Some(p) = pos {
-                self.snap_x = apply_drag(&mut drag, ed, p.x, shift, x_of, ms_of);
+                let view = ed.session.timeline.clone();
+                let x_of = |ms: f64| map.x(view.output_to_view(ms));
+                let ms_of = |x: f32| view.view_to_output(map.view_ms(x));
+                self.snap_x = apply_drag(&mut drag, ed, p.x, shift, map, x_of, ms_of);
             }
             if down {
                 self.drag = Some(drag);
@@ -168,6 +188,9 @@ impl TimelineWidget {
         if let Some(drag) = self.audio_drag.take() {
             let (down, pos, shift) = ui.input(|i| (i.pointer.primary_down(), i.pointer.latest_pos(), i.modifiers.shift));
             if let Some(p) = pos {
+                let view = ed.session.timeline.clone();
+                let x_of = |ms: f64| map.x(view.output_to_view(ms));
+                let ms_of = |x: f32| view.view_to_output(map.view_ms(x));
                 self.apply_audio_drag(&drag, ed, p.x, shift, x_of, ms_of);
             }
             if down {
@@ -179,20 +202,36 @@ impl TimelineWidget {
             }
         }
         let duration = ed.duration_ms().max(1.0);
+        // x ↔ output ms through this frame's slices (after any live drag above)
+        let view = ed.session.timeline.clone();
+        let x_of = |ms: f64| map.x(view.output_to_view(ms));
+        let ms_of = |x: f32| view.view_to_output(map.view_ms(x));
 
-        // ruler: "0:05" labels with a dot, and a dot halfway between
+        // ruler: "0:05" labels with a dot, and a dot halfway between. Output time, so marks
+        // crowd together over sped-up clips; labels and dots that would overlap are skipped.
         let ruler = Rect::from_min_size(rect.min, vec2(rect.width(), RULER_H));
         let step_s = nice_step(self.px_per_sec);
+        let (mut last_label, mut last_dot) = (f32::MIN, f32::MIN);
         let mut t = 0.0f64;
         while t <= duration / 1000.0 + step_s {
             let x = x_of(t * 1000.0);
-            if x >= rect.left() - 40.0 && x <= rect.right() + 40.0 {
-                if t > 0.0 {
+            if x > rect.right() + 40.0 {
+                break;
+            }
+            if x >= rect.left() - 40.0 {
+                if t > 0.0 && x - last_label >= 56.0 {
                     painter.text(pos2(x, ruler.top() + 8.0), egui::Align2::CENTER_CENTER, fmt_ruler(t), egui::FontId::proportional(13.0), theme::p().ruler_text);
+                    last_label = x;
                 }
-                painter.circle_filled(pos2(x, ruler.bottom() - 3.0), 2.0, theme::p().ruler_text);
+                if x - last_dot >= 8.0 {
+                    painter.circle_filled(pos2(x, ruler.bottom() - 3.0), 2.0, theme::p().ruler_text);
+                    last_dot = x;
+                }
                 let xh = x_of((t + step_s / 2.0) * 1000.0);
-                painter.circle_filled(pos2(xh, ruler.bottom() - 3.0), 2.0, theme::p().ruler_text.gamma_multiply(0.6));
+                if xh - last_dot >= 8.0 {
+                    painter.circle_filled(pos2(xh, ruler.bottom() - 3.0), 2.0, theme::p().ruler_text.gamma_multiply(0.6));
+                    last_dot = xh;
+                }
             }
             t += step_s;
         }
@@ -340,7 +379,6 @@ impl TimelineWidget {
                                 src1: span.source_end_ms,
                                 out0: span.output_start_ms,
                                 out1: span.output_end_ms,
-                                time_scale: span.time_scale,
                                 lo,
                                 hi,
                                 targets,
@@ -492,7 +530,7 @@ impl TimelineWidget {
         }
         // follow playhead while playing
         if ed.playing && (px > rect.right() - 40.0 || px < rect.left()) {
-            self.scroll_x = (ed.playhead_ms as f32 / 1000.0 * self.px_per_sec - rect.width() * 0.2).max(0.0);
+            self.scroll_x = (view.output_to_view(ed.playhead_ms) as f32 / 1000.0 * self.px_per_sec - rect.width() * 0.2).max(0.0);
         }
     }
 }
@@ -706,8 +744,10 @@ impl TimelineWidget {
 
     }
 
-    fn apply_audio_drag(&mut self, drag: &AudioDrag, ed: &mut Editor, x: f32, shift: bool, x_of: impl Fn(f64) -> f32, ms_of: impl Fn(f32) -> f64) {
-        let dx_ms = ms_of(x) - ms_of(drag.start_x);
+    fn apply_audio_drag(&mut self, drag: &AudioDrag, ed: &mut Editor, x: f32, shift: bool, x_of: impl Fn(f64) -> f32 + Copy, ms_of: impl Fn(f32) -> f64) {
+        // edges follow the pointer on screen (a pixel is not the same time everywhere)
+        let dx = x - drag.start_x;
+        let moved = |ms: f64| ms_of(x_of(ms) + dx);
         let src_duration = ed.session.source.duration_ms;
         let scene = &ed.session.pkg.project.scenes[0];
         let Some(mut clips) = scene.audio_clips() else { return };
@@ -719,7 +759,7 @@ impl TimelineWidget {
         self.snap_x = None;
         match drag.kind {
             AudioDragKind::Move => {
-                let mut start = (o.output_start_ms + dx_ms).max(0.0);
+                let mut start = moved(o.output_start_ms).max(0.0);
                 if !shift {
                     if let Some(sn) = snap(&targets, ed.playhead_ms, start, &x_of) {
                         start = sn;
@@ -732,7 +772,7 @@ impl TimelineWidget {
                 clips[i].output_start_ms = start.max(0.0);
             }
             AudioDragKind::Left => {
-                let mut start = o.output_start_ms + dx_ms;
+                let mut start = moved(o.output_start_ms);
                 if !shift {
                     if let Some(sn) = snap(&targets, ed.playhead_ms, start, &x_of) {
                         start = sn;
@@ -746,7 +786,7 @@ impl TimelineWidget {
                 clips[i].source_start_ms = (o.source_start_ms + delta_src).max(0.0);
             }
             AudioDragKind::Right => {
-                let mut end = o.output_end_ms() + dx_ms;
+                let mut end = moved(o.output_end_ms());
                 if !shift {
                     if let Some(sn) = snap(&targets, ed.playhead_ms, end, &x_of) {
                         end = sn;
@@ -940,7 +980,6 @@ fn zoom_drag(ed: &Editor, z: &Zoom, zooms: &[Zoom], kind: DragKind, start_x: f32
         src1: z.source_end_ms,
         out0: 0.0,
         out1: 0.0,
-        time_scale: 1.0,
         lo,
         hi,
         targets,
@@ -962,21 +1001,24 @@ fn snap(targets: &[f64], playhead: f64, v: f64, x_of: impl Fn(f64) -> f32) -> Op
 }
 
 /// Apply the pointer position to the dragged item (live, no undo). Returns the snap guide x.
-fn apply_drag(drag: &mut Drag, ed: &mut Editor, x: f32, shift: bool, x_of: impl Fn(f64) -> f32 + Copy, ms_of: impl Fn(f32) -> f64 + Copy) -> Option<f32> {
+fn apply_drag(drag: &mut Drag, ed: &mut Editor, x: f32, shift: bool, map: ViewMap, x_of: impl Fn(f64) -> f32 + Copy, ms_of: impl Fn(f32) -> f64 + Copy) -> Option<f32> {
     let playhead = ed.playhead_ms;
     let mut snap_x = None;
     let tl = Timeline::from_scene(&drag.snapshot.scenes[0]);
     match drag.kind {
         DragKind::ClipEdge { index, left } => {
-            let mut d = ms_of(x) - ms_of(drag.start_x);
-            let edge = if left { drag.out0 } else { drag.out1 };
+            // the clip is drawn at its source length, so pointer travel on the view axis is
+            // source time; work in the pre-drag layout, which the targets come from
+            let edge = tl.output_to_view(if left { drag.out0 } else { drag.out1 });
+            let mut ds = map.view_ms(x) - map.view_ms(drag.start_x);
             if !shift {
-                if let Some(t) = snap(&drag.targets, playhead, edge + d, x_of) {
-                    d = t - edge;
-                    snap_x = Some(x_of(t));
+                let vx = map.x(edge + ds);
+                let best = drag.targets.iter().copied().chain(std::iter::once(playhead)).map(|t| tl.output_to_view(t)).map(|v| (v, (map.x(v) - vx).abs())).filter(|(_, d)| *d <= SNAP_PX).min_by(|a, b| a.1.total_cmp(&b.1));
+                if let Some((v, _)) = best {
+                    ds = v - edge;
+                    snap_x = Some(map.x(v));
                 }
             }
-            let ds = d / drag.time_scale;
             let p = &mut ed.session.pkg.project;
             let slices = &p.scenes[0].slices;
             if index >= slices.len() {

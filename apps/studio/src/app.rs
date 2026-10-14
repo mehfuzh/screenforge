@@ -48,6 +48,10 @@ pub struct App {
     /// Toolbar window size and pointer position as of the last frame (`raw_input_hook`).
     last_size: Option<egui::Vec2>,
     last_pointer: Option<egui::Pos2>,
+    /// X11: the toolbar window stays at `PICKER_FIXED_H` and takes clicks only on the bar
+    /// (plus menus and panels while open) instead of resizing.
+    #[cfg(target_os = "linux")]
+    input_region: Option<crate::os::InputRegion>,
 }
 
 #[derive(PartialEq, Eq, Clone, Copy)]
@@ -88,6 +92,9 @@ pub const EDITOR_SIZE: [f32; 2] = [1440.0, 900.0];
 /// Gap between the picker bar and the bottom of the screen (clears the Dock).
 pub const PICKER_BOTTOM_GAP: f32 = 96.0;
 pub const PICKER_SIZE: [f32; 2] = [1200.0, crate::picker::BAR_WINDOW_H];
+/// Toolbar window height when it does not resize (X11): tall enough for any menu or panel.
+#[cfg(target_os = "linux")]
+const PICKER_FIXED_H: f32 = crate::picker::MENU_WINDOW_H;
 
 impl App {
     pub fn new(cc: &CreationContext<'_>) -> Self {
@@ -101,7 +108,7 @@ impl App {
         let mut picker = Picker::default();
         picker.load_inputs();
         let perm_setup = (crate::permissions::PermissionsSetup::needed() || std::env::var_os("SF_SHOW_PERMISSIONS").is_some()).then(crate::permissions::PermissionsSetup::start);
-        let app = App { gpu, screen: Screen::Picker(picker), error: None, prefs, window_mode: WindowMode::Picker, picker_height: crate::picker::BAR_WINDOW_H, placed_once: false, tray: None, tray_tried: false, area_select: None, window_select: None, titlebar_fix: 0, perm_setup, confirm_close: None, quitting: false, fresh_open: None, last_size: None, last_pointer: None, pending_open: std::env::args().nth(1).map(PathBuf::from).filter(|p| p.is_dir() || p.extension().is_some_and(|e| e == "screenstudio")) };
+        let app = App { gpu, screen: Screen::Picker(picker), error: None, prefs, window_mode: WindowMode::Picker, picker_height: crate::picker::BAR_WINDOW_H, placed_once: false, tray: None, tray_tried: false, area_select: None, window_select: None, titlebar_fix: 0, perm_setup, confirm_close: None, quitting: false, fresh_open: None, last_size: None, last_pointer: None, #[cfg(target_os = "linux")] input_region: crate::os::InputRegion::new(cc), pending_open: std::env::args().nth(1).map(PathBuf::from).filter(|p| p.is_dir() || p.extension().is_some_and(|e| e == "screenstudio")) };
         // a project on the command line opens on the first frame (`pending_open`)
         app
     }
@@ -138,7 +145,7 @@ impl App {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Resizable(false));
                 ctx.send_viewport_cmd(egui::ViewportCommand::WindowLevel(egui::WindowLevel::AlwaysOnTop));
                 ctx.send_viewport_cmd(egui::ViewportCommand::Title("ScreenForge".into()));
-                Self::place_picker(ctx, PICKER_SIZE[0], self.picker_height);
+                Self::place_picker(ctx, PICKER_SIZE[0], self.picker_window_h(self.picker_height));
             }
         }
     }
@@ -151,6 +158,40 @@ impl App {
             let y = (mon.y - height - PICKER_BOTTOM_GAP).max(0.0);
             ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition([x, y].into()));
         }
+    }
+
+    /// Toolbar window height for a toolbar that wants `wanted` (its bar plus any open menu).
+    fn picker_window_h(&self, wanted: f32) -> f32 {
+        Self::window_h(self.fixed_picker(), wanted)
+    }
+
+    fn window_h(fixed: bool, wanted: f32) -> f32 {
+        #[cfg(target_os = "linux")]
+        if fixed {
+            return PICKER_FIXED_H.max(wanted);
+        }
+        let _ = fixed;
+        wanted
+    }
+
+    /// The toolbar window keeps one height (see `input_region`).
+    fn fixed_picker(&self) -> bool {
+        #[cfg(target_os = "linux")]
+        return self.input_region.is_some();
+        #[cfg(not(target_os = "linux"))]
+        false
+    }
+
+    /// Clicks reach the toolbar window only on the bar while nothing is open above it; every
+    /// other screen takes them everywhere.
+    #[cfg(target_os = "linux")]
+    fn update_input_region(&mut self, ctx: &egui::Context) {
+        let Some(region) = self.input_region.as_mut() else { return };
+        let rect = match &self.screen {
+            Screen::Picker(p) if self.window_mode == WindowMode::Picker && self.error.is_none() && p.wanted_height <= crate::picker::BAR_WINDOW_H + 0.5 => Some(p.bar_rect),
+            _ => None,
+        };
+        region.set(rect, ctx.pixels_per_point());
     }
 
     /// Resize a window that is not user-resizable. On X11, winit pins the min/max size hints
@@ -265,7 +306,7 @@ impl App {
         self.picker_height = crate::picker::BAR_WINDOW_H;
         self.set_window_mode(ctx, WindowMode::Picker);
         // coming back from the (smaller) recording HUD keeps the picker mode, so re-place explicitly
-        Self::place_picker(ctx, PICKER_SIZE[0], crate::picker::BAR_WINDOW_H);
+        Self::place_picker(ctx, PICKER_SIZE[0], self.picker_window_h(crate::picker::BAR_WINDOW_H));
     }
 }
 
@@ -352,8 +393,9 @@ impl eframe::App for App {
 
         if !self.placed_once && matches!(self.screen, Screen::Picker(_)) {
             self.placed_once = true;
-            Self::place_picker(ctx, PICKER_SIZE[0], self.picker_height);
+            Self::place_picker(ctx, PICKER_SIZE[0], self.picker_window_h(self.picker_height));
         }
+        let fixed_picker = self.fixed_picker();
         let mut go_home = false;
         let mut action: Option<PickerAction> = None;
         let mut outcome: Option<RecordingOutcome> = None;
@@ -367,8 +409,12 @@ impl eframe::App for App {
                 }
                 action = p.ui(ui, &self.prefs);
                 if (p.wanted_height - self.picker_height).abs() > 0.5 {
+                    let old = Self::window_h(fixed_picker, self.picker_height);
                     self.picker_height = p.wanted_height;
-                    Self::place_picker(ctx, PICKER_SIZE[0], p.wanted_height);
+                    let new = Self::window_h(fixed_picker, p.wanted_height);
+                    if (new - old).abs() > 0.5 {
+                        Self::place_picker(ctx, PICKER_SIZE[0], new);
+                    }
                 }
             }
             Screen::Recording(r) => {
@@ -645,5 +691,7 @@ impl eframe::App for App {
                 self.error = None;
             }
         }
+        #[cfg(target_os = "linux")]
+        self.update_input_region(ctx);
     }
 }
