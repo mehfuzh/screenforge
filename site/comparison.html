@@ -26,6 +26,7 @@
   "mainEntity": [
     {"@type": "Question", "name": "Is ScreenForge free?", "acceptedAnswer": {"@type": "Answer", "text": "Recording, editing and your first three exports are free. After that, exporting from the official build needs a Creator key: US$29 once, with no subscription. You can also build it from source."}},
     {"@type": "Question", "name": "Can I open my Screen Studio projects?", "acceptedAnswer": {"@type": "Answer", "text": "Yes. ScreenForge opens and saves .screenstudio project files."}},
+    {"@type": "Question", "name": "Does it make captions?", "acceptedAnswer": {"@type": "Answer", "text": "Yes. ScreenForge transcribes your microphone on your computer with Whisper (the model is downloaded once), shows captions in the preview and export, and saves them as SRT."}},
     {"@type": "Question", "name": "Does it run on Windows?", "acceptedAnswer": {"@type": "Answer", "text": "Not yet. ScreenForge runs on macOS 14 or later (Apple silicon) and on x86-64 Linux."}}
   ]
 }
@@ -445,22 +446,26 @@ gtag('config', 'G-ZYRJDJ736V');
 
   <h2><span class="n">03</span>Side by side</h2>
   <div class="faq">
-    <div><h3>Automatic zooms</h3><p>Zooms follow clicks and typing, animated with a spring. Adjust or delete any of them on the timeline.</p></div>
+    <div><h3>Automatic zooms</h3><p>Zooms open on your clicks and follow the cursor, easing in and out. Adjust or delete any of them on the timeline.</p></div>
     <div><h3>Smooth cursor and backgrounds</h3><p>The cursor is smoothed after recording, and the video sits on a background with padding, rounded corners and a shadow.</p></div>
     <div><h3>Separate voice track</h3><p>Your microphone is its own track: split, trim, move and mute it apart from the video.</p></div>
     <div><h3>Webcam</h3><p>Record your camera alongside the screen, as an overlay, split screen or full screen.</p></div>
     <div><h3>Export</h3><p>MP4 (H.264 / HEVC), ProRes, GIF and WebM, up to 4K, with mixed audio, rendered on the GPU.</p></div>
     <div><h3>Native, not Electron</h3><p>Capture uses ScreenCaptureKit on the Mac; the editor is drawn natively and the compositor runs on wgpu.</p></div>
+    <div><h3>Captions</h3><p>Your voice transcribed on your computer with Whisper, shown line by line or word by word, burned into the export or saved as SRT. Transcripts use the same files as Screen Studio.</p></div>
+    <div><h3>Cuts and speed</h3><p>Split the recording, cut what you don't need and speed up any part; the audio and captions follow.</p></div>
   </div>
 
   <h2><span class="n">04</span>What is not there yet</h2>
-  <p>ScreenForge is in beta. Masks and highlights, crop editing, captions, a keyboard shortcut overlay and device frames are on the <a href="index.html#roadmap">roadmap</a> and greyed out in the app until they work. If you depend on one of those today, check the roadmap before switching.</p>
+  <p>ScreenForge is in beta. Masks and highlights, crop editing, a keyboard shortcut overlay and device frames are on the <a href="index.html#roadmap">roadmap</a> and greyed out in the app until they work. If you depend on one of those today, check the roadmap before switching.</p>
 
   <h2><span class="n">05</span>Questions</h2>
   <h3>Is ScreenForge free?</h3>
   <p>Recording, editing and your first three exports are free. After that, exporting from the official build needs a Creator key: US$29 once, with no subscription. You can also build it from source.</p>
   <h3>Can I open my Screen Studio projects?</h3>
   <p>Yes. ScreenForge opens and saves <code>.screenstudio</code> project files.</p>
+  <h3>Does it make captions?</h3>
+  <p>Yes. ScreenForge transcribes your microphone on your computer with Whisper (the model is downloaded once), shows captions in the preview and export, and saves them as SRT.</p>
   <h3>Does it run on Windows?</h3>
   <p>Not yet. ScreenForge runs on macOS 14 or later (Apple silicon) and on x86-64 Linux.</p>
 

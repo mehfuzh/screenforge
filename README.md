@@ -52,8 +52,8 @@ remove the gate; the license pays for the maintained, signed and notarized downl
 builds it, and ongoing maintenance. See `backend/README.md` for how keys are issued.
 
 > Status: early alpha. Records the screen with ScreenCaptureKit (plus an optional webcam), edits on a GPU-rendered
-> timeline (cuts, speed, zooms with spring animation, smoothed cursor, backgrounds, padding,
-> shadow, camera layouts) and exports MP4/HEVC/ProRes/GIF/WebM with mixed audio, background
+> timeline (cuts, speed, zooms that follow the cursor, smoothed cursor, backgrounds, padding,
+> shadow, camera layouts, captions transcribed on device with Whisper) and exports MP4/HEVC/ProRes/GIF/WebM with mixed audio, background
 > music and an independent audio track. See `docs/STATUS.md` for what is missing.
 
 ## Product roadmap
@@ -62,7 +62,6 @@ Controls for these show up greyed out in the app (hover: "on the product roadmap
 
 - **Masks and highlights** — blur or hide regions, spotlight areas
 - **Crop editing** — the Crop tool in the preview toolbar
-- **Captions** — transcription and caption rendering
 - **Keyboard shortcut overlay** — key-cap rendering of recorded keystrokes
 - **Device frames** — iPhone/iPad recording and mockup frames
 - **Unsplash backgrounds** — online wallpaper search
