@@ -58,6 +58,8 @@ pub struct Editor {
     /// The project was autosaved since the QuickLook preview was last written; leaving the
     /// editor writes a fresh one so the recent-projects thumbnail shows the edits.
     preview_stale: bool,
+    /// Captions panel: Whisper transcription running in the background.
+    pub transcribe: crate::captions::TranscribeJob,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -119,6 +121,7 @@ impl Editor {
             renamed_to: None,
             remove_requested: false,
             preview_stale: false,
+            transcribe: Default::default(),
         }
     }
 
@@ -150,6 +153,12 @@ impl Editor {
         }
         f(&mut self.session.pkg.project);
         self.after_edit();
+    }
+
+    /// A transcript was (re)generated: reload the captions and redraw the preview.
+    pub fn captions_changed(&mut self) {
+        self.session.reload_captions();
+        self.last_rendered_ms = None;
     }
 
     fn after_edit(&mut self) {
@@ -505,6 +514,12 @@ impl Editor {
         let mut go_home = false;
         self.tick(ctx);
         self.shortcuts(ctx);
+        if self.transcribe.poll() {
+            self.captions_changed();
+        }
+        if self.transcribe.is_running() {
+            ctx.request_repaint_after(std::time::Duration::from_millis(150));
+        }
 
         // ── title bar ──
         egui::Panel::top("titlebar").exact_size(56.0).frame(egui::Frame::default().fill(theme::p().bg).inner_margin(egui::Margin::symmetric(16, 0))).show(root, |ui| {

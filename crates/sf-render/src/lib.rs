@@ -8,6 +8,7 @@
 
 pub mod gpu;
 pub mod texture;
+pub mod text;
 
 pub use gpu::Gpu;
 pub use texture::Texture;

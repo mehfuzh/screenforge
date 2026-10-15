@@ -1,0 +1,24 @@
+[package]
+name = "sf-transcribe"
+description = "On-device speech to text (whisper.cpp) for captions"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+sf-project.workspace = true
+sf-media.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+directories.workspace = true
+ureq = "2"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+whisper-rs = { version = "0.16", features = ["metal"] }
+
+[target.'cfg(not(target_os = "macos"))'.dependencies]
+whisper-rs = "0.16"
+
+[dev-dependencies]
+tempfile = "3"

@@ -9,6 +9,7 @@ members = [
     "crates/sf-license",
     "crates/sf-recording",
     "crates/sf-export",
+    "crates/sf-transcribe",
     "apps/studio",
     "apps/sf-cli",
 ]
@@ -29,6 +30,7 @@ sf-session = { path = "crates/sf-session" }
 sf-license = { path = "crates/sf-license" }
 sf-recording = { path = "crates/sf-recording" }
 sf-export = { path = "crates/sf-export" }
+sf-transcribe = { path = "crates/sf-transcribe" }
 
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order", "float_roundtrip"] }

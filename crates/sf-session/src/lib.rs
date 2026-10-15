@@ -9,6 +9,7 @@
 //! out in stage units (height 1000) and scaled to the output size at the end.
 
 pub mod assets;
+pub mod captions;
 pub mod create;
 pub mod preview;
 pub mod layout;
@@ -72,6 +73,7 @@ pub struct Session {
     last_output_ms: Option<f64>,
     /// Decode width cap for previews (None = native).
     pub decode_max_width: Option<u32>,
+    pub captions: captions::Captions,
 }
 
 impl Session {
@@ -86,6 +88,7 @@ impl Session {
         let geometry = Self::geometry_for(&pkg, &source);
         let (camera, cursor_smoother) = Self::solvers(&pkg, &source, &cursor_track, geometry);
         let camera_rect = SpringVec::new(SpringParams::from(pkg.project.config.animations.screen_movement_spring), [0.0; 4]);
+        let captions = captions::Captions::load(&pkg, source.process_time_start_ms);
         let mut s = Session {
             pkg,
             source,
@@ -104,6 +107,7 @@ impl Session {
             camera_rect_initialised: false,
             last_output_ms: None,
             decode_max_width: None,
+            captions,
         };
         s.load_cursor_sprites();
         Ok(s)
@@ -119,7 +123,8 @@ impl Session {
     fn solvers(pkg: &ProjectPackage, source: &SourceInfo, track: &CursorTrack, geometry: StageGeometry) -> (CameraSolver, CursorSmoother) {
         let cfg = &pkg.project.config;
         let crop = cfg.crop.rect01;
-        let crop_px = [crop.width * source.bounds.width, crop.height * source.bounds.height];
+        let (bw, bh) = (source.bounds.width, source.bounds.height);
+        let crop_px = Rect { x: crop.x * bw, y: crop.y * bh, width: crop.width * bw, height: crop.height * bh };
         let camera = CameraSolver::new(&pkg.project.scenes[0].zooms, track, crop_px, geometry, SpringParams::from(cfg.animations.screen_movement_spring), cfg.zooms.start_animation_early);
         let cursor = CursorSmoother::new(SpringParams::from(cfg.animations.mouse_movement_spring));
         (camera, cursor)
@@ -157,6 +162,7 @@ impl Session {
         self.camera_rect.set_params(SpringParams::from(self.pkg.project.config.animations.screen_movement_spring));
         self.camera_rect_initialised = false;
         self.last_output_ms = None;
+        self.reload_captions();
     }
 
     pub fn duration_ms(&self) -> f64 {
@@ -392,7 +398,20 @@ impl Session {
             }
         }
 
+        // ── captions, above everything ──
+        self.captions.push_layer(&self.pkg, &self.gpu, source_ms, out.width, out.height, &mut layers);
+
         Ok(FrameDesc { width: out.width, height: out.height, background: self.background_layer(), layers })
+    }
+
+    /// Re-read the transcripts (after generating one, or toggling sound labels).
+    pub fn reload_captions(&mut self) {
+        self.captions = captions::Captions::load(&self.pkg, self.source.process_time_start_ms);
+    }
+
+    /// SubRip captions for the edited timeline (empty when there is no transcript).
+    pub fn captions_srt(&self) -> String {
+        self.captions.to_srt(&self.timeline)
     }
 
     /// Masks active at `source_ms`, drawn over the screen. Bounds are pixel rects in

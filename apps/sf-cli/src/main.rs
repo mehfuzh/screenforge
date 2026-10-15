@@ -77,6 +77,26 @@ enum Cmd {
         #[arg(long, num_args = 2, value_names = ["START_MS", "END_MS"])]
         range: Option<Vec<f64>>,
     },
+    /// Transcribe the microphone with Whisper (on device) and save the captions transcript.
+    /// Downloads the model the first time.
+    Transcribe {
+        path: PathBuf,
+        /// base | small
+        #[arg(long, default_value = "base")]
+        model: String,
+        /// Language code (en, de, …); detected when omitted
+        #[arg(long)]
+        language: Option<String>,
+        /// Names or jargon the model should expect
+        #[arg(long)]
+        prompt: Option<String>,
+    },
+    /// Write the captions as SubRip (.srt) for the edited timeline
+    Srt {
+        path: PathBuf,
+        #[arg(short, long, default_value = "captions.srt")]
+        out: PathBuf,
+    },
     /// Re-save a package (useful to migrate v3 → v4 on disk). Writes project.json.bak first.
     Resave { path: PathBuf },
     /// List presets in the presets folder (~/Documents/Screen Studio Presets)
@@ -186,6 +206,33 @@ fn main() -> Result<()> {
                     println!("{:?}", sf_license::verify_with(&key, &pk));
                 }
             }
+            Ok(())
+        }
+        Cmd::Transcribe { path, model, language, prompt } => {
+            let model = sf_transcribe::Model::from_id(&model).ok_or_else(|| anyhow::anyhow!("unknown model {model:?} (base or small)"))?;
+            let opts = sf_transcribe::Options { language, prompt };
+            let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let files = sf_transcribe::transcribe_project(&path, model, &opts, cancel, |p| {
+                match p {
+                    sf_transcribe::Progress::Downloading { done, total } => eprint!("\rdownloading model {:>5.1} / {} MB", done as f64 / 1e6, total.map(|t| format!("{:.1}", t as f64 / 1e6)).unwrap_or_else(|| "?".into())),
+                    sf_transcribe::Progress::Transcribing { session, sessions, percent } => eprint!("\rtranscribing session {}/{}: {percent:>3}%          ", session + 1, sessions),
+                }
+                let _ = std::io::stderr().flush();
+            })?;
+            eprintln!();
+            for (f, words) in files {
+                println!("wrote {} ({words} words)", f.display());
+            }
+            Ok(())
+        }
+        Cmd::Srt { path, out } => {
+            let gpu = Gpu::headless()?;
+            let session = Session::open(&path, gpu)?;
+            if session.captions.is_empty() {
+                anyhow::bail!("no transcript; run `sf transcribe` first");
+            }
+            std::fs::write(&out, session.captions_srt())?;
+            println!("wrote {}", out.display());
             Ok(())
         }
         Cmd::Resave { path } => {

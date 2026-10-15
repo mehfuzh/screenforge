@@ -7,9 +7,14 @@
   transport, timeline with clips (trim, split, speed, context menus), zooms (add, move, resize,
   auto zooms), **independent audio track** (detach, split, move, trim, mute — a ScreenForge
   extension stored as `sfAudioClips`), undo/redo, audio preview playback.
-- Rendering: stage geometry, zoom camera with click groups, cursor smoothing/tilt, backgrounds
+- Rendering: stage geometry, zoom camera that follows the cursor, cursor smoothing/tilt, backgrounds
   (built-in wallpapers, the Mac's own wallpapers, or `SF_ASSETS`), shadow, inset,
   camera layouts (overlay/split/fullscreen), masks, click effects.
+- Captions: on-device Whisper transcription of the microphone (`sf-transcribe`; base/small
+  models downloaded on first use), saved as `transcripts/microphone-session-N.json` like Screen
+  Studio; rendered into preview and export (font, size, colour, position, line-by-line or
+  word-by-word with appear/fade/slide); SRT export that follows cuts and speed
+  (`sf transcribe`, `sf srt`, or the Captions panel).
 - Export: MP4 (H.264/HEVC), ProRes, GIF, WebM with mixed audio and quality presets.
 - Recording: picker toolbar (Display/Window/Area/Device, camera/mic/system audio pickers,
   countdown), ScreenCaptureKit recorder writing the package's `recording/` layout
@@ -20,7 +25,7 @@
 
 ## Not yet
 - Live camera preview while recording; window picking / area selection UI (area records a centred 60 % region); iPhone/iPad.
-- Captions/transcription, keystroke overlay, device frame compositing, color grading/LUTs, cutout matting, face tracking, motion blur.
+- Editing the transcript text, Apple Speech transcription, keystroke overlay, device frame compositing, color grading/LUTs, cutout matting, face tracking, motion blur.
 - Crop editing UI, Unsplash, background audio library playback, click sounds in preview/export.
 - More bundled assets: cursor sets and device frames.
 
@@ -38,7 +43,6 @@
 
 - Masks and highlights: blur or hide regions, spotlight areas
 - Crop editing: the Crop tool in the preview toolbar
-- Captions: transcription and caption rendering
 - Keyboard shortcut overlay: key-cap rendering of recorded keystrokes
 - Device frames: iPhone/iPad recording and mockup frames
 - Unsplash backgrounds: online wallpaper search

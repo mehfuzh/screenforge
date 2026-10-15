@@ -136,7 +136,7 @@ impl Section {
 
     /// Pages whose feature is not rendered yet: shown greyed out in the rail.
     pub fn is_roadmap(self) -> bool {
-        matches!(self, Section::Captions | Section::Shortcuts | Section::DeviceFrame)
+        matches!(self, Section::Shortcuts | Section::DeviceFrame)
     }
 
     pub fn icon(self) -> widgets::Icon {
@@ -523,34 +523,120 @@ fn camera_style_ui(ed: &mut Editor, ui: &mut egui::Ui) {
 
 fn captions_ui(ed: &mut Editor, ui: &mut egui::Ui) {
     widgets::title(ui, "Captions");
-    widgets::hint(ui, "Captions are on the roadmap: transcription and caption rendering are not built yet.");
-    ui.disable();
-    let mut on = ed.session.pkg.project.config.captions.enable_transcript;
-    if widgets::toggle_row(ui, "Transcript", "", &mut on) {
+    let has_mic = ed.session.pkg.recording.as_ref().and_then(|r| r.microphone()).is_some_and(|m| !m.sessions.is_empty());
+    if !has_mic {
+        widgets::hint(ui, "No microphone recorded");
+        return;
+    }
+    let has_transcript = !ed.session.captions.is_empty();
+
+    // ── transcript ──
+    widgets::hint(ui, "Transcribed on this computer with Whisper. The model is downloaded once.");
+    ui.add_space(4.0);
+    ui.add_enabled_ui(!ed.transcribe.is_running(), |ui| {
+        widgets::title(ui, "AI model");
+        let models = sf_transcribe::Model::ALL;
+        let idx = models.iter().position(|m| *m == ed.transcribe.model).unwrap_or(0);
+        let labels: Vec<&str> = models.iter().map(|m| m.label()).collect();
+        if let Some(i) = widgets::segmented(ui, idx, &labels) {
+            ed.transcribe.model = models[i];
+        }
+        widgets::title(ui, "Language");
+        widgets::text_field(ui, &mut ed.transcribe.language, "Detect automatically (or en, de, fr …)");
+    });
+    ui.add_space(8.0);
+    if ed.transcribe.is_running() {
+        ui.horizontal(|ui| {
+            ui.spinner();
+            widgets::hint(ui, &ed.transcribe.status());
+        });
+        if widgets::secondary_button(ui, "Cancel").clicked() {
+            ed.transcribe.cancel();
+        }
+    } else {
+        let label = if has_transcript { "Re-generate transcript" } else { "Generate transcript" };
+        if widgets::accent_button(ui, label).clicked() {
+            ed.save_if_dirty();
+            let path = ed.path.clone();
+            ed.transcribe.start(path);
+        }
+        if has_transcript {
+            widgets::hint(ui, "Re-generating replaces the current transcript.");
+        }
+        match &ed.transcribe.result {
+            Some(Ok(0)) => widgets::hint(ui, "No speech was found in the microphone recording."),
+            Some(Ok(n)) => widgets::hint(ui, &format!("Transcribed {n} words.")),
+            Some(Err(e)) if e == "cancelled" => widgets::hint(ui, "Cancelled."),
+            Some(Err(e)) => {
+                ui.label(egui::RichText::new(format!("Transcription failed: {e}")).size(13.0).color(crate::theme::p().danger));
+            }
+            None => {}
+        }
+    }
+    if !has_transcript {
+        return;
+    }
+
+    // ── appearance ──
+    ui.add_space(8.0);
+    let c = ed.session.pkg.project.config.captions.clone();
+    let mut on = c.enable_transcript;
+    if widgets::toggle_row(ui, "Show captions", "", &mut on) {
         ed.edit(move |p| p.config.captions.enable_transcript = on);
     }
-    cfg_slider(ed, ui, "Transcript size", |p| p.config.captions.size_ratio, |p, v| p.config.captions.size_ratio = v, 0.05..=0.125, Some(0.05), "");
-    let fonts = ["sans-serif", "serif", "mono"];
-    let cur = ed.session.pkg.project.config.captions.font.clone();
-    let idx = fonts.iter().position(|f| *f == cur).unwrap_or(0);
-    widgets::title(ui, "Font style");
-    if let Some(i) = widgets::segmented(ui, idx, &["Sans", "Serif", "Mono"]) {
-        let f = fonts[i].to_string();
+    let mut labels = c.show_sound_labels;
+    if widgets::toggle_row(ui, "Sound labels", "Show labels such as [music].", &mut labels) {
+        ed.edit(move |p| p.config.captions.show_sound_labels = labels);
+    }
+    cfg_slider(ed, ui, "Caption size", |p| p.config.captions.size_ratio, |p, v| p.config.captions.size_ratio = v, 0.05..=0.125, Some(0.05), "");
+
+    let pick = |ui: &mut egui::Ui, title: &str, values: &[&str], labels: &[&str], cur: &str| -> Option<String> {
+        widgets::title(ui, title);
+        widgets::segmented(ui, values.iter().position(|v| *v == cur).unwrap_or(0), labels).map(|i| values[i].to_string())
+    };
+    if let Some(f) = pick(ui, "Font style", &["sans-serif", "serif", "mono"], &["Sans", "Serif", "Mono"], &c.font) {
         ed.edit(move |p| p.config.captions.font = f);
     }
-    let reveals = ["line-by-line", "word-by-word"];
-    let cur = ed.session.pkg.project.config.captions.words_reveal.clone();
-    widgets::title(ui, "Word reveal");
-    if let Some(i) = widgets::segmented(ui, reveals.iter().position(|r| *r == cur).unwrap_or(0), &["Line by line", "Word by word"]) {
-        let r = reveals[i].to_string();
+    // light = white text on black, dark = black text on white
+    let dark = c.color.eq_ignore_ascii_case("#000000");
+    widgets::title(ui, "Color");
+    if let Some(i) = widgets::segmented(ui, dark as usize, &["Light", "Dark"]) {
+        let (fg, bg) = if i == 1 { ("#000000", "#ffffff") } else { ("#ffffff", "#000000") };
+        ed.edit(move |p| {
+            p.config.captions.color = fg.into();
+            p.config.captions.background_color = bg.into();
+        });
+    }
+    let positions = [0.0, 0.5, 1.0];
+    let pos_idx = positions.iter().position(|y| (c.position01.y - y).abs() < 0.01).unwrap_or(2);
+    widgets::title(ui, "Position");
+    if let Some(i) = widgets::segmented(ui, pos_idx, &["Top", "Center", "Bottom"]) {
+        let y = positions[i];
+        ed.edit(move |p| p.config.captions.position01 = sf_project::schema::common::Point::new(0.5, y));
+    }
+    if let Some(r) = pick(ui, "Word reveal", &["line-by-line", "word-by-word"], &["Line by line", "Word by word"], &c.words_reveal) {
         ed.edit(move |p| p.config.captions.words_reveal = r);
     }
-    let entr = ["appear", "fade-in", "slide-in"];
-    let cur = ed.session.pkg.project.config.captions.word_entrance.clone();
-    widgets::title(ui, "Word animation");
-    if let Some(i) = widgets::segmented(ui, entr.iter().position(|r| *r == cur).unwrap_or(0), &["Appear", "Fade in", "Slide in"]) {
-        let r = entr[i].to_string();
-        ed.edit(move |p| p.config.captions.word_entrance = r);
+    if c.words_reveal == "word-by-word" {
+        if let Some(g) = pick(ui, "Line growth", &["entire-line", "left-anchored", "centered"], &["Full line", "Expanding", "Centered"], &c.line_growth) {
+            ed.edit(move |p| p.config.captions.line_growth = g);
+        }
+    }
+    if let Some(e) = pick(ui, "Word animation", &["appear", "fade-in", "slide-in"], &["Appear", "Fade in", "Slide in"], &c.word_entrance) {
+        ed.edit(move |p| p.config.captions.word_entrance = e);
+    }
+
+    // ── export ──
+    ui.add_space(10.0);
+    if widgets::secondary_button(ui, "Export captions (.srt)…").clicked() {
+        let name = format!("{}.srt", ed.session.pkg.project.name);
+        if let Some(path) = rfd::FileDialog::new().set_file_name(&name).add_filter("SubRip", &["srt"]).save_file() {
+            let msg = match std::fs::write(&path, ed.session.captions_srt()) {
+                Ok(()) => format!("Saved {}", path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()),
+                Err(e) => format!("Could not save captions: {e}"),
+            };
+            ed.status = Some((msg, std::time::Instant::now()));
+        }
     }
 }
 

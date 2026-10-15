@@ -13,6 +13,7 @@
 pub mod audio;
 pub mod autozoom;
 pub mod camera;
+pub mod captions;
 pub mod cursor;
 pub mod spring;
 pub mod stage;
