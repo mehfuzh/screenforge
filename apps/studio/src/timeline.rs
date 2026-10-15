@@ -105,11 +105,15 @@ pub struct TimelineWidget {
     ctx_ms: f64,
     /// Screen x of the active snap guide.
     snap_x: Option<f32>,
+    /// Keep the playhead in view while playing; off once the user scrolls or zooms, back on
+    /// when playback starts again.
+    follow: bool,
+    was_playing: bool,
 }
 
 impl Default for TimelineWidget {
     fn default() -> Self {
-        TimelineWidget { px_per_sec: 40.0, scroll_x: 0.0, drag: None, audio_drag: None, peaks: None, peaks_gen: u64::MAX, ctx_ms: 0.0, snap_x: None }
+        TimelineWidget { px_per_sec: 40.0, scroll_x: 0.0, drag: None, audio_drag: None, peaks: None, peaks_gen: u64::MAX, ctx_ms: 0.0, snap_x: None, follow: true, was_playing: false }
     }
 }
 
@@ -138,8 +142,14 @@ impl TimelineWidget {
         }
 
         // wheel / trackpad: vertical scroll and pinch zoom the timeline around the pointer,
-        // horizontal scroll (or shift+wheel) pans
-        if resp.hovered() {
+        // horizontal scroll (or shift+wheel) pans. Pointer-in-rect rather than `resp.hovered()`:
+        // the clip, zoom and audio blocks are widgets on top of `resp`, so it isn't hovered
+        // over them and scrolling would stop there.
+        if ed.playing && !self.was_playing {
+            self.follow = true;
+        }
+        self.was_playing = ed.playing;
+        if ui.rect_contains_pointer(rect) {
             let (d, pinch, shift, pointer) = ui.input(|i| (i.smooth_scroll_delta, i.zoom_delta(), i.modifiers.shift, i.pointer.hover_pos()));
             let mut factor = pinch;
             let mut pan = 0.0;
@@ -160,8 +170,12 @@ impl TimelineWidget {
                     self.scroll_x = ms / 1000.0 * new - local;
                 }
                 self.px_per_sec = new;
+                self.follow = false;
             }
-            self.scroll_x -= pan;
+            if pan != 0.0 {
+                self.scroll_x -= pan;
+                self.follow = false;
+            }
         }
         let content_w = view_len as f32 / 1000.0 * self.px_per_sec + 24.0;
         self.scroll_x = self.scroll_x.clamp(0.0, (content_w - rect.width()).max(0.0));
@@ -444,10 +458,7 @@ impl TimelineWidget {
                 glass_block(&painter, r, 8.0, color, selected);
             }
             let item_full = Rect::from_min_max(pos2(min_x, zoom_top), pos2(max_x, zoom_top + ZOOM_H));
-            if item_full.width() > 30.0 {
-                let label = if z.is_disabled { format!("🔍 {}× off", trim_float(z.zoom)) } else if z.is_auto() { format!("🔍 Zoom {}×", trim_float(z.zoom)) } else { format!("🔍 Manual {}×", trim_float(z.zoom)) };
-                painter.text(item_full.center(), egui::Align2::CENTER_CENTER, label, egui::FontId::proportional(13.0), theme::p().text);
-            }
+            zoom_label(&painter, item_full.shrink2(vec2(6.0, 4.0)).intersect(rect), z);
             let item_rect = item_full.intersect(rect);
             if item_rect.width() <= 0.0 {
                 continue;
@@ -529,7 +540,7 @@ impl TimelineWidget {
             painter.add(egui::Shape::convex_polygon(tri.to_vec(), theme::p().playhead, Stroke::NONE));
         }
         // follow playhead while playing
-        if ed.playing && (px > rect.right() - 40.0 || px < rect.left()) {
+        if ed.playing && self.follow && (px > rect.right() - 40.0 || px < rect.left()) {
             self.scroll_x = (view.output_to_view(ed.playhead_ms) as f32 / 1000.0 * self.px_per_sec - rect.width() * 0.2).max(0.0);
         }
     }
@@ -1157,6 +1168,35 @@ fn zoom_index(ed: &Editor, id: &str) -> Option<usize> {
     ed.session.pkg.project.scenes[0].zooms.iter().position(|z| z.id == id)
 }
 
+/// Zoom item label: painted magnifier + "Zoom 2×" ("Manual 2×", "2× off"), dropping the word
+/// and then the icon as the block narrows, and clipped to the block so it never spills out.
+fn zoom_label(painter: &egui::Painter, inner: Rect, z: &Zoom) {
+    if inner.width() <= 0.0 {
+        return;
+    }
+    let level = format!("{}×", trim_float(z.zoom));
+    let long = if z.is_disabled { format!("{level} off") } else if z.is_auto() { format!("Zoom {level}") } else { format!("Manual {level}") };
+    let font = egui::FontId::proportional(13.0);
+    let (icon, gap) = (12.0, 4.0);
+    let color = theme::p().text;
+    let painter = painter.with_clip_rect(inner);
+    for (text, with_icon) in [(long, true), (level.clone(), true), (level, false)] {
+        let galley = painter.layout_no_wrap(text, font.clone(), color);
+        let w = galley.size().x + if with_icon { icon + gap } else { 0.0 };
+        if w > inner.width() {
+            continue;
+        }
+        let mut x = inner.center().x - w / 2.0;
+        if with_icon {
+            let r = Rect::from_center_size(pos2(x + icon / 2.0, inner.center().y), vec2(icon, icon));
+            crate::widgets::paint_icon(&painter, r, crate::widgets::Icon::Zoom, color);
+            x += icon + gap;
+        }
+        painter.galley(pos2(x, inner.center().y - galley.size().y / 2.0), galley, color);
+        return;
+    }
+}
+
 /// Translucent timeline block: a light tint of `color` with a thin outline in the same colour
 /// (stronger when selected), so the lanes read as glass over the theme background.
 fn glass_block(painter: &egui::Painter, r: Rect, radius: f32, color: Color32, selected: bool) {
@@ -1204,7 +1244,7 @@ fn clip_menu(ed: &mut Editor, ui: &mut egui::Ui, index: usize, at_ms: f64) {
             let sel = (speed - s).abs() < 1e-6;
             if ui.selectable_label(sel, format!("{s}×")).clicked() {
                 if !sel {
-                    ed.edit(move |p| p.scenes[0].slices = edit::set_speed(&p.scenes[0].slices, index, s));
+                    ed.edit_speed(move |p| p.scenes[0].slices = edit::set_speed(&p.scenes[0].slices, index, s));
                 }
                 ui.close();
             }

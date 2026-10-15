@@ -261,7 +261,7 @@ fn general_ui(ed: &mut Editor, ui: &mut egui::Ui) {
             let idx = RECORDING_SPEEDS.iter().position(|s| (s - cur).abs() < 1e-3).unwrap_or(usize::MAX);
             if let Some(k) = widgets::pills(ui, idx, &refs) {
                 let sp = RECORDING_SPEEDS[k];
-                ed.edit(move |p| p.scenes[0].slices = sf_engine::timeline::edit::set_speed(&p.scenes[0].slices, i, sp));
+                ed.edit_speed(move |p| p.scenes[0].slices = sf_engine::timeline::edit::set_speed(&p.scenes[0].slices, i, sp));
                 ed.set_status(&format!("Clip {} speed {sp}×", i + 1));
             }
         }

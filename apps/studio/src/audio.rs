@@ -31,7 +31,12 @@ struct Shared {
     background: Option<Background>,
     spans: Vec<AudioSpan>,
     playing: bool,
+    /// End of the audio handed to the device so far (advances a whole buffer per callback).
     output_ms: f64,
+    /// When the last callback ran and `output_ms` at its start: `position_ms` interpolates from
+    /// these, so the playhead moves every frame instead of in buffer-sized steps.
+    callback_at: Option<std::time::Instant>,
+    callback_ms: f64,
     duration_ms: f64,
     master_volume: f32,
     /// Background music level from the project (applied when a decode finishes too).
@@ -52,7 +57,7 @@ pub struct AudioPlayer {
 
 impl AudioPlayer {
     pub fn new() -> Self {
-        let shared = Arc::new(Mutex::new(Shared { tracks: vec![], background: None, spans: vec![], playing: false, output_ms: 0.0, duration_ms: 0.0, master_volume: 1.0, bg_volume: 0.05, bg_muted: false }));
+        let shared = Arc::new(Mutex::new(Shared { tracks: vec![], background: None, spans: vec![], playing: false, output_ms: 0.0, callback_at: None, callback_ms: 0.0, duration_ms: 0.0, master_volume: 1.0, bg_volume: 0.05, bg_muted: false }));
         let stream = Self::open_stream(shared.clone());
         if let Err(e) = &stream {
             tracing::warn!("audio output unavailable: {e}");
@@ -68,6 +73,10 @@ impl AudioPlayer {
             config,
             move |data: &mut [f32], _| {
                 let mut s = shared.lock();
+                if s.playing {
+                    s.callback_at = Some(std::time::Instant::now());
+                    s.callback_ms = s.output_ms;
+                }
                 let step_ms = 1000.0 / RATE as f64;
                 for frame in data.chunks_mut(2) {
                     let (mut l, mut r) = (0.0f32, 0.0f32);
@@ -214,6 +223,7 @@ impl AudioPlayer {
     pub fn play_from(&self, output_ms: f64) {
         let mut s = self.shared.lock();
         s.output_ms = output_ms;
+        s.callback_at = None;
         s.playing = true;
     }
 
@@ -222,15 +232,23 @@ impl AudioPlayer {
     }
 
     pub fn seek(&self, output_ms: f64) {
-        self.shared.lock().output_ms = output_ms;
+        let mut s = self.shared.lock();
+        s.output_ms = output_ms;
+        s.callback_at = None;
     }
 
     pub fn is_playing(&self) -> bool {
         self.shared.lock().playing
     }
 
+    /// Playback position: the start of the last buffer plus the time since it was requested,
+    /// never past the audio handed over so far.
     pub fn position_ms(&self) -> f64 {
-        self.shared.lock().output_ms
+        let s = self.shared.lock();
+        match s.callback_at {
+            Some(at) if s.playing => (s.callback_ms + at.elapsed().as_secs_f64() * 1000.0).min(s.output_ms),
+            _ => s.output_ms,
+        }
     }
 
     pub fn has_audio(&self) -> bool {

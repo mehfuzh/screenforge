@@ -73,6 +73,9 @@ pub struct Session {
     last_output_ms: Option<f64>,
     /// Decode width cap for previews (None = native).
     pub decode_max_width: Option<u32>,
+    /// Playback speed the preview is decoding for (1 = every frame). The editor sets the
+    /// current clip's speed while playing; export leaves it at 1.
+    pub decode_speed: f64,
     pub captions: captions::Captions,
 }
 
@@ -107,6 +110,7 @@ impl Session {
             camera_rect_initialised: false,
             last_output_ms: None,
             decode_max_width: None,
+            decode_speed: 1.0,
             captions,
         };
         s.load_cursor_sprites();
@@ -233,11 +237,14 @@ impl Session {
     // ───────────── decoding ─────────────
 
     fn seek_sources(&mut self, source_ms: f64, want_camera: bool) -> Result<()> {
+        let fps = stream::DEFAULT_FPS / self.decode_speed.max(1.0);
         self.screen.max_width = self.decode_max_width;
+        self.screen.fps = fps;
         self.screen.seek(&self.gpu, source_ms)?;
         if want_camera {
             if let Some(cam) = self.camera_stream.as_mut() {
                 cam.max_width = self.decode_max_width;
+                cam.fps = fps;
                 let t = source_ms + self.source.camera_time_offset_ms;
                 if let Err(e) = cam.seek(&self.gpu, t) {
                     // a broken webcam file must not take the whole frame down
