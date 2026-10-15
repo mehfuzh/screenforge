@@ -46,8 +46,8 @@ If the dialog never appears or recording reports that no ScreenCast portal was f
 after switching between desktops), restart the portal: `systemctl --user restart xdg-desktop-portal`.
 
 **Pricing:** recording and editing are free and open source (Apache-2.0), and so are your first
-three exports. After that, exporting from the official build needs a license: US$10/month or US$29
-once (lifetime), verified offline. It is Apache-2.0 code, so you can always build it yourself and
+three exports. After that, exporting from the official build needs a license: US$29
+once (lifetime, no subscription), verified offline. It is Apache-2.0 code, so you can always build it yourself and
 remove the gate; the license pays for the maintained, signed and notarized download, the CI that
 builds it, and ongoing maintenance. See `backend/README.md` for how keys are issued.
 

@@ -1,8 +1,10 @@
 # ScreenForge license backend (Supabase + Stripe)
 
-Recording and editing are free; **export needs a license** (US$10/month subscription, or a
-one-time lifetime key). Keys are Ed25519-signed tokens the app verifies **offline** against the
-public key embedded in `crates/sf-license` — the private key only ever lives here as a Supabase
+Recording and editing are free; **export needs a license**: a one-time US$29 lifetime key.
+(A US$10/month subscription was sold until 14 October 2026; `create-checkout` now refuses
+`plan: "monthly"`, while `stripe-webhook` keeps renewing the subscriptions that exist.)
+
+Keys are Ed25519-signed tokens the app verifies **offline** against the public key embedded in `crates/sf-license` — the private key only ever lives here as a Supabase
 secret, so the public GitHub repo exposes nothing sensitive.
 
 ```
@@ -21,8 +23,9 @@ manual steps, for reference:
 
 1. `cargo run -p sf-cli -- license keygen` → put `SF_LICENSE_SIGNING_KEY` in Supabase secrets and
    paste `ISSUER_PUBLIC_KEY_B64` into `crates/sf-license/src/lib.rs`.
-2. Stripe: create a product with a `$10/month` recurring price (and optionally a lifetime price);
-   set `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `STRIPE_PRICE_MONTHLY`, `STRIPE_PRICE_LIFETIME`.
+2. Stripe: create a product with a one-time US$29 price; set `STRIPE_SECRET_KEY`,
+   `STRIPE_WEBHOOK_SECRET`, `STRIPE_PRICE_LIFETIME` (`STRIPE_PRICE_MONTHLY` only matters for the
+   legacy subscriptions, which `setup.sh` still creates the price for).
 3. Resend: `RESEND_API_KEY`, `LICENSE_FROM_EMAIL`.
 4. `supabase db push && supabase functions deploy create-checkout stripe-webhook license-refresh`
 5. Point `PURCHASE_URL` in `crates/sf-license` at your checkout page (or the `create-checkout` URL).
@@ -31,8 +34,8 @@ manual steps, for reference:
 
 The export dialog has no key field. The user enters the email used at checkout and presses
 Activate: the app calls `license-refresh` with `{ email }`, verifies the returned key offline
-and stores it under `~/Library/Application Support/ScreenForge/`. "Buy monthly" / "Buy lifetime"
-call `create-checkout` with the email and open the Stripe URL. An expired monthly key is
+and stores it under `~/Library/Application Support/ScreenForge/`. "Buy"
+calls `create-checkout` with the email and opens the Stripe URL. An expired monthly key is
 refreshed automatically the next time the dialog opens. Set `SUPABASE_URL` and
 `SUPABASE_ANON_KEY` in `crates/sf-license/src/lib.rs` to the project's values (and deploy the
 functions with `--no-verify-jwt`, or keep JWT verification: the anon key is sent as a bearer token).

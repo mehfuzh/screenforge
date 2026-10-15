@@ -119,11 +119,11 @@ enum Cmd {
 enum LicenseCmd {
     /// Generate an issuer key pair (keep the secret in your payment backend)
     Keygen,
-    /// Sign a key: --email, --plan monthly|lifetime, --days (monthly validity); secret from SF_LICENSE_SIGNING_KEY
+    /// Sign a key: --email, --plan lifetime|monthly, --days (monthly validity); secret from SF_LICENSE_SIGNING_KEY
     Sign {
         #[arg(long)]
         email: String,
-        #[arg(long, default_value = "monthly")]
+        #[arg(long, default_value = "lifetime")]
         plan: String,
         #[arg(long, default_value_t = 31)]
         days: i64,
