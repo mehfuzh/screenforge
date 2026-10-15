@@ -4,7 +4,7 @@
 //!
 //! ScreenForge extension (`zoom_on_typing`): key-downs open and extend ranges the same way, so a
 //! zoom that starts with the click into a text field stays in while you type. Where the app
-//! exposes it, the recorded text caret joins the cursor samples (see `camera::click_groups`), so
+//! exposes it, the recorded text caret joins the cursor samples (see `camera::focus_path`), so
 //! the camera follows the text being typed.
 
 use sf_project::v4::Zoom;

@@ -119,7 +119,8 @@ impl Session {
     fn solvers(pkg: &ProjectPackage, source: &SourceInfo, track: &CursorTrack, geometry: StageGeometry) -> (CameraSolver, CursorSmoother) {
         let cfg = &pkg.project.config;
         let crop = cfg.crop.rect01;
-        let crop_px = [crop.width * source.bounds.width, crop.height * source.bounds.height];
+        let (bw, bh) = (source.bounds.width, source.bounds.height);
+        let crop_px = Rect { x: crop.x * bw, y: crop.y * bh, width: crop.width * bw, height: crop.height * bh };
         let camera = CameraSolver::new(&pkg.project.scenes[0].zooms, track, crop_px, geometry, SpringParams::from(cfg.animations.screen_movement_spring), cfg.zooms.start_animation_early);
         let cursor = CursorSmoother::new(SpringParams::from(cfg.animations.mouse_movement_spring));
         (camera, cursor)
