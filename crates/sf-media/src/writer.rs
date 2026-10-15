@@ -198,7 +198,12 @@ impl VideoWriter {
             filter.push_str(&format!("amix=inputs={}:normalize=0:dropout_transition=0[aout]", opts.audio.len()));
             cmd.arg("-filter_complex").arg(filter);
             cmd.args(["-map", "0:v", "-map", "[aout]"]);
-            cmd.args(["-c:a", "aac", "-b:a", "192k"]);
+            // WebM only carries Vorbis or Opus audio
+            if opts.codec == VideoCodec::Vp9 {
+                cmd.args(["-c:a", "libopus", "-b:a", "160k"]);
+            } else {
+                cmd.args(["-c:a", "aac", "-b:a", "192k"]);
+            }
         }
         // video codec
         let preset = QualityPreset::from_quality(opts.quality);
