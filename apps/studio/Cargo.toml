@@ -19,6 +19,7 @@ sf-session.workspace = true
 sf-export.workspace = true
 sf-license.workspace = true
 sf-recording.workspace = true
+sf-transcribe.workspace = true
 eframe.workspace = true
 egui.workspace = true
 egui-wgpu.workspace = true

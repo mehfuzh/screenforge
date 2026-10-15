@@ -10,6 +10,7 @@
 //!   recording-markers.json    superjson [] markers set while recording
 //!   data/<key>                superjson per-key scratch values (playback position, flags)
 //!   QuickLook/Preview.png     Finder thumbnail
+//!   transcripts/              superjson caption transcripts per microphone session
 //!   recording/                polyrecorder output (metadata.json, HLS fMP4 segments,
 //!                             cursors/, keystrokes/mouseclicks/mousemoves JSON)
 //! ```
@@ -26,6 +27,7 @@ pub mod preset;
 pub mod recording;
 pub mod schema;
 pub mod superjson;
+pub mod transcript;
 
 pub use package::{ProjectPackage, PACKAGE_EXTENSION, PRESET_EXTENSION};
 pub use preset::Preset;

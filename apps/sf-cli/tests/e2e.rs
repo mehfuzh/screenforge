@@ -12,6 +12,7 @@ use std::process::Command;
 use serde_json::json;
 use sf_project::schema::common::Rect;
 use sf_project::v4::{Mask, Slice};
+use sf_project::transcript::{Generator, TranscriptFile, TranscriptItem};
 use sf_project::{Preset, ProjectPackage};
 use sf_render::{Compositor, Gpu};
 use sf_session::create::{create_project_from_recording, CreateOptions};
@@ -32,11 +33,16 @@ struct Fixture {
 /// Record nothing, but write what the recorder would: HLS fMP4 screen video, an AAC
 /// microphone track, input logs and `metadata.json`, then create a project from it.
 fn fixture(auto_zooms: bool) -> Fixture {
+    fixture_with(auto_zooms, None)
+}
+
+/// Like [`fixture`], with `speech` spoken (macOS `say`) on the microphone instead of a tone.
+fn fixture_with(auto_zooms: bool, speech: Option<&str>) -> Fixture {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().to_path_buf();
     let rec = root.join("recording");
     std::fs::create_dir_all(&rec).unwrap();
-    write_media(&rec);
+    write_media(&rec, speech);
     write_input_logs(&rec);
     write_metadata(&rec);
     let opts = CreateOptions { name: "E2E".into(), projects_folder: root.join("projects"), default_config: None, create_automatic_zooms: auto_zooms, markers_ms: vec![500.0] };
@@ -50,7 +56,7 @@ fn ffmpeg(args: &[&str], cwd: &Path) {
     assert!(out.status.success(), "ffmpeg {args:?}: {}", String::from_utf8_lossy(&out.stderr));
 }
 
-fn write_media(rec: &Path) {
+fn write_media(rec: &Path, speech: Option<&str>) {
     let video = format!("testsrc2=size={WIDTH}x{HEIGHT}:rate=60:duration={}", DURATION_MS / 1000.0);
     #[rustfmt::skip]
     ffmpeg(&[
@@ -61,8 +67,19 @@ fn write_media(rec: &Path) {
         "-hls_segment_filename", "channel-1-display-0-%04d.m4s",
         "channel-1-display-0.m3u8",
     ], rec);
-    let tone = format!("sine=frequency=440:duration={}", DURATION_MS / 1000.0);
-    ffmpeg(&["-f", "lavfi", "-i", &tone, "-c:a", "aac", "-ar", "48000", "-ac", "1", "channel-2-microphone-0.m4a"], rec);
+    let secs = format!("{}", DURATION_MS / 1000.0);
+    match speech {
+        Some(text) => {
+            let out = Command::new("say").args(["-o", "speech.aiff", text]).current_dir(rec).output().expect("macOS `say`");
+            assert!(out.status.success(), "say: {}", String::from_utf8_lossy(&out.stderr));
+            ffmpeg(&["-i", "speech.aiff", "-af", "apad", "-t", &secs, "-c:a", "aac", "-ar", "48000", "-ac", "1", "channel-2-microphone-0.m4a"], rec);
+            std::fs::remove_file(rec.join("speech.aiff")).unwrap();
+        }
+        None => {
+            let tone = format!("sine=frequency=440:duration={secs}");
+            ffmpeg(&["-f", "lavfi", "-i", &tone, "-c:a", "aac", "-ar", "48000", "-ac", "1", "channel-2-microphone-0.m4a"], rec);
+        }
+    }
 }
 
 fn write_input_logs(rec: &Path) {
@@ -480,4 +497,170 @@ fn cli_license_keys_sign_and_verify() {
     let out = Command::new(env!("CARGO_BIN_EXE_sf")).args(["license", "sign", "--email", "x@example.com"]).env("SF_LICENSE_SIGNING_KEY", other_sk).output().unwrap();
     let forged = String::from_utf8_lossy(&out.stdout).trim().to_string();
     assert!(!run(&["license", "verify", &forged]).starts_with("Valid"));
+}
+
+// ───────────────────────────── captions ─────────────────────────────
+
+/// Write a microphone transcript: `(start_ms, end_ms, word)`.
+fn write_transcript(project: &Path, words: &[(f64, f64, &str)]) {
+    let items = words.iter().enumerate().map(|(i, (s, e, t))| TranscriptItem::new(i as u32, *s, *e, *t)).collect();
+    let gen = Generator { kind: "whisper".into(), model: Some("base".into()), language: Some("en".into()), prompt: None, extra: Default::default() };
+    TranscriptFile::microphone(0, gen, items).save(project).unwrap();
+}
+
+const WORDS: [(f64, f64, &str); 4] = [(800.0, 1100.0, "Captions"), (1100.0, 1400.0, "are"), (1400.0, 1700.0, "working"), (1700.0, 2100.0, "now.")];
+
+/// Mean difference between two frames over rows `[y0, y1)` (fractions of the height).
+fn band_diff(a: &[u8], b: &[u8], w: u32, h: u32, y0: f64, y1: f64) -> f64 {
+    let row = (w * 4) as usize;
+    let (r0, r1) = ((y0 * h as f64) as usize, (y1 * h as f64) as usize);
+    mean_abs_diff(&a[r0 * row..r1 * row], &b[r0 * row..r1 * row])
+}
+
+/// Render `at_ms` with the captions config changed by `edit`.
+fn render_with(session: &mut Session, comp: &mut Compositor, at_ms: f64, edit: impl FnOnce(&mut sf_project::v4::CaptionsConfig)) -> (u32, u32, Vec<u8>) {
+    edit(&mut session.pkg.project.config.captions);
+    session.rebuild();
+    render(session, comp, at_ms, 360)
+}
+
+#[test]
+fn captions_are_drawn_at_the_bottom_and_follow_the_settings() {
+    let Some(gpu) = gpu() else { return };
+    let f = fixture(false);
+    write_transcript(&f.project, &WORDS);
+    let mut session = Session::open(&f.project, gpu.clone()).unwrap();
+    assert_eq!(session.captions.lines.len(), 1, "one sentence, one line");
+    let mut comp = Compositor::new(gpu);
+
+    let (w, h, off) = render_with(&mut session, &mut comp, 1500.0, |c| c.enable_transcript = false);
+    let (_, _, on) = render_with(&mut session, &mut comp, 1500.0, |c| c.enable_transcript = true);
+    assert!(band_diff(&off, &on, w, h, 0.75, 1.0) > 3.0, "a caption box at the bottom");
+    assert!(band_diff(&off, &on, w, h, 0.0, 0.5) < 0.01, "nothing at the top");
+
+    // before the first word and after the line has gone: no caption
+    let (_, _, before) = render_with(&mut session, &mut comp, 600.0, |_| {});
+    let (_, _, before_off) = render_with(&mut session, &mut comp, 600.0, |c| c.enable_transcript = false);
+    assert!(mean_abs_diff(&before, &before_off) < 0.01);
+    let (_, _, after) = render_with(&mut session, &mut comp, 3500.0, |c| c.enable_transcript = true);
+    let (_, _, after_off) = render_with(&mut session, &mut comp, 3500.0, |c| c.enable_transcript = false);
+    assert!(mean_abs_diff(&after, &after_off) < 0.01);
+
+    // position: top centre
+    let (_, _, top) = render_with(&mut session, &mut comp, 1500.0, |c| {
+        c.enable_transcript = true;
+        c.position01 = sf_project::schema::common::Point::new(0.5, 0.0);
+    });
+    assert!(band_diff(&off, &top, w, h, 0.0, 0.25) > 3.0, "moved to the top");
+    assert!(band_diff(&off, &top, w, h, 0.75, 1.0) < 0.01);
+
+    // bigger text covers more of the frame
+    let (_, _, small) = render_with(&mut session, &mut comp, 1500.0, |c| {
+        c.position01 = sf_project::schema::common::Point::new(0.5, 1.0);
+        c.size_ratio = 0.05;
+    });
+    let (_, _, big) = render_with(&mut session, &mut comp, 1500.0, |c| c.size_ratio = 0.1);
+    assert!(mean_abs_diff(&off, &big) > mean_abs_diff(&off, &small) * 1.5);
+
+    // the serif and mono fonts draw differently from sans
+    let (_, _, serif) = render_with(&mut session, &mut comp, 1500.0, |c| {
+        c.size_ratio = 0.05;
+        c.font = "serif".into();
+    });
+    let (_, _, mono) = render_with(&mut session, &mut comp, 1500.0, |c| c.font = "mono".into());
+    assert!(mean_abs_diff(&small, &serif) > 0.05 && mean_abs_diff(&small, &mono) > 0.05);
+}
+
+#[test]
+fn word_by_word_reveals_progressively() {
+    let Some(gpu) = gpu() else { return };
+    let f = fixture(false);
+    write_transcript(&f.project, &WORDS);
+    let mut session = Session::open(&f.project, gpu.clone()).unwrap();
+    let mut comp = Compositor::new(gpu);
+    let mut drawn = vec![];
+    for t in [900.0, 1500.0, 2000.0] {
+        let (w, h, off) = render_with(&mut session, &mut comp, t, |c| c.enable_transcript = false);
+        let (_, _, px) = render_with(&mut session, &mut comp, t, |c| {
+            c.enable_transcript = true;
+            c.words_reveal = "word-by-word".into();
+            c.line_growth = "centered".into();
+        });
+        drawn.push(band_diff(&off, &px, w, h, 0.75, 1.0));
+    }
+    assert!(drawn[0] < drawn[1] && drawn[1] < drawn[2], "more words, more caption: {drawn:?}");
+}
+
+#[test]
+fn export_burns_in_captions() {
+    let f = fixture(false);
+    write_transcript(&f.project, &WORDS);
+    let frame_at = |name: &str, enable: bool| -> Option<image::RgbaImage> {
+        let mut pkg = ProjectPackage::open(&f.project).unwrap();
+        pkg.project.config.captions.enable_transcript = enable;
+        pkg.save().unwrap();
+        let opts = sf_export::ExportOptions { output: f.root.join(name), fps: 30.0, max_height: 360, include_audio: false, range_ms: Some((1000.0, 2000.0)), ..Default::default() };
+        let mp4 = export(&f.project, opts)?;
+        let png = f.root.join(format!("{name}.png"));
+        ffmpeg(&["-ss", "0.5", "-i", mp4.to_str().unwrap(), "-frames:v", "1", png.to_str().unwrap()], &f.root);
+        Some(image::open(&png).unwrap().to_rgba8())
+    };
+    let Some(with) = frame_at("with.mp4", true) else { return };
+    let without = frame_at("without.mp4", false).unwrap();
+    let (w, h) = with.dimensions();
+    assert!(band_diff(with.as_raw(), without.as_raw(), w, h, 0.75, 1.0) > 3.0, "the caption is in the exported video");
+    assert!(band_diff(with.as_raw(), without.as_raw(), w, h, 0.0, 0.5) < 1.5, "only the caption differs");
+}
+
+#[test]
+fn cli_srt_follows_the_edited_timeline() {
+    if gpu().is_none() {
+        return;
+    }
+    let f = fixture(false);
+    let p = f.project.to_str().unwrap();
+    let srt = f.root.join("c.srt");
+    // no transcript yet
+    let out = Command::new(env!("CARGO_BIN_EXE_sf")).args(["srt", p, "-o", srt.to_str().unwrap()]).output().unwrap();
+    assert!(!out.status.success() && String::from_utf8_lossy(&out.stderr).contains("sf transcribe"));
+
+    write_transcript(&f.project, &[(300.0, 700.0, "Before"), (700.0, 900.0, "the"), (900.0, 1100.0, "cut."), (1600.0, 1900.0, "Gone."), (2600.0, 3000.0, "After"), (3000.0, 3400.0, "it.")]);
+    let mut pkg = ProjectPackage::open(&f.project).unwrap();
+    let mut fast = Slice::new(2500.0, DURATION_MS);
+    fast.time_scale = 0.5;
+    pkg.project.scenes[0].slices = vec![Slice::new(0.0, 1500.0), fast];
+    pkg.save().unwrap();
+
+    sf(&["srt", p, "-o", srt.to_str().unwrap()]);
+    let text = std::fs::read_to_string(&srt).unwrap();
+    let cues: Vec<&str> = text.split("\n\n").filter(|c| !c.trim().is_empty()).collect();
+    assert_eq!(cues.len(), 2, "{text}");
+    assert!(cues[0].starts_with("1\n00:00:00,300 --> ") && cues[0].ends_with("Before the cut."), "{text}");
+    // 2.6 s source → 1.5 s + 0.1 s / 2 = 1.55 s output
+    assert!(cues[1].starts_with("2\n00:00:01,550 --> ") && cues[1].ends_with("After it."), "{text}");
+    assert!(!text.contains("Gone"));
+}
+
+/// Real speech through Whisper. Downloads the base model (142 MB) on first run and needs the
+/// macOS `say` command:
+/// `cargo test -p sf-cli --test e2e -- --ignored transcribes`
+#[test]
+#[ignore = "downloads the Whisper base model; needs macOS `say`"]
+fn transcribes_speech_into_captions() {
+    let f = fixture_with(false, Some("Hello world. Captions are working."));
+    let p = f.project.to_str().unwrap();
+    let out = sf(&["transcribe", p, "--model", "base", "--language", "en"]);
+    assert!(out.contains("microphone-session-0.json"), "{out}");
+    let t = TranscriptFile::load_microphone(&f.project, 0).unwrap().expect("transcript written");
+    let text = t.transcript.iter().map(|i| i.text.to_lowercase()).collect::<Vec<_>>().join(" ");
+    for i in &t.transcript {
+        println!("{:>6.0} {:>6.0}  {}", i.start_ms, i.end_ms, i.text);
+    }
+    assert!(text.contains("hello") && text.contains("captions"), "{text}");
+    assert!(t.transcript.windows(2).all(|w| w[0].start_ms <= w[1].start_ms), "words in order");
+    assert!(t.transcript.iter().all(|i| i.end_ms >= i.start_ms && i.end_ms <= DURATION_MS + 50.0));
+
+    let srt = f.root.join("speech.srt");
+    sf(&["srt", p, "-o", srt.to_str().unwrap()]);
+    assert!(std::fs::read_to_string(&srt).unwrap().to_lowercase().contains("captions"));
 }

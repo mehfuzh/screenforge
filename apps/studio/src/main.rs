@@ -5,6 +5,7 @@ mod area_select;
 mod window_select;
 mod audio;
 mod camera_bubble;
+mod captions;
 mod editor;
 mod export;
 mod mic_meter;
