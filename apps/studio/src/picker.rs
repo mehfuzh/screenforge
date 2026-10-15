@@ -251,7 +251,7 @@ impl Picker {
         let mut texts: Vec<String> = [
             "Don't record camera", "Don't record microphone", "Don't record system audio", "Record system audio from all apps",
             "Recording countdown", "None", "3 seconds", "5 seconds", "10 seconds", "Appearance", "Match system", "Light", "Dark", "Osaka Jade", "Quit ScreenForge",
-            "RECENT PROJECTS", "Open project…", "No projects yet. Record something or open a .screenstudio package.", "Loading…", "No preview", "0123456789 min h d ago", "Move to Trash",
+            "RECENT PROJECTS", "Open project…", "No projects yet. Record something or open a project.", "Loading…", "No preview", "0123456789 min h d ago", "Move to Trash",
         ]
         .map(String::from)
         .to_vec();
@@ -489,7 +489,7 @@ impl Picker {
         inner.add_space(6.0);
         let recent: Vec<PathBuf> = prefs.recent.iter().filter(|p| p.exists()).cloned().collect();
         if recent.is_empty() {
-            inner.label(RichText::new("No projects yet. Record something or open a .screenstudio package.").color(theme::p().text_dim));
+            inner.label(RichText::new("No projects yet. Record something or open a project.").color(theme::p().text_dim));
             return;
         }
         let thumbs = self.thumbs.as_ref();

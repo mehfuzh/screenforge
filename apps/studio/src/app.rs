@@ -16,7 +16,8 @@ pub enum Screen {
     Editor(Box<Editor>),
     /// The editor window is up and shows "Opening …" while the project loads on a background
     /// thread (the spinner keeps turning however long the load takes).
-    Opening(PathBuf, std::sync::mpsc::Receiver<anyhow::Result<sf_session::Session>>),
+    /// Loading a project; the progress is filled while a Screen Studio project is imported.
+    Opening(PathBuf, std::sync::mpsc::Receiver<anyhow::Result<sf_session::Session>>, std::sync::Arc<sf_project::ImportProgress>),
 }
 
 pub struct App {
@@ -34,7 +35,7 @@ pub struct App {
     window_select: Option<(crate::window_select::WindowSelect, crate::picker::RecordRequest)>,
     /// Frames to wait before restyling the native title bar after `Decorations(true)`.
     titlebar_fix: u8,
-    /// Project passed on the command line (`screenforge My.screenstudio`), opened on the first frame.
+    /// Project passed on the command line (`screenforge My.screenforge`), opened on the first frame.
     pending_open: Option<PathBuf>,
     /// First-launch permissions window.
     perm_setup: Option<crate::permissions::PermissionsSetup>,
@@ -108,7 +109,8 @@ impl App {
         let mut picker = Picker::default();
         picker.load_inputs();
         let perm_setup = (crate::permissions::PermissionsSetup::needed() || std::env::var_os("SF_SHOW_PERMISSIONS").is_some()).then(crate::permissions::PermissionsSetup::start);
-        let app = App { gpu, screen: Screen::Picker(picker), error: None, prefs, window_mode: WindowMode::Picker, picker_height: crate::picker::BAR_WINDOW_H, placed_once: false, tray: None, tray_tried: false, area_select: None, window_select: None, titlebar_fix: 0, perm_setup, confirm_close: None, quitting: false, fresh_open: None, last_size: None, last_pointer: None, #[cfg(target_os = "linux")] input_region: crate::os::InputRegion::new(cc), pending_open: std::env::args().nth(1).map(PathBuf::from).filter(|p| p.is_dir() || p.extension().is_some_and(|e| e == "screenstudio")) };
+        let app = App { gpu, screen: Screen::Picker(picker), error: None, prefs, window_mode: WindowMode::Picker, picker_height: crate::picker::BAR_WINDOW_H, placed_once: false, tray: None, tray_tried: false, area_select: None, window_select: None, titlebar_fix: 0, perm_setup, confirm_close: None, quitting: false, fresh_open: None, last_size: None, last_pointer: None, #[cfg(target_os = "linux")] input_region: crate::os::InputRegion::new(cc), pending_open: std::env::args().nth(1).map(PathBuf::from).filter(|p| p.is_dir() || p.extension().is_some_and(|e| e == sf_project::PACKAGE_EXTENSION || e == sf_project::SCREEN_STUDIO_EXTENSION)) };
+        crate::open_docs::set_context(&cc.egui_ctx);
         // a project on the command line opens on the first frame (`pending_open`)
         app
     }
@@ -237,7 +239,7 @@ impl App {
                         ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
                     }
                     crate::tray::TrayAction::OpenProject => {
-                        if let Some(p) = rfd::FileDialog::new().add_filter("ScreenForge project", &["screenstudio"]).pick_folder() {
+                        if let Some(p) = project_dialog().pick_folder() {
                             *open_request = Some(p);
                         }
                     }
@@ -258,24 +260,33 @@ impl App {
         self.leave_editor();
         let (tx, rx) = std::sync::mpsc::channel();
         let (gpu, load_path, repaint) = (self.gpu.clone(), path.clone(), ctx.clone());
+        let progress = std::sync::Arc::new(sf_project::ImportProgress::default());
+        let import = progress.clone();
         std::thread::Builder::new()
             .name("open-project".into())
             .spawn(move || {
-                let _ = tx.send(Editor::load_session(&load_path, gpu));
+                // a `.screenstudio` package is imported to a `.screenforge` one before it opens
+                let loaded = sf_session::create::package_to_open(&load_path, &import).and_then(|p| Editor::load_session(&p, gpu));
+                let _ = tx.send(loaded);
                 repaint.request_repaint();
             })
             .expect("spawn project loader");
-        self.screen = Screen::Opening(path, rx);
+        self.screen = Screen::Opening(path, rx, progress);
         self.set_window_mode(ctx, WindowMode::Editor);
         ctx.send_viewport_cmd(egui::ViewportCommand::Title(String::new()));
         ctx.request_repaint();
     }
 
     fn open_project(&mut self, path: PathBuf, loaded: anyhow::Result<sf_session::Session>, ctx: &egui::Context) {
-        match loaded.map(|session| Editor::with_session(&path, session, self.gpu.clone())) {
+        // an imported project opens from its new `.screenforge` package
+        let opened = loaded.as_ref().map(|s| s.pkg.path.clone()).unwrap_or_else(|_| path.clone());
+        match loaded.map(|session| Editor::with_session(&opened, session, self.gpu.clone())) {
             Ok(mut ed) => {
                 ed.fresh_recording = self.fresh_open.take().is_some_and(|f| f == path);
-                self.prefs.touch(&path);
+                if opened != path {
+                    self.prefs.recent.retain(|r| r.exists());
+                }
+                self.prefs.touch(&opened);
                 self.screen = Screen::Editor(Box::new(ed));
                 self.set_window_mode(ctx, WindowMode::Editor);
                 // the editor paints its own centred title like Screen Studio
@@ -286,7 +297,13 @@ impl App {
                 if matches!(self.screen, Screen::Opening(..)) {
                     self.show_picker(ctx);
                 }
-                self.error = Some(format!("Could not open {}:\n{e:#}", path.display()));
+                if e.chain().any(|c| matches!(c.downcast_ref::<sf_project::Error>(), Some(sf_project::Error::Cancelled))) {
+                    if let Screen::Picker(p) = &mut self.screen {
+                        p.status = Some(format!("Import of “{}” cancelled", ed_name(&path)));
+                    }
+                } else {
+                    self.error = Some(format!("Could not open {}:\n{e:#}", path.display()));
+                }
             }
         }
     }
@@ -310,14 +327,112 @@ impl App {
     }
 }
 
+/// Open dialog for ScreenForge projects, starting in the projects folder; Screen Studio projects
+/// are imported when opened.
+fn project_dialog() -> rfd::FileDialog {
+    let dialog = rfd::FileDialog::new().add_filter("ScreenForge or Screen Studio project", &[sf_project::PACKAGE_EXTENSION, sf_project::SCREEN_STUDIO_EXTENSION]);
+    let folder = sf_session::create::default_projects_folder();
+    if folder.is_dir() { dialog.set_directory(folder) } else { dialog }
+}
+
 /// Placeholder while a project loads: its name and a spinner, centred on the editor background.
-fn opening_ui(ui: &mut egui::Ui, path: &std::path::Path) {
+/// While a Screen Studio project is copied in, an import dialog with progress and Cancel instead.
+fn opening_ui(ui: &mut egui::Ui, path: &std::path::Path, progress: &sf_project::ImportProgress) {
+    use std::sync::atomic::Ordering;
     let pal = crate::theme::p();
     let rect = ui.max_rect();
     ui.painter().rect_filled(rect, 0.0, pal.bg);
     let c = rect.center();
+    let (done, total) = (progress.done.load(Ordering::Relaxed), progress.total.load(Ordering::Relaxed));
+    if total > 0 && done < total {
+        import_dialog(ui, path, progress, done, total);
+        return;
+    }
     egui::Spinner::new().size(22.0).color(pal.text_dim).paint_at(ui, egui::Rect::from_center_size(egui::pos2(c.x, c.y - 22.0), egui::vec2(22.0, 22.0)));
     ui.painter().text(egui::pos2(c.x, c.y + 10.0), egui::Align2::CENTER_CENTER, format!("Opening {}", ed_name(path)), egui::FontId::proportional(14.0), pal.text_dim);
+}
+
+/// Modal shown while a Screen Studio project is copied in, framed like the export progress.
+fn import_dialog(ui: &mut egui::Ui, path: &std::path::Path, progress: &sf_project::ImportProgress, done: u64, total: u64) {
+    use crate::widgets::{self, Icon};
+    use egui::{vec2, CornerRadius, RichText};
+    use std::sync::atomic::Ordering;
+    let pal = crate::theme::p();
+    let ctx = ui.ctx().clone();
+    let cancelling = progress.cancel.load(Ordering::Relaxed);
+    let frac = (done as f64 / total as f64).clamp(0.0, 1.0);
+    // remember when the copy started for the time estimate
+    let started_id = egui::Id::new(("import_started", path));
+    let started = ctx.data_mut(|d| *d.get_temp_mut_or_insert_with(started_id, std::time::Instant::now));
+    let gb = |b: u64| b as f64 / 1e9;
+
+    let frame = egui::Frame::NONE.fill(pal.bg).stroke(egui::Stroke::new(1.0, pal.border)).corner_radius(crate::theme::RADIUS).inner_margin(egui::Margin::symmetric(22, 20)).shadow(ctx.global_style().visuals.window_shadow);
+    egui::Modal::new(egui::Id::new("import_progress")).frame(frame).show(&ctx, |ui| {
+        ui.set_width(crate::export::DIALOG_W - 40.0);
+        ui.spacing_mut().item_spacing = vec2(10.0, 0.0);
+
+        // header: icon tile, title and file name, percentage
+        ui.horizontal(|ui| {
+            let (tile, _) = ui.allocate_exact_size(vec2(40.0, 40.0), egui::Sense::hover());
+            ui.painter().rect_filled(tile, CornerRadius::same(crate::theme::RADIUS_SM), pal.card_2);
+            widgets::paint_icon(ui.painter(), egui::Rect::from_center_size(tile.center(), vec2(18.0, 18.0)), Icon::Folder, pal.accent);
+            ui.vertical(|ui| {
+                ui.add_space(2.0);
+                ui.label(RichText::new("Importing project").size(15.0).strong().color(pal.text));
+                ui.add_space(3.0);
+                let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                ui.add(egui::Label::new(RichText::new(name).size(12.5).color(pal.text_dim)).truncate());
+            });
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.label(RichText::new(format!("{:.0}%", frac * 100.0)).size(15.0).strong().color(pal.text));
+            });
+        });
+        ui.add_space(18.0);
+
+        // progress bar, painted like the export dialog's
+        let (bar, _) = ui.allocate_exact_size(vec2(ui.available_width(), 6.0), egui::Sense::hover());
+        ui.painter().rect_filled(bar, CornerRadius::same(2), pal.card_3);
+        let fill = egui::Rect::from_min_size(bar.min, vec2(bar.width() * frac as f32, bar.height()));
+        ui.painter().rect_filled(fill, CornerRadius::same(2), if cancelling { pal.text_faint } else { pal.accent });
+        ui.add_space(10.0);
+
+        ui.horizontal(|ui| {
+            ui.label(RichText::new(format!("{:.2} of {:.2} GB", gb(done), gb(total))).size(12.5).color(pal.text_dim));
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                let el = started.elapsed().as_secs_f64();
+                let eta = if cancelling { "Cancelling…".to_string() } else if frac > 0.02 && el > 1.0 { format!("About {}", short_duration(el / frac - el)) } else { "Estimating…".to_string() };
+                ui.label(RichText::new(eta).size(12.5).color(pal.text_dim));
+            });
+        });
+        ui.add_space(16.0);
+        ui.separator();
+        ui.add_space(14.0);
+
+        // footer: what happens to the files, Cancel
+        ui.horizontal(|ui| {
+            ui.vertical(|ui| {
+                ui.set_max_width(ui.available_width() - 100.0);
+                widgets::hint(ui, "Your original project stays as it is. The copy is saved to ScreenForge Projects.");
+            });
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                let cancel = ui.add_enabled_ui(!cancelling, |ui| widgets::secondary_button(ui, "Cancel").on_hover_text("Esc")).inner;
+                if cancel.clicked() || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                    progress.cancel.store(true, Ordering::Relaxed);
+                }
+            });
+        });
+    });
+    // the copy runs on the loader thread: keep the bar moving
+    ctx.request_repaint_after(std::time::Duration::from_millis(100));
+}
+
+/// "12s left", "3 min left".
+fn short_duration(secs: f64) -> String {
+    if secs < 60.0 {
+        format!("{:.0}s left", secs.max(1.0))
+    } else {
+        format!("{:.0} min left", (secs / 60.0).ceil())
+    }
 }
 
 fn ed_name(p: &std::path::Path) -> String {
@@ -368,6 +483,10 @@ impl eframe::App for App {
         let rs = frame.wgpu_render_state().expect("wgpu").clone();
 
         let mut open_request: Option<PathBuf> = self.pending_open.take();
+        // projects opened from Finder wait while a recording is in progress
+        if open_request.is_none() && !matches!(self.screen, Screen::Recording(_)) {
+            open_request = crate::open_docs::take();
+        }
         crate::theme::sync(ctx);
         if let Some(setup) = self.perm_setup.as_mut() {
             if setup.show(ctx) {
@@ -437,8 +556,8 @@ impl eframe::App for App {
                     self.prefs.touch(&p);
                 }
             }
-            Screen::Opening(path, rx) => {
-                opening_ui(ui, path);
+            Screen::Opening(path, rx, progress) => {
+                opening_ui(ui, path, progress);
                 match rx.try_recv() {
                     Ok(r) => loaded = Some((path.clone(), r)),
                     Err(std::sync::mpsc::TryRecvError::Empty) => {}
@@ -553,7 +672,7 @@ impl eframe::App for App {
         match action {
             Some(PickerAction::OpenProject(p)) => open_request = Some(p),
             Some(PickerAction::OpenProjectDialog) => {
-                if let Some(p) = rfd::FileDialog::new().add_filter("ScreenForge project", &["screenstudio"]).pick_folder() {
+                if let Some(p) = project_dialog().pick_folder() {
                     open_request = Some(p);
                 }
             }

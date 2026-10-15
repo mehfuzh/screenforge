@@ -1,7 +1,7 @@
-//! `.screenstudiopreset` packages: a saved project configuration.
+//! `.screenforgepreset` packages: a saved project configuration (`.screenstudiopreset` ones are read too).
 //!
 //! ```text
-//! Name.screenstudiopreset/
+//! Name.screenforgepreset/
 //!   meta.json   superjson {version:"4.0.0", app:{version}, projectConfig: Config (minus crop), name?}
 //!   assets/     copy of the project's assets/ (background image, LUT …)
 //! ```
@@ -116,7 +116,8 @@ impl Preset {
         if let Ok(rd) = std::fs::read_dir(folder) {
             for e in rd.flatten() {
                 let p = e.path();
-                if p.extension().and_then(|x| x.to_str()) == Some(crate::PRESET_EXTENSION) {
+                let ext = p.extension().and_then(|x| x.to_str());
+                if ext == Some(crate::PRESET_EXTENSION) || ext == Some(crate::SCREEN_STUDIO_PRESET_EXTENSION) {
                     if let Ok(pr) = Preset::open(&p) {
                         out.push(pr);
                     }
@@ -134,7 +135,7 @@ mod tests {
 
     #[test]
     fn create_open_apply() {
-        let dir = std::env::temp_dir().join(format!("sf-preset-{}.screenstudiopreset", crate::ids::new_id()));
+        let dir = std::env::temp_dir().join(format!("sf-preset-{}.{}", crate::ids::new_id(), crate::PRESET_EXTENSION));
         let mut cfg = Config::default();
         cfg.styles.screen_border_radius = 42.0;
         cfg.crop.rect01.width = 0.5;

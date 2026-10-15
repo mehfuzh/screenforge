@@ -540,7 +540,7 @@ impl Editor {
             } else {
                 let painter = ui.painter();
                 let galley = painter.layout_no_wrap(name.clone(), FontId::proportional(15.0), theme::p().text);
-                let ext = painter.layout_no_wrap(".screenstudio".into(), FontId::proportional(15.0), theme::p().text_faint);
+                let ext = painter.layout_no_wrap(format!(".{}", sf_project::PACKAGE_EXTENSION), FontId::proportional(15.0), theme::p().text_faint);
                 let total = galley.size().x + ext.size().x;
                 let x0 = rect.center().x - total / 2.0;
                 let title_rect = Rect::from_min_size(pos2(x0 - 8.0, rect.center().y - 14.0), vec2(total + 16.0, 28.0));
@@ -764,7 +764,7 @@ impl Editor {
             if let Some(folder) = folder {
                 let _ = std::fs::create_dir_all(&folder);
                 let name = format!("Preset {}", chrono_like_stamp());
-                let out = folder.join(format!("{name}.screenstudiopreset"));
+                let out = folder.join(format!("{name}.{}", sf_project::PRESET_EXTENSION));
                 let assets = self.session.pkg.path.join("assets");
                 match sf_project::Preset::create(&out, &name, &self.session.pkg.project.config, assets.is_dir().then_some(assets.as_path())) {
                     Ok(_) => self.set_status(format!("Saved {name}")),

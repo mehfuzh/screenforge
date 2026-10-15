@@ -1,11 +1,13 @@
 # Architecture
 
-ScreenForge uses the `.screenstudio` package format so projects stay interchangeable, but the
+ScreenForge saves projects as `.screenforge` packages. They share their layout with
+`.screenstudio` packages, so Screen Studio projects can be imported: opening one copies it into
+`~/ScreenForge Projects` as a `.screenforge` package and leaves the original untouched. The
 implementation is native Rust: no Electron, no WebCodecs, no TypeGPU.
 
 ```
                  ┌──────────────┐        ┌──────────────┐
-  record ──────▶ │ sf-recording │ ─────▶ │  .screenstudio package (recording/, project.json) │
+  record ──────▶ │ sf-recording │ ─────▶ │  .screenforge package (recording/, project.json)  │
                  └──────────────┘        └──────────────┘
                                                 │ open
                                                 ▼

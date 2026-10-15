@@ -38,7 +38,7 @@ impl From<Codec> for VideoCodec {
 
 #[derive(Subcommand)]
 enum Cmd {
-    /// Print a summary of a .screenstudio package (migrating old formats in memory)
+    /// Print a summary of a .screenforge or .screenstudio package (migrating old formats in memory)
     Inspect {
         path: PathBuf,
         /// Dump the (migrated) project.json
@@ -99,12 +99,19 @@ enum Cmd {
     },
     /// Re-save a package (useful to migrate v3 → v4 on disk). Writes project.json.bak first.
     Resave { path: PathBuf },
-    /// List presets in the presets folder (~/Documents/Screen Studio Presets)
+    /// Copy a .screenstudio package into a folder as a .screenforge package (the original is untouched)
+    Import {
+        path: PathBuf,
+        /// Destination folder (default: ~/ScreenForge Projects)
+        #[arg(long)]
+        to: Option<PathBuf>,
+    },
+    /// List presets in the presets folder (~/Documents/ScreenForge Presets)
     Presets {
         #[arg(long)]
         folder: Option<PathBuf>,
     },
-    /// Save a project's configuration as a .screenstudiopreset package
+    /// Save a project's configuration as a .screenforgepreset package
     PresetCreate { project: PathBuf, out: PathBuf },
     /// Apply a preset to a project (keeps the crop) and save it
     PresetApply { project: PathBuf, preset: PathBuf },
@@ -239,6 +246,12 @@ fn main() -> Result<()> {
             let pkg = sf_project::ProjectPackage::open(&path)?;
             pkg.save()?;
             println!("saved {} (migrated: {})", path.display(), pkg.migrated);
+            Ok(())
+        }
+        Cmd::Import { path, to } => {
+            let folder = to.unwrap_or_else(sf_session::create::default_projects_folder);
+            let dest = sf_project::package::import_screen_studio(&path, &folder)?;
+            println!("imported {} as {}", path.display(), dest.display());
             Ok(())
         }
     }

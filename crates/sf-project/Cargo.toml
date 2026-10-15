@@ -1,6 +1,6 @@
 [package]
 name = "sf-project"
-description = "Project package (.screenstudio) model, superjson envelope, migrations and package I/O"
+description = "Project package (.screenforge) model, superjson envelope, migrations and package I/O"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

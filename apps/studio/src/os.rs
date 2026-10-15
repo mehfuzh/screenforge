@@ -181,18 +181,18 @@ mod tests {
     #[test]
     fn home_trash_moves_and_records_the_origin() {
         let tmp = tempfile::tempdir().unwrap();
-        let p = tmp.path().join("My Project.screenstudio");
+        let p = tmp.path().join("My Project.screenforge");
         std::fs::create_dir_all(p.join("recording")).unwrap();
         let data = tmp.path().join("data");
         with_data_home(&data, || home_trash(&p)).unwrap();
         assert!(!p.exists());
-        assert!(tmp.path().join("data/Trash/files/My Project.screenstudio/recording").is_dir());
-        let info = std::fs::read_to_string(tmp.path().join("data/Trash/info/My Project.screenstudio.trashinfo")).unwrap();
-        assert!(info.contains("Path=") && info.contains("My%20Project.screenstudio"), "{info}");
+        assert!(tmp.path().join("data/Trash/files/My Project.screenforge/recording").is_dir());
+        let info = std::fs::read_to_string(tmp.path().join("data/Trash/info/My Project.screenforge.trashinfo")).unwrap();
+        assert!(info.contains("Path=") && info.contains("My%20Project.screenforge"), "{info}");
         // a second item with the same name gets a free name
         std::fs::create_dir_all(&p).unwrap();
         with_data_home(&data, || home_trash(&p)).unwrap();
-        assert!(tmp.path().join("data/Trash/files/My Project.screenstudio.2").is_dir());
+        assert!(tmp.path().join("data/Trash/files/My Project.screenforge.2").is_dir());
     }
 
     #[cfg(not(target_os = "macos"))]
@@ -206,16 +206,16 @@ mod tests {
         if std::fs::metadata(src.path()).unwrap().dev() == std::fs::metadata(data.path()).unwrap().dev() {
             return; // same file system here: covered by the test above
         }
-        let p = src.path().join("Cross.screenstudio");
+        let p = src.path().join("Cross.screenforge");
         std::fs::create_dir_all(p.join("recording")).unwrap();
         std::fs::write(p.join("recording/a.mp4"), b"video").unwrap();
         std::os::unix::fs::symlink("recording/a.mp4", p.join("link")).unwrap();
         with_data_home(data.path(), || home_trash(&p)).unwrap();
         assert!(!p.exists());
-        let t = data.path().join("Trash/files/Cross.screenstudio");
+        let t = data.path().join("Trash/files/Cross.screenforge");
         assert_eq!(std::fs::read(t.join("recording/a.mp4")).unwrap(), b"video");
         assert_eq!(std::fs::read_link(t.join("link")).unwrap(), Path::new("recording/a.mp4"));
-        assert!(data.path().join("Trash/info/Cross.screenstudio.trashinfo").is_file());
+        assert!(data.path().join("Trash/info/Cross.screenforge.trashinfo").is_file());
     }
 }
 

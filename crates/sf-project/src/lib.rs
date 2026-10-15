@@ -1,9 +1,10 @@
-//! Screen Studio compatible project model.
+//! ScreenForge project model.
 //!
-//! A `.screenstudio` project is a macOS package directory:
+//! A `.screenforge` project is a macOS package directory. It shares its layout with
+//! `.screenstudio` packages, which are imported by copying (see [`package::import_screen_studio`]):
 //!
 //! ```text
-//! Name.screenstudio/
+//! Name.screenforge/
 //!   meta.json                 superjson {version, requiredVersion, createdAt}
 //!   project.json              superjson Project (v4 nested config, v3 flat config)
 //!   project.json.bak          previous save
@@ -29,7 +30,7 @@ pub mod schema;
 pub mod superjson;
 pub mod transcript;
 
-pub use package::{ProjectPackage, PACKAGE_EXTENSION, PRESET_EXTENSION};
+pub use package::{ImportProgress, ProjectPackage, PACKAGE_EXTENSION, PRESET_EXTENSION, SCREEN_STUDIO_EXTENSION, SCREEN_STUDIO_PRESET_EXTENSION};
 pub use preset::Preset;
 pub use audio_clips::{AudioClip, AudioTrack, SceneAudioExt};
 pub use schema::v4::{self as v4, Project};
@@ -54,6 +55,8 @@ pub enum Error {
     UnsupportedVersion(String),
     #[error("superjson: {0}")]
     SuperJson(String),
+    #[error("cancelled")]
+    Cancelled,
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
