@@ -4441,6 +4441,7 @@ dependencies = [
  "directories",
  "sf-media",
  "sf-project",
+ "sha2",
  "tempfile",
  "tracing",
  "ureq",
