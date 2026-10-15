@@ -4241,6 +4241,7 @@ dependencies = [
  "sf-project",
  "sf-render",
  "sf-session",
+ "tempfile",
  "tracing",
  "tracing-subscriber",
 ]

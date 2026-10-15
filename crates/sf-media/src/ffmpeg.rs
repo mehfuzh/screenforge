@@ -61,3 +61,30 @@ pub fn has_encoder(name: &str) -> bool {
     });
     list.lines().any(|l| l.split_whitespace().nth(1) == Some(name))
 }
+
+/// Can this machine actually run `encoder` with `pix_fmt`? `-encoders` lists the VideoToolbox
+/// encoders on every Mac, but the hardware ProRes encoder only works where the media engine
+/// has ProRes (not on base M1/M2 chips or virtual Macs). A tiny test encode, cached.
+pub fn encoder_works(encoder: &str, pix_fmt: &str) -> bool {
+    static CACHE: OnceLock<std::sync::Mutex<std::collections::HashMap<String, bool>>> = OnceLock::new();
+    let key = format!("{encoder}/{pix_fmt}");
+    let cache = CACHE.get_or_init(Default::default);
+    if let Some(ok) = cache.lock().ok().and_then(|c| c.get(&key).copied()) {
+        return ok;
+    }
+    let ok = has_encoder(encoder)
+        && ffmpeg_cmd()
+            .and_then(|mut c| {
+                c.args(["-f", "lavfi", "-i", "color=c=gray:s=64x64:d=0.1", "-c:v", encoder, "-pix_fmt", pix_fmt, "-f", "null", "-"])
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .status()
+                    .map_err(Into::into)
+            })
+            .map(|s| s.success())
+            .unwrap_or(false);
+    if let Ok(mut c) = cache.lock() {
+        c.insert(key, ok);
+    }
+    ok
+}

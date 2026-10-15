@@ -5,7 +5,7 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Stdio};
 
-use crate::{ffmpeg::{ffmpeg_cmd, has_encoder}, Error, PixelFormat, Result};
+use crate::{ffmpeg::{encoder_works, ffmpeg_cmd, has_encoder}, Error, PixelFormat, Result};
 
 /// Screen Studio's export "Compression" presets. Bitrate = width × height × fps × bits-per-pixel;
 /// when the encoder supports constant quality we use the quantizer instead.
@@ -198,7 +198,12 @@ impl VideoWriter {
             filter.push_str(&format!("amix=inputs={}:normalize=0:dropout_transition=0[aout]", opts.audio.len()));
             cmd.arg("-filter_complex").arg(filter);
             cmd.args(["-map", "0:v", "-map", "[aout]"]);
-            cmd.args(["-c:a", "aac", "-b:a", "192k"]);
+            // WebM only carries Vorbis or Opus audio
+            if opts.codec == VideoCodec::Vp9 {
+                cmd.args(["-c:a", "libopus", "-b:a", "160k"]);
+            } else {
+                cmd.args(["-c:a", "aac", "-b:a", "192k"]);
+            }
         }
         // video codec
         let preset = QualityPreset::from_quality(opts.quality);
@@ -227,7 +232,7 @@ impl VideoWriter {
                 cmd.args(["-pix_fmt", "yuv420p", "-movflags", "+faststart"]);
             }
             VideoCodec::ProRes4444 => {
-                if has_encoder("prores_videotoolbox") {
+                if encoder_works("prores_videotoolbox", "bgra") {
                     cmd.args(["-c:v", "prores_videotoolbox", "-profile:v", "4444", "-pix_fmt", "bgra"]);
                 } else {
                     cmd.args(["-c:v", "prores_ks", "-profile:v", "4444", "-pix_fmt", "yuva444p10le"]);
@@ -262,7 +267,19 @@ impl VideoWriter {
     pub fn write_frame(&mut self, pixels: &[u8]) -> Result<()> {
         debug_assert_eq!(pixels.len(), self.frame_bytes, "frame size mismatch");
         let stdin = self.stdin.as_mut().expect("writer already finished");
-        stdin.write_all(pixels)?;
+        if let Err(e) = stdin.write_all(pixels) {
+            // ffmpeg exited (bad arguments, unusable encoder …): report its own message
+            if e.kind() == std::io::ErrorKind::BrokenPipe {
+                drop(self.stdin.take());
+                let status = self.child.wait()?;
+                let mut err = String::new();
+                if let Some(mut s) = self.child.stderr.take() {
+                    let _ = s.read_to_string(&mut err);
+                }
+                return Err(Error::FfmpegFailed { status: status.to_string(), stderr: err });
+            }
+            return Err(e.into());
+        }
         self.frames_written += 1;
         Ok(())
     }
@@ -305,6 +322,31 @@ impl Drop for VideoWriter {
 mod tests {
     use super::*;
     use crate::{VideoReader, VideoReaderOptions};
+
+    #[test]
+    fn unusable_encoders_are_detected() {
+        if crate::ffmpeg::ffmpeg_path().is_err() {
+            eprintln!("ffmpeg missing; skipping");
+            return;
+        }
+        assert!(!encoder_works("no-such-encoder", "yuv420p"));
+        assert!(encoder_works("mpeg4", "yuv420p"));
+    }
+
+    #[test]
+    fn a_failed_ffmpeg_reports_its_error() {
+        if crate::ffmpeg::ffmpeg_path().is_err() {
+            eprintln!("ffmpeg missing; skipping");
+            return;
+        }
+        // the output folder does not exist, so ffmpeg exits right away
+        let out = std::env::temp_dir().join("sf-missing-dir").join("nested").join("x.mp4");
+        let opts = VideoWriterOptions { width: 64, height: 64, fps: 30.0, codec: VideoCodec::H264, ..Default::default() };
+        let mut w = VideoWriter::create(&out, &opts).unwrap();
+        let px = vec![0u8; 64 * 64 * 4];
+        let err = (0..400).find_map(|_| w.write_frame(&px).err()).expect("writing fails once ffmpeg has exited");
+        assert!(matches!(err, Error::FfmpegFailed { ref stderr, .. } if !stderr.is_empty()), "{err:?}");
+    }
 
     #[test]
     fn encode_then_decode_roundtrip() {
