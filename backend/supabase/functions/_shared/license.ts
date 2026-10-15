@@ -29,7 +29,7 @@ export async function emailLicense(email: string, key: string, plan: string) {
       from: Deno.env.get("LICENSE_FROM_EMAIL") ?? "ScreenForge <licenses@screenforge.dev>",
       to: [email],
       subject: "Your ScreenForge license key",
-      text: `Thanks for supporting ScreenForge!\n\nYour ${plan} license key:\n\n${key}\n\nOpen ScreenForge → Export → "Already have a key?" and paste it. Monthly keys renew automatically; press Refresh in the app if one expires.\n`,
+      text: `Thanks for supporting ScreenForge!\n\nYour ${plan} license key:\n\n${key}\n\nOpen ScreenForge → Export, enter this email address and press Activate.${plan === "monthly" ? " Monthly keys renew automatically while the subscription is active." : " The key never expires."}\n`,
     }),
   });
 }
