@@ -3,18 +3,40 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>ScreenForge — screen recordings that look professionally edited</title>
-<meta name="description" content="ScreenForge records your Mac screen and turns it into a polished video: automatic zooms that follow your clicks and typing, a smooth cursor, backgrounds, and a separate audio track you can split and trim. Free to record and edit.">
+<title>ScreenForge — open-source Screen Studio alternative for Mac and Linux</title>
+<meta name="description" content="ScreenForge is an open-source Screen Studio alternative: record your Mac or Linux screen and get automatic zooms that follow your clicks, a smooth cursor, backgrounds and a separate voice track. Opens .screenstudio projects. Free to record and edit.">
+<link rel="canonical" href="https://screenforge.studio/">
 <meta name="color-scheme" content="light dark">
 <meta property="og:type" content="website">
-<meta property="og:title" content="ScreenForge — screen recordings that look professionally edited">
-<meta property="og:description" content="Record your Mac screen, get automatic zooms, a smooth cursor, backgrounds and an editable audio track. Export to MP4 for YouTube, courses and demos. Free to record and edit.">
+<meta property="og:site_name" content="ScreenForge">
+<meta property="og:url" content="https://screenforge.studio/">
+<meta property="og:title" content="ScreenForge — open-source Screen Studio alternative">
+<meta property="og:description" content="Record your Mac or Linux screen, get automatic zooms, a smooth cursor, backgrounds and an editable voice track. Opens .screenstudio projects. Free to record and edit.">
 <meta property="og:image" content="https://screenforge.studio/og.png?v=2">
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
-<meta property="og:type" content="website">
 <meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="ScreenForge — open-source Screen Studio alternative">
+<meta name="twitter:description" content="Record your Mac or Linux screen, get automatic zooms, a smooth cursor, backgrounds and an editable voice track. Opens .screenstudio projects.">
 <meta name="twitter:image" content="https://screenforge.studio/og.png?v=2">
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "SoftwareApplication",
+  "name": "ScreenForge",
+  "url": "https://screenforge.studio/",
+  "image": "https://screenforge.studio/og.png",
+  "description": "Open-source screen recorder and editor, an alternative to Screen Studio: automatic zooms, smooth cursor, backgrounds and a separate voice track. Opens .screenstudio projects.",
+  "applicationCategory": "MultimediaApplication",
+  "operatingSystem": "macOS 14 or later, Linux",
+  "license": "https://www.apache.org/licenses/LICENSE-2.0",
+  "offers": [
+    {"@type": "Offer", "name": "Free", "price": "0", "priceCurrency": "USD"},
+    {"@type": "Offer", "name": "Creator lifetime key", "price": "29", "priceCurrency": "USD"}
+  ],
+  "publisher": {"@type": "Organization", "name": "Smartloop Inc."}
+}
+</script>
 <link rel="icon" type="image/png" sizes="512x512" href="icon.png">
 <link rel="shortcut icon" href="icon.png">
 <link rel="apple-touch-icon" href="icon.png">
@@ -192,6 +214,7 @@
   }
   .lede { margin-top: 22px; max-width: 58ch; font-size: 17px; color: var(--dim); }
   .lede b { color: var(--fg); font-weight: 500; }
+  .lede a, .card p a { color: var(--jade); border-bottom: 1px solid color-mix(in srgb, var(--jade) 35%, transparent); }
 
   .cta { display: flex; flex-wrap: wrap; align-items: center; gap: 14px; margin-top: 38px; }
   .go {
@@ -385,7 +408,8 @@ gtag('config', 'G-ZYRJDJ736V');
     <p class="lede">
       Record your Mac screen and get a finished video, not raw footage: zooms that follow your
       clicks and typing, a smooth cursor, clean backgrounds, and a separate audio track you can
-      split, trim and mute. Made for tutorials, product demos and YouTube.
+      split, trim and mute. Made for tutorials, product demos and YouTube: an open-source
+<a href="screen-studio-alternative.html">Screen Studio alternative</a> for macOS and Linux.
     </p>
     <div class="cta">
       <a class="go os-dl" href="https://github.com/mehfuzh/screenforge/releases/latest/download/ScreenForge.dmg">
@@ -410,8 +434,8 @@ gtag('config', 'G-ZYRJDJ736V');
     <div class="grid">
       <div class="card">
         <div class="k">Compatibility</div>
-        <h3>Brings your existing projects</h3>
-        <p>Opens and saves <code>.screenstudio</code> project files, so recordings you already have keep working here.</p>
+        <h3>Opens your Screen Studio projects</h3>
+        <p>Opens and saves <code>.screenstudio</code> project files, so recordings you already have keep working here. <a href="screen-studio-alternative.html">Switching from Screen Studio</a></p>
       </div>
       <div class="card">
         <div class="k">Zoom</div>
@@ -478,13 +502,13 @@ gtag('config', 'G-ZYRJDJ736V');
       </div>
       <div class="plan">
         <div class="name">Creator</div>
-        <div class="fig">US$10<small>/ month</small></div>
-        <div class="per">or US$29 once for a lifetime key</div>
+        <div class="fig">US$29<small>once</small></div>
+        <div class="per">one payment · no subscription · the key never expires</div>
         <ul>
           <li>Export to MP4, ProRes, GIF and WebM</li>
           <li>Verified offline, works without a network</li>
-          <li>Every update included while the key is valid</li>
-          <li>Lifetime key never expires</li>
+          <li>Every future update included</li>
+          <li>One key for all your own Macs</li>
         </ul>
         <a class="buy" href="pricing.html">Get a key</a>
         <p class="foot">Recording and editing stay free either way. The key only unlocks export.</p>
@@ -508,6 +532,7 @@ gtag('config', 'G-ZYRJDJ736V');
     <span>© 2026 Smartloop Inc. All rights reserved.</span>
     <div class="r">
       <a href="https://github.com/mehfuzh/screenforge">github</a>
+      <a href="screen-studio-alternative.html">screen studio alternative</a>
       <a href="privacy.html">privacy</a>
       <a href="terms.html">terms</a>
       <a href="mailto:support@screenforge.studio">support@screenforge.studio</a>
