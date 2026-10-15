@@ -91,7 +91,7 @@ impl ExportDialog {
                         self.license = status.clone();
                         self.activation_msg = Some(match status {
                             sf_license::Status::Valid(_) => (true, "License activated on this Mac.".into()),
-                            sf_license::Status::Expired(p) => (false, format!("Your subscription ended on {}. Renew to keep exporting.", p.expires.map(|d| d.to_string()).unwrap_or_default())),
+                            sf_license::Status::Expired(p) => (false, format!("Your monthly key ended on {}. A lifetime key ({}) keeps exporting.", p.expires.map(|d| d.to_string()).unwrap_or_default(), sf_license::PRICE_LIFETIME)),
                             sf_license::Status::Invalid(e) => (false, format!("The server sent a key this build cannot verify ({e}).")),
                         });
                     }
@@ -242,10 +242,7 @@ impl ExportDialog {
                         self.activation = Some(rx);
                         self.activation_msg = None;
                     }
-                    if widgets::accent_button(ui, &format!("Monthly · {}", sf_license::PRICE_MONTHLY)).clicked() {
-                        open_checkout(&self.email, "monthly");
-                    }
-                    if widgets::secondary_button(ui, &format!("Lifetime · {}", sf_license::PRICE_LIFETIME)).clicked() {
+                    if widgets::accent_button(ui, &format!("Buy · {}", sf_license::PRICE_LIFETIME)).clicked() {
                         open_checkout(&self.email, "lifetime");
                     }
                 });
