@@ -11,7 +11,8 @@
   (built-in wallpapers, the Mac's own wallpapers, or `SF_ASSETS`), shadow, inset,
   camera layouts (overlay/split/fullscreen), masks, click effects.
 - Captions: on-device Whisper transcription of the microphone (`sf-transcribe`; base/small
-  models downloaded on first use), saved as `transcripts/microphone-session-N.json` like Screen
+  models downloaded on first use from the `models-v1` GitHub release, Hugging Face as a
+  fallback, SHA-256 verified), saved as `transcripts/microphone-session-N.json` like Screen
   Studio; rendered into preview and export (font, size, colour, position, line-by-line or
   word-by-word with appear/fade/slide); SRT export that follows cuts and speed
   (`sf transcribe`, `sf srt`, or the Captions panel).
