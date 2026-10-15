@@ -1,7 +1,8 @@
 # Status (2026-10-12)
 
 ## Works
-- Opens v3 and v4 `.screenstudio` projects (v3 is migrated on open) and saves v4; presets (`.screenstudiopreset`).
+- Saves `.screenforge` projects (v4 schema) and presets (`.screenforgepreset`; `.screenstudiopreset` presets are listed too).
+- Imports v3 and v4 `.screenstudio` projects (v3 is migrated on open): opening one copies it into `~/ScreenForge Projects` as a `.screenforge` package; `.screenstudio` packages already in that folder (written by ScreenForge ≤ 0.1.13) are renamed in place. `sf import` does the same from the command line.
 - Editor: title bar, preview toolbar, tool rail, sidebar pages
   (General, Cursor, Camera Layout, Camera Style, Captions, Audio, Shortcuts, Animations, Device),
   transport, timeline with clips (trim, split, speed, context menus), zooms (add, move, resize,
@@ -34,7 +35,8 @@
 
 - Dark and light palettes (`apps/studio/src/theme.rs`); follows the system appearance by default, with a Match system / Light / Dark choice in the picker's settings menu (stored in prefs as `appearance`).
 - Editor window uses a transparent full-size title bar so the traffic lights sit inside the toolbar.
-- A project can be opened from the command line: `screenforge My.screenstudio`.
+- A project can be opened from the command line: `screenforge My.screenforge`.
+- Projects open from Finder (double-click, Open With, drop on the Dock icon), at launch or while the app runs: `apps/studio/src/open_docs.rs` handles the `odoc` Apple Event. The Open project dialog starts in `~/ScreenForge Projects`.
 
 ## Website
 

@@ -68,8 +68,8 @@ Maintainer: Mehfuz Hossain <mehfuz@smartloop.ai>
 Homepage: https://screenforge.studio
 Description: Screen recorder and timeline editor
  Record the screen and edit on a timeline: automatic zooms, smooth cursor,
- backgrounds, music and a separate audio track. Projects use the .screenstudio
- package format.
+ backgrounds, music and a separate audio track. Projects are saved as
+ .screenforge packages; Screen Studio projects can be imported.
 CTRL
 DEB="target/screenforge_${VERSION}_${ARCH_DEB}.deb"
 dpkg-deb -Zxz --root-owner-group --build "$ROOT" "$DEB" >/dev/null

@@ -36,10 +36,29 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>NSMicrophoneUsageDescription</key><string>ScreenForge records your microphone when you choose to.</string>
   <key>NSCameraUsageDescription</key><string>ScreenForge records your camera when you choose to.</string>
   <key>NSAudioCaptureUsageDescription</key><string>ScreenForge records system audio when you choose to.</string>
+  <key>UTExportedTypeDeclarations</key><array><dict>
+    <key>UTTypeIdentifier</key><string>dev.screenforge.project</string>
+    <key>UTTypeDescription</key><string>ScreenForge Project</string>
+    <key>UTTypeConformsTo</key><array><string>com.apple.package</string><string>public.composite-content</string></array>
+    <key>UTTypeIconFile</key><string>icon.icns</string>
+    <key>UTTypeTagSpecification</key><dict><key>public.filename-extension</key><array><string>screenforge</string></array></dict>
+  </dict><dict>
+    <key>UTTypeIdentifier</key><string>dev.screenforge.preset</string>
+    <key>UTTypeDescription</key><string>ScreenForge Preset</string>
+    <key>UTTypeConformsTo</key><array><string>com.apple.package</string></array>
+    <key>UTTypeTagSpecification</key><dict><key>public.filename-extension</key><array><string>screenforgepreset</string></array></dict>
+  </dict></array>
   <key>CFBundleDocumentTypes</key><array><dict>
-    <key>CFBundleTypeExtensions</key><array><string>screenstudio</string></array>
-    <key>CFBundleTypeName</key><string>Screen Studio Project</string>
+    <key>CFBundleTypeName</key><string>ScreenForge Project</string>
+    <key>LSItemContentTypes</key><array><string>dev.screenforge.project</string></array>
     <key>CFBundleTypeRole</key><string>Editor</string>
+    <key>LSHandlerRank</key><string>Owner</string>
+    <key>LSTypeIsPackage</key><true/>
+  </dict><dict>
+    <key>CFBundleTypeName</key><string>Screen Studio Project (import)</string>
+    <key>CFBundleTypeExtensions</key><array><string>screenstudio</string></array>
+    <key>CFBundleTypeRole</key><string>Viewer</string>
+    <key>LSHandlerRank</key><string>Alternate</string>
     <key>LSTypeIsPackage</key><true/>
   </dict></array>
 </dict></plist>

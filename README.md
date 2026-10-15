@@ -12,7 +12,8 @@
 Open source macOS screen recorder and timeline editor, written in Rust, for tutorials, product
 demos and YouTube. Recordings come out polished: automatic zooms that follow your clicks and
 typing, a smooth cursor, backgrounds, and an audio track you can split, trim, move, mute and
-speed up on its own. Projects are saved in the `.screenstudio` package format.
+speed up on its own. Projects are saved as `.screenforge` packages; Screen Studio projects
+(`.screenstudio`) can be imported.
 
 ![ScreenForge editor](docs/demo.gif)
 
@@ -71,7 +72,7 @@ Controls for these show up greyed out in the app (hover: "on the product roadmap
 
 | crate | purpose |
 |---|---|
-| `crates/sf-project`  | `.screenstudio` package model: superjson envelope, v4 schema, v3→v4 migration, recording metadata, input event logs |
+| `crates/sf-project`  | `.screenforge` package model (and `.screenstudio` import): superjson envelope, v4 schema, v3→v4 migration, recording metadata, input event logs |
 | `crates/sf-engine`   | timeline (output↔source time), react-spring compatible springs, cursor smoothing, zoom camera, layout, auto zoom |
 | `crates/sf-media`    | ffmpeg-driven decode (HLS fMP4 → RGBA) and encode (rawvideo → H.264/HEVC/ProRes/GIF/WebM + audio mix) |
 | `crates/sf-render`   | wgpu compositor (WGSL): background, shadow, rounded screen, camera, cursor sprites |
@@ -97,10 +98,11 @@ Controls for these show up greyed out in the app (hover: "on the product roadmap
 ## Try it
 
 ```sh
-cargo run -p sf-cli -- inspect "My Recording.screenstudio"
-cargo run -p sf-cli -- frame   "…/My Recording.screenstudio" --at-ms 12000 -o frame.png
-cargo run -p sf-cli -- export  "…/My Recording.screenstudio" -o out.mp4 --fps 60 --height 1080
-cargo run -p studio -- "…/My Recording.screenstudio"   # editor
+cargo run -p sf-cli -- inspect "My Recording.screenforge"
+cargo run -p sf-cli -- frame   "…/My Recording.screenforge" --at-ms 12000 -o frame.png
+cargo run -p sf-cli -- export  "…/My Recording.screenforge" -o out.mp4 --fps 60 --height 1080
+cargo run -p sf-cli -- import  "…/My Recording.screenstudio"   # copy to ~/ScreenForge Projects
+cargo run -p studio -- "…/My Recording.screenforge"   # editor
 cargo run -p studio                                      # recording picker
 ```
 

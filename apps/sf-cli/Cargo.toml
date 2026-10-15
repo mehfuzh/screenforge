@@ -1,6 +1,6 @@
 [package]
 name = "sf-cli"
-description = "Command line tool: inspect, render frames and export .screenstudio projects"
+description = "Command line tool: inspect, render frames and export .screenforge projects"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

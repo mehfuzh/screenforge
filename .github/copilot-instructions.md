@@ -1,7 +1,7 @@
 # Copilot instructions for ScreenForge
 
 ScreenForge is an open-source macOS screen recorder and editor in Rust (egui + wgpu + ffmpeg),
-that reads and writes `.screenstudio` project packages. Read `docs/ARCHITECTURE.md` and
+that saves `.screenforge` project packages and imports `.screenstudio` ones. Read `docs/ARCHITECTURE.md` and
 `docs/STATUS.md` before proposing changes.
 
 ## Pull requests
@@ -26,5 +26,6 @@ that reads and writes `.screenstudio` project packages. Read `docs/ARCHITECTURE.
 - Rust 2021, `cargo fmt`, no `unwrap()` in UI code paths, errors through `anyhow`/`thiserror`.
 - UI: colours from `theme::p()`, icons from `widgets::Icon`, toolbar buttons with 2 px corners,
   text buttons via `widgets::accent_button` / `secondary_button` (see `CLAUDE.md`).
-- Project file compatibility is a hard requirement: never change how `.screenstudio` files are
-  read or written without updating the round-trip tests in `sf-project`.
+- Project file compatibility is a hard requirement: never change how `.screenforge` files are
+  written, or how `.screenstudio` files are imported, without updating the round-trip and import
+  tests in `sf-project`.

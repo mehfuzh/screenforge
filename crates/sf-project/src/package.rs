@@ -1,6 +1,7 @@
-//! Reading and writing `.screenstudio` package directories.
+//! Reading and writing `.screenforge` package directories (and importing `.screenstudio` ones).
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -10,8 +11,12 @@ use crate::recording::RecordingMetadata;
 use crate::schema::{migrate, v4::Project};
 use crate::{superjson, Error, Result};
 
-pub const PACKAGE_EXTENSION: &str = "screenstudio";
-pub const PRESET_EXTENSION: &str = "screenstudiopreset";
+pub const PACKAGE_EXTENSION: &str = "screenforge";
+pub const PRESET_EXTENSION: &str = "screenforgepreset";
+/// Screen Studio's package extensions. These use the same layout as ours and are imported
+/// (copied to a `.screenforge` package) rather than edited in place.
+pub const SCREEN_STUDIO_EXTENSION: &str = "screenstudio";
+pub const SCREEN_STUDIO_PRESET_EXTENSION: &str = "screenstudiopreset";
 
 pub const META_FILE: &str = "meta.json";
 pub const PROJECT_FILE: &str = "project.json";
@@ -153,6 +158,122 @@ impl ProjectPackage {
     }
 }
 
+/// True for a path with Screen Studio's project extension.
+pub fn is_screen_studio(path: &Path) -> bool {
+    path.extension().is_some_and(|e| e == SCREEN_STUDIO_EXTENSION)
+}
+
+/// `folder/<base>.screenforge`, or `folder/<base> 2.screenforge`, … if that is taken.
+pub fn unique_package_path(folder: &Path, base: &str) -> PathBuf {
+    let mut path = folder.join(format!("{base}.{PACKAGE_EXTENSION}"));
+    let mut n = 2;
+    while path.exists() {
+        path = folder.join(format!("{base} {n}.{PACKAGE_EXTENSION}"));
+        n += 1;
+    }
+    path
+}
+
+/// Byte progress of an import, shared with the UI; set `cancel` to stop it.
+#[derive(Debug, Default)]
+pub struct ImportProgress {
+    pub done: AtomicU64,
+    pub total: AtomicU64,
+    pub cancel: AtomicBool,
+}
+
+/// Copy a `.screenstudio` package into `folder` as a new `.screenforge` package and return its
+/// path. The original is left untouched.
+pub fn import_screen_studio(src: &Path, folder: &Path) -> Result<PathBuf> {
+    import_screen_studio_with(src, folder, &ImportProgress::default())
+}
+
+/// [`import_screen_studio`] reporting bytes copied to `progress`; on cancel nothing is left behind
+/// and [`Error::Cancelled`] is returned.
+pub fn import_screen_studio_with(src: &Path, folder: &Path, progress: &ImportProgress) -> Result<PathBuf> {
+    if !ProjectPackage::is_package(src) {
+        return Err(Error::NotAPackage(src.into()));
+    }
+    std::fs::create_dir_all(folder).map_err(|source| Error::Io { path: folder.into(), source })?;
+    progress.total.store(dir_size(src), Ordering::Relaxed);
+    let base = src.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| "Imported".into());
+    let tmp = folder.join(format!(".import-{}", crate::ids::new_id()));
+    let clone = same_volume(src, folder);
+    let dest = copy_dir(src, &tmp, clone, progress).and_then(|_| {
+        let dest = unique_package_path(folder, &base);
+        std::fs::rename(&tmp, &dest).map_err(|source| Error::Io { path: dest.clone(), source })?;
+        Ok(dest)
+    });
+    if dest.is_err() {
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+    dest
+}
+
+fn dir_size(dir: &Path) -> u64 {
+    std::fs::read_dir(dir)
+        .map(|rd| rd.flatten().map(|e| e.path()).map(|p| if p.is_dir() { dir_size(&p) } else { p.metadata().map(|m| m.len()).unwrap_or(0) }).sum())
+        .unwrap_or(0)
+}
+
+/// On one APFS volume `std::fs::copy` clones files: instant and free of extra disk space.
+#[cfg(target_os = "macos")]
+fn same_volume(a: &Path, b: &Path) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    matches!((a.metadata(), b.metadata()), (Ok(x), Ok(y)) if x.dev() == y.dev())
+}
+
+#[cfg(not(target_os = "macos"))]
+fn same_volume(_: &Path, _: &Path) -> bool {
+    false
+}
+
+fn copy_dir(from: &Path, to: &Path, clone: bool, progress: &ImportProgress) -> Result<()> {
+    std::fs::create_dir_all(to).map_err(|source| Error::Io { path: to.into(), source })?;
+    for entry in std::fs::read_dir(from).map_err(|source| Error::Io { path: from.into(), source })? {
+        let entry = entry.map_err(|source| Error::Io { path: from.into(), source })?;
+        let (src, dst) = (entry.path(), to.join(entry.file_name()));
+        if progress.cancel.load(Ordering::Relaxed) {
+            return Err(Error::Cancelled);
+        }
+        if src.is_dir() {
+            copy_dir(&src, &dst, clone, progress)?;
+        } else if clone {
+            let n = std::fs::copy(&src, &dst).map_err(|source| Error::Io { path: dst.clone(), source })?;
+            progress.done.fetch_add(n, Ordering::Relaxed);
+        } else {
+            copy_file(&src, &dst, progress)?;
+        }
+    }
+    Ok(())
+}
+
+/// Copy in chunks so a single large recording still shows progress and can be cancelled.
+fn copy_file(src: &Path, dst: &Path, progress: &ImportProgress) -> Result<()> {
+    use std::io::{Read, Write};
+    fn io(path: &Path) -> impl Fn(std::io::Error) -> Error + '_ {
+        move |source| Error::Io { path: path.into(), source }
+    }
+    let mut r = std::fs::File::open(src).map_err(io(src))?;
+    let mut w = std::fs::File::create(dst).map_err(io(dst))?;
+    let mut buf = vec![0u8; 4 << 20];
+    loop {
+        if progress.cancel.load(Ordering::Relaxed) {
+            return Err(Error::Cancelled);
+        }
+        let n = r.read(&mut buf).map_err(io(src))?;
+        if n == 0 {
+            break;
+        }
+        w.write_all(&buf[..n]).map_err(io(dst))?;
+        progress.done.fetch_add(n as u64, Ordering::Relaxed);
+    }
+    if let Ok(m) = src.metadata() {
+        let _ = std::fs::set_permissions(dst, m.permissions());
+    }
+    Ok(())
+}
+
 fn read_superjson<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T> {
     let s = std::fs::read_to_string(path).map_err(|source| Error::Io { path: path.into(), source })?;
     superjson::from_str(&s).map_err(|source| Error::Json { path: path.into(), source })
@@ -214,7 +335,7 @@ mod tests {
 
     #[test]
     fn create_and_reopen() {
-        let dir = std::env::temp_dir().join(format!("sf-test-{}.screenstudio", crate::ids::new_id()));
+        let dir = std::env::temp_dir().join(format!("sf-test-{}.{PACKAGE_EXTENSION}", crate::ids::new_id()));
         let pkg = ProjectPackage::create(&dir, "Hello").unwrap();
         let again = ProjectPackage::open(&dir).unwrap();
         assert_eq!(again.project.id, pkg.project.id);
@@ -222,5 +343,37 @@ mod tests {
         again.save().unwrap();
         assert!(dir.join(PROJECT_BACKUP_FILE).exists());
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn imports_screen_studio_package_as_copy() {
+        let root = std::env::temp_dir().join(format!("sf-import-{}", crate::ids::new_id()));
+        let src = root.join("Demo.screenstudio");
+        copy_dir(&fixture("v4"), &src, false, &ImportProgress::default()).unwrap();
+        let folder = root.join("projects");
+
+        let a = import_screen_studio(&src, &folder).unwrap();
+        assert_eq!(a, folder.join("Demo.screenforge"));
+        let b = import_screen_studio(&src, &folder).unwrap();
+        assert_eq!(b, folder.join("Demo 2.screenforge"));
+
+        let pkg = ProjectPackage::open(&a).unwrap();
+        assert_eq!(pkg.project.id, "VTxKFiwiin");
+        pkg.save().unwrap();
+        assert!(!src.join(PROJECT_BACKUP_FILE).exists(), "the original must not be written to");
+        assert!(is_screen_studio(&src) && !is_screen_studio(&a));
+        assert!(import_screen_studio(&root.join("missing.screenstudio"), &folder).is_err());
+
+        // chunked copy reports every byte; a cancelled import leaves nothing behind
+        let progress = ImportProgress::default();
+        let c = import_screen_studio_with(&src, &root.join("chunked"), &progress).unwrap();
+        assert!(ProjectPackage::open(&c).is_ok());
+        assert_eq!(progress.done.load(Ordering::Relaxed), progress.total.load(Ordering::Relaxed));
+        let cancelled = ImportProgress::default();
+        cancelled.cancel.store(true, Ordering::Relaxed);
+        let empty = root.join("cancelled");
+        assert!(matches!(import_screen_studio_with(&src, &empty, &cancelled), Err(Error::Cancelled)));
+        assert_eq!(std::fs::read_dir(&empty).unwrap().count(), 0);
+        std::fs::remove_dir_all(&root).unwrap();
     }
 }

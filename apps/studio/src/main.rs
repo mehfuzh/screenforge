@@ -9,6 +9,7 @@ mod captions;
 mod editor;
 mod export;
 mod mic_meter;
+mod open_docs;
 mod os;
 mod permissions;
 mod picker;
@@ -29,6 +30,7 @@ fn main() -> eframe::Result {
     }
     sf_recording::clock::init();
     tracing_subscriber::fmt().with_env_filter(tracing_subscriber::EnvFilter::from_default_env()).init();
+    open_docs::install();
     let icon = eframe::icon_data::from_png_bytes(include_bytes!("../assets/icon-256.png")).expect("app icon");
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()

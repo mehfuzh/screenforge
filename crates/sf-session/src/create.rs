@@ -1,4 +1,4 @@
-//! Turning a finished recording directory into a `.screenstudio` package, like Screen Studio's
+//! Turning a finished recording directory into a `.screenforge` package, like Screen Studio's
 //! post-recording step: move the recording into `<pkg>/recording`, write `project.json` with
 //! one full-length slice (and automatic zooms), `meta.json` and `recording-markers.json`.
 
@@ -22,10 +22,28 @@ pub struct CreateOptions {
     pub markers_ms: Vec<f64>,
 }
 
-/// Default projects folder: `~/Screen Studio Projects` (same as Screen Studio).
+/// Default projects folder: `~/ScreenForge Projects`.
 pub fn default_projects_folder() -> PathBuf {
     let home = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_else(|| PathBuf::from("."));
     home.join("ScreenForge Projects")
+}
+
+/// The `.screenforge` package to open for `path`. A `.screenstudio` package is imported first:
+/// one in our projects folder was written by an older ScreenForge and is renamed in place; any
+/// other (Screen Studio's own) is copied into the projects folder, leaving the original untouched;
+/// `progress` follows that copy.
+pub fn package_to_open(path: &Path, progress: &package::ImportProgress) -> Result<PathBuf> {
+    if !package::is_screen_studio(path) {
+        return Ok(path.to_path_buf());
+    }
+    let folder = default_projects_folder();
+    if path.parent() == Some(folder.as_path()) && ProjectPackage::is_package(path) {
+        let base = path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| "Recording".into());
+        let dest = package::unique_package_path(&folder, &base);
+        std::fs::rename(path, &dest).with_context(|| format!("renaming {} to .{}", path.display(), sf_project::PACKAGE_EXTENSION))?;
+        return Ok(dest);
+    }
+    package::import_screen_studio_with(path, &folder, progress).with_context(|| format!("importing {}", path.display()))
 }
 
 /// Sanitise a project file name like Screen Studio (`?/\*"'` ` .<>|` stripped, max 100 chars).
@@ -41,12 +59,7 @@ pub fn create_project_from_recording(recording_dir: &Path, opts: CreateOptions) 
     let meta = RecordingMetadata::load(recording_dir).context("reading recording metadata")?;
     std::fs::create_dir_all(&opts.projects_folder).with_context(|| format!("creating {}", opts.projects_folder.display()))?;
     let base = sanitize_name(&opts.name);
-    let mut pkg_path = opts.projects_folder.join(format!("{base}.{}", sf_project::PACKAGE_EXTENSION));
-    let mut n = 2;
-    while pkg_path.exists() {
-        pkg_path = opts.projects_folder.join(format!("{base} {n}.{}", sf_project::PACKAGE_EXTENSION));
-        n += 1;
-    }
+    let pkg_path = package::unique_package_path(&opts.projects_folder, &base);
     for sub in [package::DATA_DIR, "QuickLook", "assets"] {
         std::fs::create_dir_all(pkg_path.join(sub))?;
     }

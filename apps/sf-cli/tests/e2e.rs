@@ -1,5 +1,5 @@
 //! End-to-end tests over the whole pipeline: a synthetic recording (ffmpeg test pattern,
-//! sine-tone microphone, scripted mouse/keyboard logs) is turned into a `.screenstudio`
+//! sine-tone microphone, scripted mouse/keyboard logs) is turned into a `.screenforge`
 //! package, opened, edited, rendered on the GPU and exported, through both the library and
 //! the `sf` binary.
 //!
