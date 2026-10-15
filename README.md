@@ -9,8 +9,8 @@
 [![Linux](https://img.shields.io/badge/Linux-x86__64%20X11%20%7C%20Wayland-fcc624?logo=linux&logoColor=black)](https://github.com/mehfuzh/screenforge/releases/latest)
 [![Status](https://img.shields.io/badge/Status-early%20alpha-ffe16b)](docs/STATUS.md)
 
-Open source macOS screen recorder and timeline editor, written in Rust, for tutorials, product
-demos and YouTube. Recordings come out polished: automatic zooms that follow your clicks and
+Open source screen recorder and timeline editor for macOS and Linux, written in Rust, for
+tutorials, product demos and YouTube. Recordings come out polished: automatic zooms that follow your clicks and
 typing, a smooth cursor, backgrounds, and an audio track you can split, trim, move, mute and
 speed up on its own. Projects are saved as `.screenforge` packages; Screen Studio projects
 (`.screenstudio`) can be imported.
