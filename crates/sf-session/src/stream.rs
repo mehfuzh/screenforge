@@ -15,19 +15,23 @@ pub struct SourceStream {
     pub texture: Arc<Texture>,
     /// Decode width cap (None = native).
     pub max_width: Option<u32>,
+    /// Frames per second of source time the decoder delivers. 60 normally; lower while a
+    /// sped-up clip plays, so ffmpeg drops the frames the screen would skip before scaling and
+    /// piping them (at 8× only every eighth frame is shown).
+    pub fps: f64,
     reader: Option<VideoReader>,
     current: Option<Frame>,
     label: &'static str,
 }
 
-const FRAME_MS: f64 = 1000.0 / 60.0;
+pub const DEFAULT_FPS: f64 = 60.0;
 /// Seeking further ahead than this re-opens the decoder instead of decoding through.
 const MAX_DECODE_AHEAD_MS: f64 = 3000.0;
 
 impl SourceStream {
     pub fn new(gpu: &Gpu, path: PathBuf, label: &'static str) -> Self {
         let texture = Texture::from_rgba(&gpu.device, &gpu.queue, 2, 2, &[0; 16], label);
-        SourceStream { path, texture, max_width: None, reader: None, current: None, label }
+        SourceStream { path, texture, max_width: None, fps: DEFAULT_FPS, reader: None, current: None, label }
     }
 
     /// The last decoded frame (CPU copy).
@@ -36,7 +40,7 @@ impl SourceStream {
     }
 
     fn reopen(&mut self, start_ms: f64) -> Result<()> {
-        let opts = VideoReaderOptions { start_ms: start_ms.max(0.0), max_width: self.max_width, ..Default::default() };
+        let opts = VideoReaderOptions { start_ms: start_ms.max(0.0), max_width: self.max_width, fps: Some(self.fps), ..Default::default() };
         self.reader = Some(VideoReader::open(&self.path, opts)?);
         self.current = None;
         Ok(())
@@ -46,18 +50,20 @@ impl SourceStream {
     /// changed. Returns whether the texture was updated.
     pub fn seek(&mut self, gpu: &Gpu, time_ms: f64) -> Result<bool> {
         let time_ms = time_ms.max(0.0);
+        let half_frame = 500.0 / self.fps;
         let cur_pts = self.current.as_ref().map(|f| f.pts_ms);
         let need_reopen = match (&self.reader, cur_pts) {
             (None, _) => true,
-            (Some(_), Some(pts)) => time_ms < pts - FRAME_MS * 0.5 || time_ms > pts + MAX_DECODE_AHEAD_MS,
+            (Some(r), _) if (r.fps - self.fps).abs() > 1e-3 => true,
+            (Some(_), Some(pts)) => time_ms < pts - half_frame || time_ms > pts + MAX_DECODE_AHEAD_MS,
             (Some(_), None) => false,
         };
         if need_reopen {
-            self.reopen(time_ms - FRAME_MS * 0.5)?;
+            self.reopen(time_ms - half_frame)?;
         }
         let mut changed = false;
         loop {
-            let ahead = self.current.as_ref().map(|f| f.pts_ms + FRAME_MS * 0.5 > time_ms).unwrap_or(false);
+            let ahead = self.current.as_ref().map(|f| f.pts_ms + half_frame > time_ms).unwrap_or(false);
             if ahead {
                 break;
             }

@@ -155,6 +155,22 @@ impl Editor {
         self.after_edit();
     }
 
+    /// `edit` for a speed change: the playhead stays on the same source frame (and so the same
+    /// spot on the timeline, since clips keep their width), instead of on the same output time,
+    /// which a faster or slower clip moves to a different frame.
+    pub fn edit_speed(&mut self, f: impl FnOnce(&mut sf_project::Project)) {
+        let src = self.session.timeline.output_to_source(self.playhead_ms);
+        self.edit(f);
+        if let Some(ms) = src.and_then(|s| self.session.timeline.source_to_output(s)) {
+            self.playhead_ms = ms.clamp(0.0, self.duration_ms());
+            if self.playing {
+                self.audio.play_from(self.playhead_ms);
+            } else {
+                self.audio.seek(self.playhead_ms);
+            }
+        }
+    }
+
     /// A transcript was (re)generated: reload the captions and redraw the preview.
     pub fn captions_changed(&mut self) {
         self.session.reload_captions();
@@ -180,7 +196,7 @@ impl Editor {
     pub fn set_recording_speed(&mut self, speed: f64) {
         use sf_project::SceneAudioExt;
         let speed = speed.clamp(0.25, 16.0);
-        self.edit(move |p| {
+        self.edit_speed(move |p| {
             let scene = &mut p.scenes[0];
             let n = scene.slices.len();
             let mut slices = scene.slices.clone();
@@ -309,6 +325,8 @@ impl Editor {
         if self.preview_size.height != height {
             self.preview_size = self.session.output_size(height);
         }
+        // while a sped-up clip plays, decode only the frames that will be shown
+        self.session.decode_speed = if self.playing { self.session.timeline.speed_at_output(self.playhead_ms) } else { 1.0 };
         match self.session.frame_desc_at(self.playhead_ms, self.preview_size) {
             Ok(desc) => {
                 self.compositor.render(&desc);
