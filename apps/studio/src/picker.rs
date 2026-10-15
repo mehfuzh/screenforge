@@ -204,6 +204,11 @@ pub struct Picker {
     pub countdown_ms: u64,
     pub status: Option<String>,
     pub show_recent: bool,
+    /// When the recent panel last closed: the window stays tall for a moment so a quick
+    /// re-open does not resize it (and lose the click) again.
+    recent_closed_at: Option<std::time::Instant>,
+    /// Page dot clicked in the recent panel: the card to scroll to on the next frame.
+    recent_scroll_to: Option<usize>,
     /// Screen rect of the recent panel (last frame), for click-outside detection.
     recent_rect: egui::Rect,
     /// The bar, in window points (last frame).
@@ -218,7 +223,7 @@ pub struct Picker {
 
 impl Default for Picker {
     fn default() -> Self {
-        Picker { thumbs: None, inputs: Inputs::default(), mode: None, camera: None, microphone: None, mic_meter: None, bar_w: PILL_SIZE.x, system_audio: false, countdown_ms: 5000, status: None, show_recent: false, recent_rect: egui::Rect::NOTHING, bar_rect: egui::Rect::NOTHING, wanted_height: BAR_WINDOW_H, devices_rx: None, menus_warm: false }
+        Picker { thumbs: None, inputs: Inputs::default(), mode: None, camera: None, microphone: None, mic_meter: None, bar_w: PILL_SIZE.x, system_audio: false, countdown_ms: 5000, status: None, show_recent: false, recent_closed_at: None, recent_scroll_to: None, recent_rect: egui::Rect::NOTHING, bar_rect: egui::Rect::NOTHING, wanted_height: BAR_WINDOW_H, devices_rx: None, menus_warm: false }
     }
 }
 
@@ -227,8 +232,20 @@ pub const PILL_MARGIN: f32 = 10.0;
 /// Window height when only the bar is shown (no transparent dead zone that would eat clicks).
 pub const BAR_WINDOW_H: f32 = PILL_SIZE.y + PILL_MARGIN * 2.0;
 pub const MENU_WINDOW_H: f32 = 440.0;
-pub const RECENT_WINDOW_H: f32 = 300.0;
+/// Project card in the recent panel (thumbnail, name, age).
+const CARD_SIZE: egui::Vec2 = vec2(176.0, 150.0);
+/// Page dots sit this far above the recent panel's bottom edge (centre of the dots).
+const DOTS_FROM_BOTTOM: f32 = 18.0;
+/// Recent panel sized to its content: padding, header row and one row of cards (with layout
+/// spacing), then bottom padding...
+const RECENT_PANEL_H: f32 = 14.0 + 28.0 + 6.0 + CARD_SIZE.y + 8.0 + 14.0;
+/// ...or, when the cards overflow, room for the page dots with clear space around them.
+const RECENT_PANEL_DOTS_H: f32 = RECENT_PANEL_H - 14.0 + 12.0 + DOTS_FROM_BOTTOM + 3.0;
+/// Window height above the bar's margin+pill while the recent panel is open (8 px gap, 4 px slack).
+pub const RECENT_WINDOW_H: f32 = RECENT_PANEL_DOTS_H + 8.0 + 4.0;
 pub const PILL_RADIUS: f32 = 10.0;
+/// The recent-projects panel above the bar: same corners as the bar.
+const RECENT_RADIUS: u8 = 10;
 
 impl Picker {
     /// Fill `inputs`: displays now (cheap), the rest from a background thread so the toolbar
@@ -251,7 +268,7 @@ impl Picker {
         let mut texts: Vec<String> = [
             "Don't record camera", "Don't record microphone", "Don't record system audio", "Record system audio from all apps",
             "Recording countdown", "None", "3 seconds", "5 seconds", "10 seconds", "Appearance", "Match system", "Light", "Dark", "Osaka Jade", "Quit ScreenForge",
-            "RECENT PROJECTS", "Open project…", "No projects yet. Record something or open a project.", "Loading…", "No preview", "0123456789 min h d ago", "Move to Trash",
+            "RECENT PROJECTS", "Open", "No projects yet. Record something or open a project.", "Loading…", "No preview", "0123456789 min h d ago", "Move to Trash",
         ]
         .map(String::from)
         .to_vec();
@@ -389,6 +406,9 @@ impl Picker {
         let folder_clicked = folder.clicked();
         if folder_clicked {
             self.show_recent = !self.show_recent;
+            if !self.show_recent {
+                self.recent_closed_at = Some(std::time::Instant::now());
+            }
             ui.ctx().request_repaint();
         }
         if self.show_recent {
@@ -439,11 +459,30 @@ impl Picker {
         let menu_hover = pointer.is_some_and(|p| [&cam_menu, &mic_menu, &sys_menu, &gear, &folder].iter().any(|r| r.rect.contains(p)));
         let any_menu = egui::Popup::is_any_open(ui.ctx()) || menu_hover;
         if self.show_recent {
-            let h = RECENT_WINDOW_H - 8.0 - 4.0;
+            // only make room for page dots when the cards overflow the panel
+            let n = prefs.recent.iter().filter(|p| p.exists()).count() as f32;
+            let gap = ui.spacing().item_spacing.x;
+            let overflows = n * (CARD_SIZE.x + gap) - gap > pill.width() - 28.0;
+            let h = if overflows { RECENT_PANEL_DOTS_H } else { RECENT_PANEL_H };
             let panel = egui::Rect::from_min_size(pos2(pill.left(), pill.top() - 8.0 - h), vec2(pill.width(), h));
+            // same frosted glass as the bar, so the two read as one surface
+            crate::vibrancy::set_panel(Some([panel.left(), panel.top(), panel.width(), panel.height()]), full.height(), RECENT_RADIUS as f32);
             self.recent_panel(ui, panel, prefs, &mut action);
+        } else {
+            crate::vibrancy::set_panel(None, 0.0, 0.0);
         }
-        let wanted = if self.show_recent { PILL_MARGIN + PILL_SIZE.y + RECENT_WINDOW_H } else if any_menu { MENU_WINDOW_H } else { BAR_WINDOW_H };
+        // after the panel closes the window keeps its height while the pointer stays on the bar
+        // (and briefly after): toggling the folder button would otherwise grow and shrink the
+        // window on every click, and a click landing mid-resize falls through to the app behind
+        const LINGER: std::time::Duration = std::time::Duration::from_millis(450);
+        let over_bar = pointer.is_some_and(|p| pill.contains(p));
+        let lingering = self.recent_closed_at.is_some_and(|t| t.elapsed() < LINGER || over_bar);
+        if lingering {
+            ui.ctx().request_repaint_after(std::time::Duration::from_millis(100));
+        } else {
+            self.recent_closed_at = None;
+        }
+        let wanted = if self.show_recent || lingering { PILL_MARGIN + PILL_SIZE.y + RECENT_WINDOW_H } else if any_menu { MENU_WINDOW_H } else { BAR_WINDOW_H };
         // never shrink mid-click: resizing moves the bar in window coordinates, and the release
         // would land somewhere else and lose the click
         self.wanted_height = if ui.input(|i| i.pointer.any_down()) { wanted.max(self.wanted_height) } else { wanted };
@@ -454,15 +493,18 @@ impl Picker {
             ui.painter().text(r.center(), Align2::CENTER_CENTER, s, FontId::proportional(13.0), theme::p().text_dim);
         }
         // Esc, clicking anything else on the bar (mode buttons, input menus, settings) or
-        // picking a project hides the recent panel
+        // picking a project hides the recent panel; moving one to the Trash keeps it open
         if self.show_recent && ui.input(|i| i.key_pressed(egui::Key::Escape)) {
             self.show_recent = false;
+            self.recent_closed_at = Some(std::time::Instant::now());
             ui.ctx().request_repaint();
         }
         if self.show_recent && !folder_clicked {
             let other_click = ui.input(|i| i.pointer.any_click()) && !self.pointer_in_recent(ui);
-            if action.is_some() || egui::Popup::is_any_open(ui.ctx()) || other_click {
+            let closes = action.is_some() && !matches!(action, Some(PickerAction::RemoveProject(_)));
+            if closes || egui::Popup::is_any_open(ui.ctx()) || other_click {
                 self.show_recent = false;
+                self.recent_closed_at = Some(std::time::Instant::now());
             }
         }
         action
@@ -476,12 +518,13 @@ impl Picker {
     fn recent_panel(&mut self, ui: &mut Ui, rect: egui::Rect, prefs: &Prefs, action: &mut Option<PickerAction>) {
         self.recent_rect = rect;
         let p = ui.painter();
-        p.rect(rect, CornerRadius::same(14), theme::p().glass_solid, Stroke::new(1.0, theme::p().glass_border), egui::StrokeKind::Inside);
+        let tint = if crate::vibrancy::is_active() { theme::p().glass } else { theme::p().glass_solid };
+        p.rect(rect, CornerRadius::same(RECENT_RADIUS), tint, Stroke::new(1.0, theme::p().glass_border), egui::StrokeKind::Inside);
         let mut inner = ui.new_child(egui::UiBuilder::new().max_rect(rect.shrink(14.0)).layout(egui::Layout::top_down(egui::Align::Min)));
         inner.horizontal(|ui| {
             ui.label(RichText::new("RECENT PROJECTS").small().color(theme::p().text_dim));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.button("Open project…").clicked() {
+                if open_button(ui).clicked() {
                     *action = Some(PickerAction::OpenProjectDialog);
                 }
             });
@@ -493,12 +536,18 @@ impl Picker {
             return;
         }
         let thumbs = self.thumbs.as_ref();
-        egui::ScrollArea::horizontal().show(&mut inner, |ui| {
+        let scroll_to = self.recent_scroll_to.take();
+        let gap = inner.spacing().item_spacing.x;
+        // no scrollbar: trackpad / wheel scrolling, with page dots underneath when it overflows
+        let out = egui::ScrollArea::horizontal().id_salt("recent_cards").scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden).show(&mut inner, |ui| {
             ui.horizontal(|ui| {
-                for path in &recent {
+                for (i, path) in recent.iter().enumerate() {
                     let tex = thumbs.and_then(|t| t.textures.get(path));
                     let refreshing = thumbs.is_some_and(|t| t.refreshing.contains(path));
                     let (card, trash) = project_card(ui, path, tex, refreshing);
+                    if scroll_to == Some(i) {
+                        card.scroll_to_me(Some(egui::Align::Min));
+                    }
                     if trash {
                         *action = Some(PickerAction::RemoveProject(path.clone()));
                     } else if card.clicked() {
@@ -507,6 +556,19 @@ impl Picker {
                 }
             });
         });
+        let view = out.inner_rect.width();
+        let max_offset = (out.content_size.x - view).max(0.0);
+        if max_offset > 1.0 {
+            let step = CARD_SIZE.x + gap;
+            let per_page = ((view + gap) / step).floor().max(1.0) as usize;
+            let pages = recent.len().div_ceil(per_page);
+            let offset = out.state.offset.x;
+            let current = if offset >= max_offset - 1.0 { pages - 1 } else { ((offset / (step * per_page as f32)).round() as usize).min(pages - 1) };
+            if let Some(page) = page_dots(&mut inner, rect.center().x, rect.bottom() - DOTS_FROM_BOTTOM, pages, current) {
+                self.recent_scroll_to = Some(page * per_page);
+                inner.ctx().request_repaint();
+            }
+        }
     }
 
     /// Build a request for `mode` with the current input choices.
@@ -631,7 +693,7 @@ fn bar_menu(resp: &egui::Response, align: egui::RectAlign, add: impl FnOnce(&mut
 /// over the old one. Returns the card response and whether its trash button was clicked.
 fn project_card(ui: &mut Ui, path: &std::path::Path, tex: Option<&egui::TextureHandle>, refreshing: bool) -> (egui::Response, bool) {
     let name = path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
-    let size = vec2(176.0, 150.0);
+    let size = CARD_SIZE;
     let (rect, resp) = ui.allocate_exact_size(size, Sense::click());
     let thumb = egui::Rect::from_min_size(rect.min, vec2(size.x, 110.0));
     // trash button in the thumbnail's top-right corner, only while the card is hovered
@@ -690,3 +752,34 @@ fn project_card(ui: &mut Ui, path: &std::path::Path, tex: Option<&egui::TextureH
     (resp.on_hover_cursor(egui::CursorIcon::PointingHand), trash_clicked)
 }
 
+/// "Open" with a folder icon for the recent-projects panel: quiet on the glass, filled on hover.
+fn open_button(ui: &mut Ui) -> egui::Response {
+    let pal = theme::p();
+    let galley = ui.painter().layout_no_wrap("Open".into(), egui::FontId::proportional(13.0), Color32::PLACEHOLDER);
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(galley.size().x + 44.0, 28.0), egui::Sense::click());
+    let fg = if resp.hovered() { pal.glass_button_fg } else { pal.on_glass };
+    if resp.hovered() {
+        ui.painter().rect_filled(rect, CornerRadius::same(2), pal.glass_button);
+    }
+    widgets::paint_icon(ui.painter(), egui::Rect::from_center_size(pos2(rect.left() + 17.0, rect.center().y), egui::vec2(14.0, 14.0)), widgets::Icon::Folder, fg);
+    ui.painter().galley(pos2(rect.left() + 32.0, rect.center().y - galley.size().y / 2.0), galley, fg);
+    resp.on_hover_cursor(egui::CursorIcon::PointingHand).on_hover_text("Open a project, or import a Screen Studio project")
+}
+
+/// A row of page dots centred on (`cx`, `cy`); returns the page whose dot was clicked.
+fn page_dots(ui: &mut Ui, cx: f32, cy: f32, pages: usize, current: usize) -> Option<usize> {
+    const PITCH: f32 = 14.0;
+    let pal = theme::p();
+    let x0 = cx - PITCH * (pages as f32 - 1.0) / 2.0;
+    let mut clicked = None;
+    for i in 0..pages {
+        let c = pos2(x0 + PITCH * i as f32, cy);
+        let hit = ui.interact(egui::Rect::from_center_size(c, egui::vec2(PITCH, PITCH)), ui.id().with(("page_dot", i)), egui::Sense::click());
+        let color = if i == current { pal.on_glass } else if hit.hovered() { theme::glass_alpha(120) } else { theme::glass_alpha(60) };
+        ui.painter().circle_filled(c, 3.0, color);
+        if hit.on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
+            clicked = Some(i);
+        }
+    }
+    clicked
+}
