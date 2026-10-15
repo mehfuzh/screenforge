@@ -69,7 +69,7 @@ pub const DARK: Palette = Palette {
     ruler_text: Color32::from_rgb(0x7f, 0x84, 0x9c),  // overlay1
     danger: Color32::from_rgb(0xf3, 0x8b, 0xa8),      // red
     meter: Color32::from_rgb(0xa6, 0xe3, 0xa1),       // green
-    glass: Color32::from_rgba_premultiplied(8, 8, 12, 112),
+    glass: Color32::from_rgba_premultiplied(18, 18, 28, 190),
     glass_solid: Color32::from_rgba_premultiplied(26, 26, 39, 216),
     glass_border: Color32::from_rgba_premultiplied(34, 34, 34, 34),
     on_glass: Color32::from_rgb(0xcd, 0xd6, 0xf4),
@@ -103,7 +103,7 @@ pub const LIGHT: Palette = Palette {
     ruler_text: Color32::from_rgb(0x83, 0x94, 0x96),
     danger: Color32::from_rgb(0xdc, 0x32, 0x2f),
     meter: Color32::from_rgb(0x2e, 0x9e, 0x4f),
-    glass: Color32::from_rgba_premultiplied(127, 123, 114, 128),
+    glass: Color32::from_rgba_premultiplied(189, 183, 170, 190),
     glass_solid: Color32::from_rgba_premultiplied(228, 222, 205, 230),
     glass_border: Color32::from_rgba_premultiplied(1, 6, 8, 30),
     on_glass: Color32::from_rgb(0x07, 0x36, 0x42),
