@@ -1,6 +1,6 @@
 # Copilot instructions for ScreenForge
 
-ScreenForge is an open-source macOS screen recorder and editor in Rust (egui + wgpu + ffmpeg),
+ScreenForge is an open-source screen recorder and editor for macOS and Linux in Rust (egui + wgpu + ffmpeg),
 that saves `.screenforge` project packages and imports `.screenstudio` ones. Read `docs/ARCHITECTURE.md` and
 `docs/STATUS.md` before proposing changes.
 
