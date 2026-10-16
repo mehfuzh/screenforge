@@ -415,7 +415,7 @@ gtag('config', 'G-ZYRJDJ736V');
   <p>The address may be misspelt, or the page has moved. Everything on the site is one click from here.</p>
   <div class="cta">
     <a class="go" href="index.html">Back to the start</a>
-    <a class="alt" href="download.html"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1.5v8.3l2.7-2.7 1 1L8 11.8 4.3 8.1l1-1L8 9.8V1.5zM2.5 12h11v1.5h-11z"/></svg> Download for macOS</a>
+    <a class="alt os-dl" href="download.html"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1.5v8.3l2.7-2.7 1 1L8 11.8 4.3 8.1l1-1L8 9.8V1.5zM2.5 12h11v1.5h-11z"/></svg> <span class="os-label">Download for macOS</span></a>
     <a class="alt" href="pricing.html">Pricing</a>
   </div>
 </main>
@@ -453,6 +453,16 @@ gtag('config', 'G-ZYRJDJ736V');
       });
     });
     paint();
+  })();
+</script>
+<script>
+  // Linux visitors get the Linux build (same check as the home page).
+  (function () {
+    var ua = navigator.userAgent || '';
+    var plat = (navigator.userAgentData && navigator.userAgentData.platform) || navigator.platform || '';
+    if (!/linux/i.test(plat + ' ' + ua) || /android|cros/i.test(ua)) return;
+    document.querySelectorAll('.os-dl').forEach(function (a) { a.href = 'download.html#linux'; });
+    document.querySelectorAll('.os-label').forEach(function (l) { l.textContent = 'Download for Linux'; });
   })();
 </script>
 </body>

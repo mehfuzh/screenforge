@@ -422,14 +422,14 @@ gtag('config', 'G-ZYRJDJ736V');
   <ol class="steps">
     <li><b>Step 1</b><strong>Open ScreenForge</strong>Open the project you want to export, or any project; the license is app-wide, not per project.</li>
     <li><b>Step 2</b><strong>Open Export</strong>Press the Export button in the toolbar. The export panel has an Activate field at the bottom.</li>
-    <li><b>Step 3</b><strong>Enter the same email, press Activate</strong>Type the address you paid with and press <i class="hl">Activate</i>. The key is fetched once, verified on your Mac, and kept there.</li>
+    <li><b>Step 3</b><strong>Enter the same email, press Activate</strong>Type the address you paid with and press <i class="hl">Activate</i>. The key is fetched once, verified on your computer, and kept there.</li>
   </ol>
-  <p style="margin-top:18px">The key is checked offline from then on. Use it on every Mac you own: same email, same button.</p>
+  <p style="margin-top:18px">The key is checked offline from then on. Use it on every computer you own: same email, same button.</p>
 
   <h2>Don't have the app yet?</h2>
   <p>The license waits for you; nothing expires while you install.</p>
   <div class="cta">
-    <a class="go" href="download.html"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1.5v8.3l2.7-2.7 1 1L8 11.8 4.3 8.1l1-1L8 9.8V1.5zM2.5 12h11v1.5h-11z"/></svg> Download for macOS</a>
+    <a class="go os-dl" href="download.html"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1.5v8.3l2.7-2.7 1 1L8 11.8 4.3 8.1l1-1L8 9.8V1.5zM2.5 12h11v1.5h-11z"/></svg> <span class="os-label">Download for macOS</span></a>
     <a class="alt" href="index.html">Back to the site</a>
   </div>
 
@@ -470,6 +470,16 @@ gtag('config', 'G-ZYRJDJ736V');
       });
     });
     paint();
+  })();
+</script>
+<script>
+  // Linux visitors get the Linux build (same check as the home page).
+  (function () {
+    var ua = navigator.userAgent || '';
+    var plat = (navigator.userAgentData && navigator.userAgentData.platform) || navigator.platform || '';
+    if (!/linux/i.test(plat + ' ' + ua) || /android|cros/i.test(ua)) return;
+    document.querySelectorAll('.os-dl').forEach(function (a) { a.href = 'download.html#linux'; });
+    document.querySelectorAll('.os-label').forEach(function (l) { l.textContent = 'Download for Linux'; });
   })();
 </script>
 </body>
