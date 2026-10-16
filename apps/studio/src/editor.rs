@@ -12,6 +12,7 @@ use crate::export::ExportDialog;
 use crate::sidebar::{self, Section};
 use crate::theme;
 use crate::timeline::TimelineWidget;
+use crate::crop;
 use crate::widgets;
 
 pub struct Editor {
@@ -60,6 +61,8 @@ pub struct Editor {
     preview_stale: bool,
     /// Captions panel: Whisper transcription running in the background.
     pub transcribe: crate::captions::TranscribeJob,
+    /// Crop tool open: the preview shows the whole recording with the crop frame over it.
+    pub crop: Option<crate::crop::CropEditor>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -83,6 +86,7 @@ impl Editor {
         let compositor = Compositor::new(gpu);
         let audio = AudioPlayer::new();
         audio.load(&session);
+        let session_crop = session.pkg.project.config.crop.rect01;
         let start_ms = session.pkg.project.data.get("last-playback-position-source-time-ms").and_then(|v| v.as_f64()).and_then(|src| session.timeline.source_to_output(src)).unwrap_or(0.0);
         Editor {
             fresh_recording: false,
@@ -111,6 +115,7 @@ impl Editor {
                 Ok("audio") => Section::Audio,
                 Ok("cursor") => Section::Cursor,
                 Ok("animations") => Section::Animations,
+                Ok("shortcuts") => Section::Shortcuts,
                 _ => Section::General,
             },
             sidebar_open: true,
@@ -122,6 +127,8 @@ impl Editor {
             remove_requested: false,
             preview_stale: false,
             transcribe: Default::default(),
+            // SF_START_CROP opens the crop tool straight away (for screenshots)
+            crop: std::env::var_os("SF_START_CROP").map(|_| crop::CropEditor::new(session_crop)),
         }
     }
 
@@ -322,12 +329,11 @@ impl Editor {
             PreviewQuality::Full => 1080,
             PreviewQuality::Performance => 720,
         };
-        if self.preview_size.height != height {
-            self.preview_size = self.session.output_size(height);
-        }
+        self.preview_size = if self.crop.is_some() { self.session.source_size(height) } else { self.session.output_size(height) };
         // while a sped-up clip plays, decode only the frames that will be shown
         self.session.decode_speed = if self.playing { self.session.timeline.speed_at_output(self.playhead_ms) } else { 1.0 };
-        match self.session.frame_desc_at(self.playhead_ms, self.preview_size) {
+        let desc = if self.crop.is_some() { self.session.source_frame_desc_at(self.playhead_ms, self.preview_size) } else { self.session.frame_desc_at(self.playhead_ms, self.preview_size) };
+        match desc {
             Ok(desc) => {
                 self.compositor.render(&desc);
                 self.last_rendered_ms = Some(self.playhead_ms);
@@ -666,10 +672,20 @@ impl Editor {
             if let Some(id) = self.texture_id {
                 let img = egui::Image::from_texture(egui::load::SizedTexture::new(id, size)).corner_radius(4.0);
                 let resp = ui.put(img_rect, img);
-                if resp.clicked() {
-                    self.toggle_play();
+                if let Some(mut crop) = self.crop.take() {
+                    let action = crop.ui(ui, img_rect);
+                    self.crop = Some(crop);
+                    match action {
+                        Some(crate::crop::Action::Apply) => self.close_crop(true),
+                        Some(crate::crop::Action::Cancel) => self.close_crop(false),
+                        None => {}
+                    }
+                } else {
+                    if resp.clicked() {
+                        self.toggle_play();
+                    }
+                    paint_zoom_indicator(ui.painter(), img_rect, self.session.zoom_state());
                 }
-                paint_zoom_indicator(ui.painter(), img_rect, self.session.zoom_state());
             } else {
                 ui.painter().text(stage.center(), Align2::CENTER_CENTER, "Rendering…", FontId::proportional(14.0), theme::p().text_dim);
             }
@@ -800,6 +816,24 @@ impl Editor {
         }
     }
 
+    /// Open the crop tool on the current crop (playback stops; the preview shows the whole recording).
+    fn open_crop(&mut self) {
+        self.pause();
+        self.crop = Some(crop::CropEditor::new(self.session.pkg.project.config.crop.rect01));
+        self.last_rendered_ms = None;
+    }
+
+    /// Close the crop tool, keeping the new crop (one undo step) or discarding it.
+    fn close_crop(&mut self, apply: bool) {
+        let Some(c) = self.crop.take() else { return };
+        self.last_rendered_ms = None;
+        let r = crop::clamp(c.draft);
+        if apply && r != self.session.pkg.project.config.crop.rect01 {
+            self.edit(move |p| p.config.crop.rect01 = r);
+            self.set_status(if crop::is_full(r) { "Crop removed" } else { "Cropped" });
+        }
+    }
+
     fn preview_toolbar(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
             ui.add_space(8.0);
@@ -815,7 +849,26 @@ impl Editor {
                     }
                 }
             });
-            widgets::roadmap(ui, |ui| widgets::icon_text_button(ui, Some(widgets::Icon::Crop), "Crop", false));
+            if widgets::icon_text_button(ui, Some(widgets::Icon::Crop), "Crop", false).on_hover_text("Crop the recording").clicked() {
+                if self.crop.is_some() {
+                    self.close_crop(true);
+                } else {
+                    self.open_crop();
+                }
+            }
+            if self.crop.is_some() {
+                if widgets::secondary_button(ui, "Reset").clicked() {
+                    if let Some(c) = &mut self.crop {
+                        c.draft = sf_project::schema::common::Rect::UNIT;
+                    }
+                }
+                if widgets::secondary_button(ui, "Cancel").on_hover_text("Esc").clicked() {
+                    self.close_crop(false);
+                }
+                if widgets::accent_button(ui, "Done").on_hover_text("Return").clicked() {
+                    self.close_crop(true);
+                }
+            }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if widgets::icon_button(ui, widgets::Icon::Zoom, 16.0, "Preview size +").clicked() {
                     self.preview_scale = (self.preview_scale * 1.15).min(3.0);

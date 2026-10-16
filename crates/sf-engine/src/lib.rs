@@ -9,6 +9,7 @@
 //!                  scene's zooms.
 //! * [`stage`]    – stage geometry: canvas aspect, padding, zoomed screen rect.
 //! * [`autozoom`] – automatic zoom ranges from clicks.
+//! * [`shortcuts`] – keyboard shortcut labels from key-downs.
 
 pub mod audio;
 pub mod autozoom;
@@ -16,6 +17,7 @@ pub mod camera;
 pub mod captions;
 pub mod cursor;
 pub mod spring;
+pub mod shortcuts;
 pub mod stage;
 pub mod timeline;
 

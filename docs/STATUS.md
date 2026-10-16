@@ -17,6 +17,8 @@
   Studio; rendered into preview and export (font, size, colour, position, line-by-line or
   word-by-word with appear/fade/slide); SRT export that follows cuts and speed
   (`sf transcribe`, `sf srt`, or the Captions panel).
+- Keyboard shortcut overlay: key caps (`⇧ ⌘ S`) for shortcuts pressed while recording, near the bottom of the video in preview and export (`captions.enableShortcuts`, size, single keys); key symbols come from an Inter subset (`Inter-SemiBold-symbols.ttf`). New recordings also store the macOS `keyCode` of each key event.
+- Crop: the Crop tool in the preview toolbar shows the whole recording with a draggable frame (move, eight resize handles, ⏎ apply, ⎋ cancel) and writes `config.crop.rect01`.
 - Export: MP4 (H.264/HEVC), ProRes, GIF, WebM with mixed audio and quality presets.
 - Recording: picker toolbar (Display/Window/Area/Device, camera/mic/system audio pickers,
   countdown), ScreenCaptureKit recorder writing the package's `recording/` layout
@@ -27,8 +29,8 @@
 
 ## Not yet
 - Live camera preview while recording; window picking / area selection UI (area records a centred 60 % region); iPhone/iPad.
-- Editing the transcript text, Apple Speech transcription, keystroke overlay, device frame compositing, color grading/LUTs, cutout matting, face tracking, motion blur.
-- Crop editing UI, Unsplash, background audio library playback, click sounds in preview/export.
+- Editing the transcript text, Apple Speech transcription, device frame compositing, color grading/LUTs, cutout matting, face tracking, motion blur.
+- Crop aspect presets, Unsplash, background audio library playback, click sounds in preview/export.
 - More bundled assets: cursor sets and device frames.
 
 ## Appearance
@@ -45,8 +47,6 @@
 ## Roadmap items (disabled in the UI)
 
 - Masks and highlights: blur or hide regions, spotlight areas
-- Crop editing: the Crop tool in the preview toolbar
-- Keyboard shortcut overlay: key-cap rendering of recorded keystrokes
 - Device frames: iPhone/iPad recording and mockup frames
 - Unsplash backgrounds: online wallpaper search
 - Face tracking and color grading: camera centring, looks and LUTs

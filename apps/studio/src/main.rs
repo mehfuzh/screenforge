@@ -6,6 +6,7 @@ mod window_select;
 mod audio;
 mod camera_bubble;
 mod captions;
+mod crop;
 mod editor;
 mod export;
 mod mic_meter;

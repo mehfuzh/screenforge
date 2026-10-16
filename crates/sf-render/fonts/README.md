@@ -7,3 +7,7 @@ subsets glyph by glyph.
 | `Inter-SemiBold`         | Inter           | SIL OFL 1.1, `OFL-Inter.txt`       |
 | `SourceSerif4-SemiBold`  | Source Serif 4  | SIL OFL 1.1, `OFL-SourceSerif4.txt`|
 | `JetBrainsMono-SemiBold` | JetBrains Mono  | SIL OFL 1.1, `OFL-JetBrainsMono.txt`|
+
+`Inter-SemiBold-symbols.ttf` is a subset of Inter 4.0 SemiBold (rsms/inter release) with only
+the keyboard symbols used by the shortcut overlay (⌘ ⇧ ⌥ ⌃ ⏎ ⌫ ⌦ ⎋ ⇥ arrows, ⇞ ⇟ ↖ ↘ ␣ ⇪),
+made with `pyftsubset`. It is the last fallback of every family.
