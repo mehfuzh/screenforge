@@ -407,7 +407,7 @@ gtag('config', 'G-ZYRJDJ736V');
       </ol>
     </div>
     <p class="lede">
-      Record your Mac screen and get a finished video, not raw footage: zooms that follow your
+      Record your <span class="os-name">Mac</span> screen and get a finished video, not raw footage: zooms that follow your
       clicks and typing, a smooth cursor, clean backgrounds, and a separate audio track you can
       split, trim and mute. Made for tutorials, product demos and YouTube.
     </p>
@@ -570,6 +570,7 @@ gtag('config', 'G-ZYRJDJ736V');
     if (!/linux/i.test(plat + ' ' + ua) || /android|cros/i.test(ua)) return;
     document.querySelectorAll('.os-dl').forEach(function (a) { a.href = 'download.html#linux'; });
     document.querySelectorAll('.os-label').forEach(function (l) { l.textContent = 'Download for Linux'; });
+    document.querySelectorAll('.os-name').forEach(function (n) { n.textContent = 'Linux'; });
     document.querySelectorAll('.os-note').forEach(function (n) {
       n.innerHTML = 'x86_64 · .deb for Debian / Ubuntu, .tar.gz for other distros · recording and editing are free · also on <a href="download.html#mac">macOS</a>';
     });
