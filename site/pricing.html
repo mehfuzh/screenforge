@@ -432,7 +432,7 @@ gtag('config', 'G-ZYRJDJ736V');
         <li>Your first three exports, in every format</li>
         <li>Apache-2.0 source on <a href="https://github.com/mehfuzh/screenforge">GitHub</a>: build it yourself and remove the gate if you want</li>
       </ul>
-      <a class="alt" href="download.html#mac" style="width:100%;justify-content:center"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1.5v8.3l2.7-2.7 1 1L8 11.8 4.3 8.1l1-1L8 9.8V1.5zM2.5 12h11v1.5h-11z"/></svg> Download for macOS</a>
+      <a class="alt os-dl" href="download.html#mac" style="width:100%;justify-content:center"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1.5v8.3l2.7-2.7 1 1L8 11.8 4.3 8.1l1-1L8 9.8V1.5zM2.5 12h11v1.5h-11z"/></svg> <span class="os-label">Download for macOS</span></a>
       <p class="foot">Everything on the timeline works without paying. The fourth export from the official build is where the key comes in.</p>
     </div>
 
@@ -460,15 +460,15 @@ gtag('config', 'G-ZYRJDJ736V');
   <div class="faq">
     <div>
       <h3>How is the key checked?</h3>
-      <p>Offline, on your Mac. The app verifies the key's signature locally and never asks a server whether you are allowed to export.</p>
+      <p>Offline, on your computer. The app verifies the key's signature locally and never asks a server whether you are allowed to export.</p>
     </div>
     <div>
       <h3>How many Macs can I use it on?</h3>
-      <p>One key per email, and it is yours to use on every Mac you own. There is no seat count and no device registration.</p>
+      <p>One key per email, and it is yours to use on every computer you own. There is no seat count and no device registration.</p>
     </div>
     <div>
       <h3>Is there a subscription?</h3>
-      <p>No. You pay US$29 once and the key never expires. If you set up a new Mac, enter the same email and press Activate; it re-activates without a new purchase.</p>
+      <p>No. You pay US$29 once and the key never expires. If you set up a new computer, enter the same email and press Activate; it re-activates without a new purchase.</p>
     </div>
     <div>
       <h3>Can I get a refund?</h3>
@@ -555,6 +555,16 @@ gtag('config', 'G-ZYRJDJ736V');
           });
       });
     });
+  })();
+</script>
+<script>
+  // Linux visitors get the Linux build (same check as the home page).
+  (function () {
+    var ua = navigator.userAgent || '';
+    var plat = (navigator.userAgentData && navigator.userAgentData.platform) || navigator.platform || '';
+    if (!/linux/i.test(plat + ' ' + ua) || /android|cros/i.test(ua)) return;
+    document.querySelectorAll('.os-dl').forEach(function (a) { a.href = 'download.html#linux'; });
+    document.querySelectorAll('.os-label').forEach(function (l) { l.textContent = 'Download for Linux'; });
   })();
 </script>
 </body>
