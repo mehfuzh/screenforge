@@ -136,7 +136,7 @@ impl Section {
 
     /// Pages whose feature is not rendered yet: shown greyed out in the rail.
     pub fn is_roadmap(self) -> bool {
-        matches!(self, Section::Shortcuts | Section::DeviceFrame)
+        matches!(self, Section::DeviceFrame)
     }
 
     pub fn icon(self) -> widgets::Icon {
@@ -807,10 +807,16 @@ fn audio_ui(ed: &mut Editor, ui: &mut egui::Ui) {
 
 fn shortcuts_ui(ed: &mut Editor, ui: &mut egui::Ui) {
     widgets::title(ui, "Keyboard Shortcuts");
-    widgets::hint(ui, "Keyboard shortcut overlays are on the roadmap: key caps are not rendered yet.");
-    ui.disable();
-    if ed.session.cursor_track.key_downs.is_empty() {
+    if ed.session.cursor_track.key_presses.is_empty() {
         widgets::hint(ui, "No keyboard shortcuts during recording");
+        ui.disable();
+    } else {
+        let n = ed.session.shortcuts.list.len();
+        widgets::hint(ui, &match n {
+            0 => "No shortcuts to show: turn on single keys to show plain key presses.".to_string(),
+            1 => "1 shortcut in this recording.".to_string(),
+            n => format!("{n} shortcuts in this recording."),
+        });
     }
     let mut show = ed.session.pkg.project.config.captions.enable_shortcuts;
     if widgets::toggle_row(ui, "Show shortcuts", "Show pressed shortcut labels in the video.", &mut show) {

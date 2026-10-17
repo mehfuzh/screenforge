@@ -8,6 +8,7 @@
 use sf_project::recording::InputEvent;
 use sf_project::schema::common::Rect;
 
+use crate::shortcuts::KeyPress;
 use crate::spring::{SpringParams, SpringTrack, SpringVec};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -40,6 +41,8 @@ pub struct CursorTrack {
     /// Text caret positions recorded while typing (crop-relative, like `samples`), so zooms
     /// can follow what is being typed rather than where the mouse was left.
     pub carets: Vec<CaretSample>,
+    /// Key-downs with their modifiers, for the shortcut overlay.
+    pub key_presses: Vec<KeyPress>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -114,6 +117,11 @@ impl CursorTrack {
             })
             .collect();
         let key_downs = keys.iter().filter(|k| k.kind == "keyDown").map(|k| k.process_time_ms - process_time_start_ms).collect();
+        let key_presses = keys
+            .iter()
+            .filter(|k| k.kind == "keyDown")
+            .map(|k| KeyPress { time_ms: k.process_time_ms - process_time_start_ms, modifiers: k.active_modifiers.clone(), character: k.character.clone(), key_code: k.key_code, is_repeat: k.is_a_repeat.unwrap_or(false) })
+            .collect();
         let mut carets: Vec<CaretSample> = keys
             .iter()
             .filter_map(|k| Some(CaretSample { time_ms: k.process_time_ms - process_time_start_ms, x: k.caret_x? - bounds.x, y: k.caret_y? - bounds.y }))
@@ -121,7 +129,7 @@ impl CursorTrack {
             .filter(|c| c.x >= 0.0 && c.y >= 0.0 && c.x <= bounds.width && c.y <= bounds.height)
             .collect();
         carets.sort_by(|a, b| a.time_ms.total_cmp(&b.time_ms));
-        CursorTrack { samples, cursor_ids: ids, clicks: click_samples, key_downs, carets }
+        CursorTrack { samples, cursor_ids: ids, clicks: click_samples, key_downs, carets, key_presses }
     }
 
     /// Raw position at `t`: the last sample at or before `t` (Screen Studio holds the last

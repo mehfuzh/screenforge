@@ -33,6 +33,9 @@ pub struct EventLine {
     pub cursor_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub is_a_repeat: Option<bool>,
+    /// Virtual key code of key events (macOS), so shortcut labels need not rely on `character`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub key_code: Option<u32>,
     pub process_time_ms: f64,
     #[serde(rename = "type")]
     pub kind: &'static str,
@@ -127,6 +130,7 @@ mod imp {
         y: Option<f64>,
         character: Option<String>,
         is_repeat: Option<bool>,
+        key_code: Option<u32>,
         modifiers: Vec<&'static str>,
         process_time_ms: f64,
         unix_time_ms: f64,
@@ -192,10 +196,14 @@ mod imp {
         } else {
             (None, None)
         };
-        let (character, is_repeat) = if key {
-            (Some(key_characters(event)), Some(event.get_integer_value_field(EventField::KEYBOARD_EVENT_AUTOREPEAT) != 0))
+        let (character, is_repeat, key_code) = if key {
+            (
+                Some(key_characters(event)),
+                Some(event.get_integer_value_field(EventField::KEYBOARD_EVENT_AUTOREPEAT) != 0),
+                Some(event.get_integer_value_field(EventField::KEYBOARD_EVENT_KEYCODE) as u32),
+            )
         } else {
-            (None, None)
+            (None, None, None)
         };
         Some(RawEvent {
             kind,
@@ -204,6 +212,7 @@ mod imp {
             y,
             character,
             is_repeat,
+            key_code,
             modifiers: modifiers(event.get_flags()),
             process_time_ms,
             unix_time_ms: clock::unix_time_ms(),
@@ -316,6 +325,7 @@ mod imp {
                 character: ev.character,
                 cursor_id: is_mouse.then(|| self.cursor_id.clone()),
                 is_a_repeat: ev.is_repeat,
+                key_code: ev.key_code,
                 process_time_ms: ev.process_time_ms,
                 kind: ev.kind,
                 unix_time_ms: ev.unix_time_ms,
@@ -344,6 +354,7 @@ mod imp {
                 character: None,
                 cursor_id: Some(self.cursor_id.clone()),
                 is_a_repeat: None,
+                key_code: None,
                 process_time_ms,
                 kind,
                 unix_time_ms,
@@ -442,6 +453,7 @@ mod imp {
                     y: Some(y),
                     character: None,
                     is_repeat: None,
+                    key_code: None,
                     modifiers: Vec::new(),
                     process_time_ms: clock::process_time_ms(),
                     unix_time_ms: clock::unix_time_ms(),
@@ -548,6 +560,7 @@ mod imp {
                     y: xy.map(|p| p.1),
                     character,
                     is_repeat: repeat,
+                    key_code: None,
                     modifiers: mods(shift, ctrl, alt, meta),
                     process_time_ms: clock::process_time_ms(),
                     unix_time_ms: clock::unix_time_ms(),
@@ -653,6 +666,7 @@ mod tests {
             character: None,
             cursor_id: Some("arrow".into()),
             is_a_repeat: None,
+            key_code: None,
             process_time_ms: 1681.5,
             kind: "mouseMoved",
             unix_time_ms: 1791399209826.581,
@@ -668,6 +682,7 @@ mod tests {
             character: None,
             cursor_id: Some("arrow".into()),
             is_a_repeat: None,
+            key_code: None,
             process_time_ms: 1700.0,
             kind: "mouseDragged",
             unix_time_ms: 1791399209900.0,

@@ -13,6 +13,7 @@ pub mod captions;
 pub mod create;
 pub mod preview;
 pub mod layout;
+pub mod shortcuts;
 pub mod source;
 pub mod stream;
 
@@ -77,6 +78,7 @@ pub struct Session {
     /// current clip's speed while playing; export leaves it at 1.
     pub decode_speed: f64,
     pub captions: captions::Captions,
+    pub shortcuts: shortcuts::Shortcuts,
 }
 
 impl Session {
@@ -92,6 +94,7 @@ impl Session {
         let (camera, cursor_smoother) = Self::solvers(&pkg, &source, &cursor_track, geometry);
         let camera_rect = SpringVec::new(SpringParams::from(pkg.project.config.animations.screen_movement_spring), [0.0; 4]);
         let captions = captions::Captions::load(&pkg, source.process_time_start_ms);
+        let shortcuts = shortcuts::Shortcuts::load(&pkg, &cursor_track);
         let mut s = Session {
             pkg,
             source,
@@ -112,6 +115,7 @@ impl Session {
             decode_max_width: None,
             decode_speed: 1.0,
             captions,
+            shortcuts,
         };
         s.load_cursor_sprites();
         Ok(s)
@@ -167,6 +171,7 @@ impl Session {
         self.camera_rect_initialised = false;
         self.last_output_ms = None;
         self.reload_captions();
+        self.shortcuts = shortcuts::Shortcuts::load(&self.pkg, &self.cursor_track);
     }
 
     pub fn duration_ms(&self) -> f64 {
@@ -405,10 +410,29 @@ impl Session {
             }
         }
 
-        // ── captions, above everything ──
+        // ── captions and shortcut labels, above everything ──
         self.captions.push_layer(&self.pkg, &self.gpu, source_ms, out.width, out.height, &mut layers);
+        self.shortcuts.push_layer(&self.pkg, &self.gpu, source_ms, out.width, out.height, &mut layers);
 
         Ok(FrameDesc { width: out.width, height: out.height, background: self.background_layer(), layers })
+    }
+
+    /// Canvas for the whole, uncropped recording at a given height (the crop editor's picture).
+    pub fn source_size(&self, height: u32) -> OutputSize {
+        let aspect = self.source.native_width.max(1) as f64 / self.source.native_height.max(1) as f64;
+        OutputSize { width: ((height as f64 * aspect).round() as u32).max(2) & !1, height }
+    }
+
+    /// The uncropped recording at `output_ms` filling `out`, with nothing drawn over it: what the
+    /// crop editor shows. The animated camera and cursor restart on the next regular frame.
+    pub fn source_frame_desc_at(&mut self, output_ms: f64, out: OutputSize) -> Result<FrameDesc> {
+        let output_ms = output_ms.clamp(0.0, self.duration_ms().max(0.0));
+        let source_ms = self.timeline.output_to_source(output_ms).unwrap_or(0.0);
+        self.seek_sources(source_ms, false)?;
+        self.last_output_ms = None;
+        let dst = Rect { x: 0.0, y: 0.0, width: out.width as f64, height: out.height as f64 };
+        let screen = ScreenLayer { texture: self.screen.texture.clone(), src01: Rect::UNIT, dst, corner_radius: 0.0, shadow: None, inset: None };
+        Ok(FrameDesc { width: out.width, height: out.height, background: BackgroundLayer::Color(Color::BLACK), layers: vec![Layer::Screen(screen)] })
     }
 
     /// Re-read the transcripts (after generating one, or toggling sound labels).

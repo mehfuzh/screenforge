@@ -41,7 +41,9 @@ impl FontFamily {
                 include_bytes!("../fonts/JetBrainsMono-SemiBold-cyrillic.ttf"),
             ],
         };
-        data.iter().filter_map(|d| FontRef::try_from_slice(d).ok()).collect()
+        // key symbols (⌘ ⇧ ⌥ ⏎ …) for every family: only Inter carries them
+        let symbols: &'static [u8] = include_bytes!("../fonts/Inter-SemiBold-symbols.ttf");
+        data.iter().chain([&symbols]).filter_map(|d| FontRef::try_from_slice(d).ok()).collect()
     }
 }
 
@@ -250,6 +252,94 @@ pub fn rasterize_caption(c: &CaptionText) -> Option<TextImage> {
     Some(TextImage { width: w as u32, height: h as u32, rgba })
 }
 
+/// A keyboard shortcut label: one key cap per key on a dark box.
+#[derive(Debug, Clone, PartialEq)]
+pub struct KeyCaps {
+    pub keys: Vec<String>,
+    pub family: FontFamily,
+    /// Height of a key cap in px.
+    pub size_px: f32,
+    pub color: Color,
+    pub background: Color,
+    pub max_width_px: f32,
+}
+
+/// Rasterise a shortcut label. `None` when there are no keys.
+pub fn rasterize_keys(k: &KeyCaps) -> Option<TextImage> {
+    if k.keys.is_empty() || k.size_px < 4.0 {
+        return None;
+    }
+    let fonts = k.family.fonts();
+    if fonts.is_empty() {
+        return None;
+    }
+    // the glyphs take a bit over half the cap height
+    let layout = |cap_h: f32| {
+        let shaper = Shaper { fonts: fonts.clone(), scale: PxScale::from(cap_h * 0.52) };
+        let pad = cap_h * 0.3;
+        let gap = cap_h * 0.16;
+        let caps: Vec<f32> = k.keys.iter().map(|t| (shaper.word_width(t) + 2.0 * pad).max(cap_h)).collect();
+        let total = caps.iter().sum::<f32>() + gap * caps.len().saturating_sub(1) as f32 + 2.0 * gap;
+        (shaper, caps, gap, total)
+    };
+    let mut cap_h = k.size_px;
+    let (mut shaper, mut caps, mut gap, total) = layout(cap_h);
+    if total > k.max_width_px {
+        cap_h *= (k.max_width_px / total).max(0.2);
+        (shaper, caps, gap, _) = layout(cap_h);
+    }
+    let w = (caps.iter().sum::<f32>() + gap * (caps.len() + 1) as f32).ceil() as usize;
+    let h = (cap_h + 2.0 * gap).ceil() as usize;
+    let mut rgba = vec![0u8; w * h * 4];
+    let blend = |p: &mut [u8], c: Color, a: f32| {
+        for (i, ch) in [c.r, c.g, c.b].into_iter().enumerate() {
+            p[i] = (ch * a * 255.0 + p[i] as f32 * (1.0 - a)).round().min(255.0) as u8;
+        }
+        p[3] = (a * 255.0 + p[3] as f32 * (1.0 - a)).round().min(255.0) as u8;
+    };
+    let outer_r = (gap + cap_h * 0.22).min(h as f32 / 2.0);
+    let cap_r = cap_h * 0.22;
+    let mut x0s = vec![];
+    let mut x = gap;
+    for cw in &caps {
+        x0s.push(x);
+        x += cw + gap;
+    }
+    for py in 0..h {
+        for px in 0..w {
+            let (fx, fy) = (px as f32 + 0.5, py as f32 + 0.5);
+            let p = &mut rgba[(py * w + px) * 4..(py * w + px) * 4 + 4];
+            let a = (0.5 - rounded_rect_sd(fx, fy, 0.0, 0.0, w as f32, h as f32, outer_r)).clamp(0.0, 1.0) * k.background.a;
+            if a > 0.0 {
+                blend(p, k.background, a);
+            }
+            for (x0, cw) in x0s.iter().zip(&caps) {
+                // a lighter cap with a darker lip along the bottom edge
+                let sd = rounded_rect_sd(fx, fy, *x0, gap, x0 + cw, gap + cap_h, cap_r);
+                let a = (0.5 - sd).clamp(0.0, 1.0);
+                if a > 0.0 {
+                    let lip = fy > gap + cap_h * 0.9;
+                    blend(p, k.color, a * if lip { 0.08 } else { 0.16 });
+                }
+            }
+        }
+    }
+    let line_h = shaper.line_height();
+    let baseline = gap + (cap_h - line_h) / 2.0 + shaper.ascent() - cap_h * 0.03;
+    let mut cov = vec![0f32; w * h];
+    for ((t, x0), cw) in k.keys.iter().zip(&x0s).zip(&caps) {
+        let tw = shaper.word_width(t);
+        shaper.draw(t, x0 + (cw - tw) / 2.0, baseline, &mut cov, w, h);
+    }
+    for (i, cv) in cov.iter().enumerate() {
+        let a = cv * k.color.a;
+        if a > 0.0 {
+            blend(&mut rgba[i * 4..i * 4 + 4], k.color, a);
+        }
+    }
+    Some(TextImage { width: w as u32, height: h as u32, rgba })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -298,5 +388,29 @@ mod tests {
         let img = rasterize_caption(&c).unwrap();
         assert!(img.width <= 121, "{}", img.width);
         assert!(ink(&img) > 20);
+    }
+
+    fn keys(k: &[&str]) -> KeyCaps {
+        KeyCaps { keys: k.iter().map(|s| s.to_string()).collect(), family: FontFamily::Sans, size_px: 64.0, color: Color::WHITE, background: Color::BLACK.with_alpha(0.78), max_width_px: 4000.0 }
+    }
+
+    #[test]
+    fn key_caps_draw_symbols_from_the_fallback_font() {
+        let img = rasterize_keys(&keys(&["⇧", "⌘", "S"])).unwrap();
+        // three caps at least as wide as they are tall
+        assert!(img.width as f32 >= 3.0 * 64.0 && img.height >= 64, "{}x{}", img.width, img.height);
+        // each symbol alone draws ink, so ⌘ and ⇧ are not missing glyphs
+        for k in ["⌘", "⇧", "⌥", "⌃", "⏎", "⌫"] {
+            let one = rasterize_keys(&keys(&[k])).unwrap();
+            assert!(ink(&one) > 30, "{k}: {}", ink(&one));
+        }
+        assert!(rasterize_keys(&keys(&[])).is_none());
+    }
+
+    #[test]
+    fn key_caps_shrink_to_the_width_limit() {
+        let mut k = keys(&["⌃", "⌥", "⇧", "⌘", "Space"]);
+        k.max_width_px = 200.0;
+        assert!(rasterize_keys(&k).unwrap().width <= 201);
     }
 }
