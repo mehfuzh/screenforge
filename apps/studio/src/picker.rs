@@ -454,7 +454,7 @@ impl Picker {
                 }
             }
             ui.separator();
-            ui.label(RichText::new(format!("Updates · v{}", env!("CARGO_PKG_VERSION"))).small().color(theme::p().text_dim));
+            ui.label(RichText::new(format!("Updates · v{}", crate::update::version())).small().color(theme::p().text_dim));
             match &update {
                 crate::update::State::Available { version, url } => {
                     if ui.button(RichText::new(format!("Update to v{version}…")).color(theme::p().accent)).on_hover_text("Open the release page to download it").clicked() {

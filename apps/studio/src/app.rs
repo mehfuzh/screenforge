@@ -116,7 +116,8 @@ impl App {
         let mut prefs = Prefs::load();
         prefs.appearance.apply(&cc.egui_ctx);
         let now = crate::update::now_secs();
-        if prefs.check_updates && crate::update::due(prefs.last_update_check, now) {
+        // SF_FAKE_VERSION (testing) checks on every launch
+        if prefs.check_updates && (crate::update::due(prefs.last_update_check, now) || std::env::var_os("SF_FAKE_VERSION").is_some()) {
             crate::update::check(&cc.egui_ctx);
             prefs.last_update_check = Some(now);
             prefs.save();
