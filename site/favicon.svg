@@ -1,5 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="188 202 648 648">
-  <style>.dot { fill: #140f1a } @media (prefers-color-scheme: dark) { .dot { fill: url(#dot) } }</style>
+  <style>.dot { fill: #140f1a } @media (prefers-color-scheme: dark) { .dot { fill: url(#dotfire) } }</style>
   <defs>
     <linearGradient id="fire" x1="0" y1="0" x2="0" y2="1">
       <stop offset="0" stop-color="#ffd98a"/>
@@ -7,10 +7,11 @@
       <stop offset="0.75" stop-color="#ff4a5c"/>
       <stop offset="1" stop-color="#c81f78"/>
     </linearGradient>
-    <radialGradient id="dot" cx="40%" cy="35%" r="75%">
-      <stop offset="0" stop-color="#fff6ee"/>
-      <stop offset="1" stop-color="#ffd6c2"/>
-    </radialGradient>
+    <linearGradient id="dotfire" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffd98a"/>
+      <stop offset="0.45" stop-color="#ff8a45"/>
+      <stop offset="1" stop-color="#ff4a5c"/>
+    </linearGradient>
   </defs>
   <path fill="url(#fire)" fill-rule="evenodd" d="
     M512 214
