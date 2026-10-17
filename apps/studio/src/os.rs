@@ -1,15 +1,83 @@
 //! Hand-offs to the desktop: open a link or folder, show a file in the file manager, move a
-//! file to the Trash. macOS uses `open` and Foundation; Linux uses the freedesktop tools.
+//! file to the Trash. macOS uses `open` and Foundation; Linux uses the freedesktop tools;
+//! Windows the shell (`ShellExecute`, Explorer, the Recycle Bin).
 
 use std::path::Path;
 
 /// Name of the system file manager, for button labels.
-pub const FILE_MANAGER: &str = if cfg!(target_os = "macos") { "Finder" } else { "Files" };
+pub const FILE_MANAGER: &str = if cfg!(target_os = "macos") {
+    "Finder"
+} else if cfg!(target_os = "windows") {
+    "Explorer"
+} else {
+    "Files"
+};
 
 /// Open a URL, file or folder with its default application.
 pub fn open(target: impl AsRef<std::ffi::OsStr>) {
-    let program = if cfg!(target_os = "macos") { "open" } else { "xdg-open" };
-    let _ = std::process::Command::new(program).arg(target).spawn();
+    #[cfg(target_os = "windows")]
+    {
+        windows_shell::open(target.as_ref());
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let program = if cfg!(target_os = "macos") { "open" } else { "xdg-open" };
+        let _ = std::process::Command::new(program).arg(target).spawn();
+    }
+}
+
+#[cfg(target_os = "windows")]
+mod windows_shell {
+    use std::ffi::OsStr;
+    use std::os::windows::ffi::OsStrExt;
+    use std::path::Path;
+
+    use windows::core::PCWSTR;
+    use windows::Win32::UI::Shell::{SHFileOperationW, ShellExecuteW, FOF_ALLOWUNDO, FOF_NOCONFIRMATION, FOF_NOERRORUI, FOF_SILENT, FO_DELETE, SHFILEOPSTRUCTW};
+    use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+
+    fn wide(s: &OsStr) -> Vec<u16> {
+        s.encode_wide().chain(std::iter::once(0)).collect()
+    }
+
+    pub fn open(target: &OsStr) {
+        let verb = wide(OsStr::new("open"));
+        let file = wide(target);
+        // SAFETY: both strings are NUL-terminated and outlive the call
+        let _ = unsafe { ShellExecuteW(None, PCWSTR(verb.as_ptr()), PCWSTR(file.as_ptr()), None, None, SW_SHOWNORMAL) };
+    }
+
+    /// Explorer with the file selected.
+    pub fn reveal(path: &Path) {
+        let mut c = std::process::Command::new("explorer.exe");
+        // Explorer wants `/select,<path>` as one argument, quoted as a whole when it has spaces
+        use std::os::windows::process::CommandExt;
+        c.raw_arg(format!("/select,\"{}\"", path.display()));
+        let _ = c.spawn();
+    }
+
+    /// Recycle Bin via the shell (undoable from Explorer).
+    pub fn recycle(path: &Path) -> Result<(), String> {
+        // a plain absolute path: the shell takes neither relative nor `\\?\` ones
+        let abs = std::path::absolute(path).map_err(|e| e.to_string())?;
+        let text = abs.to_string_lossy().trim_start_matches(r"\\?\").replace('/', r"\");
+        let text = text.trim_end_matches('\\').to_string();
+        // double NUL-terminated list
+        let mut from: Vec<u16> = OsStr::new(&text).encode_wide().collect();
+        from.extend([0, 0]);
+        let mut op = SHFILEOPSTRUCTW {
+            wFunc: FO_DELETE,
+            pFrom: PCWSTR(from.as_ptr()),
+            fFlags: (FOF_ALLOWUNDO.0 | FOF_NOCONFIRMATION.0 | FOF_SILENT.0 | FOF_NOERRORUI.0) as u16,
+            ..Default::default()
+        };
+        let r = unsafe { SHFileOperationW(&mut op) };
+        if r == 0 && !op.fAnyOperationsAborted.as_bool() {
+            Ok(())
+        } else {
+            Err(format!("cannot move to the Recycle Bin (shell error {r:#x} for {text})"))
+        }
+    }
 }
 
 /// Show `path` selected in the file manager (Linux: `org.freedesktop.FileManager1`, else its
@@ -24,7 +92,9 @@ pub fn reveal(path: &Path) {
         let url = NSURL::fileURLWithPath(&NSString::from_str(&path.to_string_lossy()));
         NSWorkspace::sharedWorkspace().activateFileViewerSelectingURLs(&NSArray::from_retained_slice(&[url]));
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "windows")]
+    windows_shell::reveal(path);
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
         let path = path.to_path_buf();
         std::thread::spawn(move || {
@@ -44,9 +114,17 @@ pub fn reveal(path: &Path) {
     }
 }
 
+/// `file://` URI for egui's image loader. Windows paths need the `file:///C:/…` form: with
+/// `file://C:\…` the loader takes `C:` for a network host.
+pub fn texture_uri(path: &Path) -> String {
+    let p = path.to_string_lossy().replace('\\', "/");
+    let p = p.trim_start_matches("//?/");
+    if cfg!(windows) && !p.starts_with('/') { format!("file:///{p}") } else { format!("file://{p}") }
+}
+
 /// `file://` URI of an absolute path, percent-encoding everything but unreserved characters
 /// and `/` (also keeps the URI safe inside a GVariant string).
-#[cfg_attr(target_os = "macos", allow(dead_code))]
+#[cfg_attr(any(target_os = "macos", target_os = "windows"), allow(dead_code))]
 fn file_uri(path: &Path) -> String {
     let mut out = String::from("file://");
     for b in path.to_string_lossy().bytes() {
@@ -60,7 +138,7 @@ fn file_uri(path: &Path) -> String {
 }
 
 /// Move a file or folder to the Trash, where it can be restored ("Put Back" in Finder,
-/// "Restore" in Files). Never deletes: if the Trash cannot take it, it stays put.
+/// "Restore" in Files and the Recycle Bin). Never deletes: if the Trash cannot take it, it stays put.
 pub fn move_to_trash(path: &Path) -> Result<(), String> {
     #[cfg(target_os = "macos")]
     {
@@ -69,7 +147,11 @@ pub fn move_to_trash(path: &Path) -> Result<(), String> {
         let fm = NSFileManager::defaultManager();
         fm.trashItemAtURL_resultingItemURL_error(&url, None).map(|_| ()).map_err(|e| e.localizedDescription().to_string())
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "windows")]
+    {
+        windows_shell::recycle(path)
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
         let gio = std::process::Command::new("gio").arg("trash").arg(path).output();
         match gio {
@@ -86,7 +168,7 @@ pub fn move_to_trash(path: &Path) -> Result<(), String> {
 /// Move `path` into `$XDG_DATA_HOME/Trash` per the freedesktop Trash spec. From another file
 /// system (e.g. a tmpfs `/tmp`, which `gio` refuses) it is copied in first, and the original is
 /// removed only once the copy is complete.
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
 fn home_trash(path: &Path) -> Result<(), String> {
     let data = std::env::var_os("XDG_DATA_HOME")
         .map(std::path::PathBuf::from)
@@ -131,7 +213,7 @@ fn home_trash(path: &Path) -> Result<(), String> {
 }
 
 /// Copy a file, symlink or folder tree (symlinks are copied as links, not followed).
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
 fn copy_tree(from: &Path, to: &Path) -> std::io::Result<()> {
     let meta = std::fs::symlink_metadata(from)?;
     if meta.file_type().is_symlink() {
@@ -148,7 +230,7 @@ fn copy_tree(from: &Path, to: &Path) -> std::io::Result<()> {
     }
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
 fn remove_tree(path: &Path) -> std::io::Result<()> {
     match std::fs::symlink_metadata(path) {
         Ok(m) if m.is_dir() => std::fs::remove_dir_all(path),
@@ -163,12 +245,33 @@ mod tests {
     use super::*;
 
     /// Run `f` with `XDG_DATA_HOME` set (tests run in parallel and share the environment).
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     fn with_data_home<T>(dir: &Path, f: impl FnOnce() -> T) -> T {
         static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
         let _guard = LOCK.lock().unwrap_or_else(|e| e.into_inner());
         std::env::set_var("XDG_DATA_HOME", dir);
         f()
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn recycle_bin_takes_a_folder() {
+        let tmp = tempfile::tempdir().unwrap();
+        let p = tmp.path().join("My Project.screenforge");
+        std::fs::create_dir_all(p.join("recording")).unwrap();
+        std::fs::write(p.join("recording/a.txt"), b"x").unwrap();
+        move_to_trash(&p).unwrap();
+        assert!(!p.exists());
+    }
+
+    #[test]
+    fn texture_uris_use_the_slash_form() {
+        if cfg!(windows) {
+            assert_eq!(texture_uri(Path::new(r"C:\Users\me\a b.jpg")), "file:///C:/Users/me/a b.jpg");
+            assert_eq!(texture_uri(Path::new(r"\\?\C:\x\a.jpg")), "file:///C:/x/a.jpg");
+        } else {
+            assert_eq!(texture_uri(Path::new("/home/me/a.jpg")), "file:///home/me/a.jpg");
+        }
     }
 
     #[test]
@@ -177,7 +280,7 @@ mod tests {
         assert_eq!(file_uri(Path::new("/tmp/it's.mp4")), "file:///tmp/it%27s.mp4");
     }
 
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     #[test]
     fn home_trash_moves_and_records_the_origin() {
         let tmp = tempfile::tempdir().unwrap();
@@ -195,7 +298,7 @@ mod tests {
         assert!(tmp.path().join("data/Trash/files/My Project.screenforge.2").is_dir());
     }
 
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     #[test]
     fn home_trash_copies_across_file_systems() {
         // a tmpfs /tmp and a Trash under the home directory are different devices
@@ -216,6 +319,78 @@ mod tests {
         assert_eq!(std::fs::read(t.join("recording/a.mp4")).unwrap(), b"video");
         assert_eq!(std::fs::read_link(t.join("link")).unwrap(), Path::new("recording/a.mp4"));
         assert!(data.path().join("Trash/info/Cross.screenforge.trashinfo").is_file());
+    }
+}
+
+
+/// Shape of the floating toolbar window on Windows. A wgpu Direct3D surface has no alpha
+/// channel, so a "transparent" window shows black where nothing is painted; clipping the
+/// window to the pill (and whatever menu or panel is open above it) with a window region
+/// shows the desktop there instead, and clicks outside go to the windows below.
+#[cfg(target_os = "windows")]
+pub struct WindowShape {
+    hwnd: isize,
+    /// Last region sent, in window pixels (`None` = the whole window).
+    applied: Option<Option<Vec<[i32; 5]>>>,
+}
+
+#[cfg(target_os = "windows")]
+impl WindowShape {
+    pub fn new(handle: &impl raw_window_handle::HasWindowHandle) -> Option<Self> {
+        use raw_window_handle::RawWindowHandle;
+        let hwnd = match handle.window_handle().ok()?.as_raw() {
+            RawWindowHandle::Win32(h) => h.hwnd.get(),
+            _ => return None,
+        };
+        Some(WindowShape { hwnd, applied: None })
+    }
+
+    /// Show only `rects` (window points, each with a corner radius), or the whole window for `None`.
+    pub fn set(&mut self, rects: Option<&[(egui::Rect, f32)]>, pixels_per_point: f32) {
+        use windows::Win32::Foundation::HWND;
+        use windows::Win32::Graphics::Gdi::{CombineRgn, CreateRoundRectRgn, DeleteObject, SetWindowRgn, HGDIOBJ, HRGN, RGN_OR};
+        let px: Option<Vec<[i32; 5]>> = rects.map(|rs| {
+            rs.iter()
+                .filter(|(r, _)| r.is_positive())
+                .map(|(r, radius)| {
+                    let (x0, y0) = ((r.left() * pixels_per_point).floor() as i32, (r.top() * pixels_per_point).floor() as i32);
+                    let (x1, y1) = ((r.right() * pixels_per_point).ceil() as i32, (r.bottom() * pixels_per_point).ceil() as i32);
+                    [x0, y0, x1.max(x0 + 1), y1.max(y0 + 1), (radius * 2.0 * pixels_per_point).round() as i32]
+                })
+                .collect()
+        });
+        if self.applied.as_ref() == Some(&px) {
+            return;
+        }
+        let hwnd = HWND(self.hwnd as *mut std::ffi::c_void);
+        let ok = match &px {
+            None => (unsafe { SetWindowRgn(hwnd, None, true) }) != 0,
+            Some(list) => {
+                let mut region: Option<HRGN> = None;
+                for [x0, y0, x1, y1, d] in list {
+                    let r = unsafe { CreateRoundRectRgn(*x0, *y0, *x1, *y1, *d, *d) };
+                    if r.0.is_null() {
+                        continue;
+                    }
+                    region = Some(match region {
+                        None => r,
+                        Some(acc) => {
+                            unsafe { CombineRgn(Some(acc), Some(acc), Some(r), RGN_OR) };
+                            let _ = unsafe { DeleteObject(HGDIOBJ(r.0)) };
+                            acc
+                        }
+                    });
+                }
+                match region {
+                    // the window owns the region after SetWindowRgn
+                    Some(r) => (unsafe { SetWindowRgn(hwnd, Some(r), true) }) != 0,
+                    None => false,
+                }
+            }
+        };
+        if ok {
+            self.applied = Some(px);
+        }
     }
 }
 
@@ -268,5 +443,28 @@ impl InputRegion {
         if sent && self.conn.flush().is_ok() {
             self.applied = Some(px);
         }
+    }
+}
+
+#[cfg(all(test, target_os = "windows"))]
+mod recycle_real {
+    /// Recycles a copy of the newest project in the user's projects folder, the way the app does
+    /// (`cargo test -p studio recycles_a_project_copy -- --ignored`).
+    #[test]
+    #[ignore = "touches the real projects folder"]
+    fn recycles_a_project_copy() {
+        let folder = sf_session::create::default_projects_folder();
+        let newest = std::fs::read_dir(&folder).unwrap().flatten().map(|e| e.path()).filter(|p| p.extension().is_some_and(|e| e == "screenforge")).max_by_key(|p| p.metadata().and_then(|m| m.modified()).ok()).expect("a project");
+        let copy = folder.join("Recycle Test 12.34.56.screenforge");
+        let _ = std::fs::remove_dir_all(&copy);
+        std::fs::create_dir_all(copy.join("recording")).unwrap();
+        for f in ["project.json", "meta.json"] {
+            if newest.join(f).exists() {
+                std::fs::copy(newest.join(f), copy.join(f)).unwrap();
+            }
+        }
+        let r = super::move_to_trash(&copy);
+        assert!(r.is_ok(), "{r:?}");
+        assert!(!copy.exists());
     }
 }

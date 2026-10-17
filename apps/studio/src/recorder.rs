@@ -14,8 +14,8 @@ use crate::theme;
 pub fn display_inputs() -> Inputs {
     Inputs {
         displays: sf_recording::discover::displays().iter().map(|m| crate::picker::DisplayEntry { id: m.id, name: m.name.clone(), bounds: m.bounds_points, is_main: m.is_main }).collect(),
-        // system audio comes from ScreenCaptureKit (macOS only)
-        system_audio_supported: cfg!(target_os = "macos"),
+        // system audio comes from ScreenCaptureKit (macOS) or WASAPI loopback (Windows)
+        system_audio_supported: cfg!(any(target_os = "macos", target_os = "windows")),
         ..Inputs::default()
     }
 }
@@ -78,11 +78,13 @@ pub fn permission_help(msg: &str) -> Option<(&'static str, sf_recording::Permiss
 /// System helpers and our own windows never make sense to record.
 fn is_helper_app(name: &str, bundle_id: &str) -> bool {
     const NAMES: &[&str] = &["ScreenForge", "screenforge", "Window Server", "Dock", "Spotlight", "Control Center", "Control Centre", "Notification Center", "Notification Centre", "Screenshot", "loginwindow", "Wallpaper", "TextInputMenuAgent", "Open and Save Panel Service"];
-    NAMES.iter().any(|n| name == *n) || name.contains("Panel Service") || name.ends_with("Agent") || bundle_id.starts_with("com.apple.controlcenter") || bundle_id.starts_with("com.apple.notificationcenterui") || bundle_id == "com.apple.Spotlight"
+    // Windows shell pieces that show up as top-level windows
+    const WIN_NAMES: &[&str] = &["TextInputHost", "ShellExperienceHost", "StartMenuExperienceHost", "SearchHost", "SearchApp", "LockApp", "ScreenClippingHost", "PhoneExperienceHost", "SystemSettingsBroker"];
+    NAMES.iter().any(|n| name == *n) || WIN_NAMES.iter().any(|n| name.eq_ignore_ascii_case(n)) || name.contains("Panel Service") || name.ends_with("Agent") || bundle_id.starts_with("com.apple.controlcenter") || bundle_id.starts_with("com.apple.notificationcenterui") || bundle_id == "com.apple.Spotlight"
 }
 
-/// Bring an application to the front (window picking), then re-read the window's bounds.
 /// Bring the app with `pid` to the front.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 pub fn activate_app(pid: i32) {
     #[cfg(target_os = "macos")]
     {
@@ -92,14 +94,26 @@ pub fn activate_app(pid: i32) {
             app.activateWithOptions(NSApplicationActivationOptions::ActivateAllWindows);
         }
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "windows")]
+    {
+        if let Some(w) = sf_recording::windows_with(false).into_iter().find(|w| w.pid == pid) {
+            sf_recording::win::activate(w.id);
+        }
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     let _ = pid;
 }
 
 pub fn activate_and_locate(pid: i32, window_id: u32) -> Option<sf_project::schema::common::Rect> {
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
     {
+        #[cfg(target_os = "macos")]
         activate_app(pid);
+        #[cfg(target_os = "windows")]
+        {
+            let _ = pid;
+            sf_recording::win::activate(window_id);
+        }
         // give the Space switch / un-minimise a moment, then read the fresh bounds
         for _ in 0..8 {
             std::thread::sleep(std::time::Duration::from_millis(120));
@@ -109,7 +123,7 @@ pub fn activate_and_locate(pid: i32, window_id: u32) -> Option<sf_project::schem
         }
         None
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
         let _ = (pid, window_id);
         None
@@ -125,7 +139,13 @@ pub fn own_window_ids() -> Vec<u32> {
     app.windows().iter().map(|w| w.windowNumber() as u32).collect()
 }
 
-#[cfg(not(target_os = "macos"))]
+/// `HWND`s of our own windows; the recorder hides them from the capture.
+#[cfg(target_os = "windows")]
+pub fn own_window_ids() -> Vec<u32> {
+    sf_recording::win::own_windows()
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
 pub fn own_window_ids() -> Vec<u32> {
     vec![]
 }
@@ -147,6 +167,8 @@ pub struct RecordingScreen {
     /// Recent microphone levels for the HUD equalizer, and when the last one was taken.
     levels: std::collections::VecDeque<f32>,
     level_sampled_at: f64,
+    /// Where the HUD pill was drawn last frame (window points).
+    pub hud_rect: egui::Rect,
 }
 
 pub enum RecordingOutcome {
@@ -169,12 +191,13 @@ pub fn picks_window_in_portal() -> bool {
 
 impl RecordingScreen {
     pub fn new(req: RecordRequest) -> Self {
-        let stamp = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
+        // Windows file names cannot contain ':'
+        let stamp = chrono::Local::now().format(if cfg!(windows) { "%Y-%m-%d %H.%M.%S" } else { "%Y-%m-%d %H:%M:%S" }).to_string();
         let name = format!("{} {stamp}", target_name(&req));
         let dir = recordings_folder().join(name);
         let total_ms = req.countdown_ms;
         let camera = req.camera.as_deref().map(crate::camera_bubble::CameraBubble::open);
-        RecordingScreen { req, phase: Phase::Countdown { until: Instant::now() + std::time::Duration::from_millis(total_ms), total_ms }, output_dir: dir, error: None, camera, levels: Default::default(), level_sampled_at: 0.0 }
+        RecordingScreen { req, phase: Phase::Countdown { until: Instant::now() + std::time::Duration::from_millis(total_ms), total_ms }, output_dir: dir, error: None, camera, levels: Default::default(), level_sampled_at: 0.0, hud_rect: egui::Rect::NOTHING }
     }
 
     fn start_recorder(&mut self) -> Result<()> {
@@ -258,6 +281,7 @@ impl RecordingScreen {
         let pill_w = 12.0 + 40.0 + 8.0 + lcd_w + 8.0 + keys_w + 12.0;
         let pill = egui::Rect::from_center_size(pos2(full.center().x, full.bottom() - 10.0 - 29.0), vec2(pill_w, 58.0));
         let painter = ui.painter().clone();
+        self.hud_rect = pill;
         crate::vibrancy::set(Some([pill.left(), pill.top(), pill.width(), pill.height()]), full.height(), crate::picker::PILL_RADIUS);
         let tint = if crate::vibrancy::is_active() { pal.glass } else { pal.glass_solid };
         painter.rect(pill, CornerRadius::same(crate::picker::PILL_RADIUS as u8), tint, Stroke::new(1.0, pal.glass_border), egui::StrokeKind::Inside);

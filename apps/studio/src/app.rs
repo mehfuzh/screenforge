@@ -53,6 +53,9 @@ pub struct App {
     /// (plus menus and panels while open) instead of resizing.
     #[cfg(target_os = "linux")]
     input_region: Option<crate::os::InputRegion>,
+    /// Windows: the toolbar window is clipped to the pill and whatever is open above it.
+    #[cfg(target_os = "windows")]
+    window_shape: Option<crate::os::WindowShape>,
 }
 
 #[derive(PartialEq, Eq, Clone, Copy)]
@@ -111,7 +114,7 @@ pub const EDITOR_SIZE: [f32; 2] = [1440.0, 900.0];
 pub const PICKER_BOTTOM_GAP: f32 = 96.0;
 pub const PICKER_SIZE: [f32; 2] = [1200.0, crate::picker::BAR_WINDOW_H];
 /// Toolbar window height when it does not resize (X11): tall enough for any menu or panel.
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 const PICKER_FIXED_H: f32 = crate::picker::MENU_WINDOW_H;
 
 impl App {
@@ -133,7 +136,7 @@ impl App {
         let mut picker = Picker::default();
         picker.load_inputs();
         let perm_setup = (crate::permissions::PermissionsSetup::needed() || std::env::var_os("SF_SHOW_PERMISSIONS").is_some()).then(crate::permissions::PermissionsSetup::start);
-        let app = App { gpu, screen: Screen::Picker(picker), error: None, prefs, window_mode: WindowMode::Picker, picker_height: crate::picker::BAR_WINDOW_H, placed_once: false, tray: None, tray_tried: false, area_select: None, window_select: None, titlebar_fix: 0, perm_setup, confirm_close: None, quitting: false, fresh_open: None, last_size: None, last_pointer: None, #[cfg(target_os = "linux")] input_region: crate::os::InputRegion::new(cc), pending_open: std::env::args().nth(1).map(PathBuf::from).filter(|p| p.is_dir() || p.extension().is_some_and(|e| e == sf_project::PACKAGE_EXTENSION || e == sf_project::SCREEN_STUDIO_EXTENSION)) };
+        let app = App { gpu, screen: Screen::Picker(picker), error: None, prefs, window_mode: WindowMode::Picker, picker_height: crate::picker::BAR_WINDOW_H, placed_once: false, tray: None, tray_tried: false, area_select: None, window_select: None, titlebar_fix: 0, perm_setup, confirm_close: None, quitting: false, fresh_open: None, last_size: None, last_pointer: None, #[cfg(target_os = "linux")] input_region: crate::os::InputRegion::new(cc), #[cfg(target_os = "windows")] window_shape: crate::os::WindowShape::new(cc), pending_open: std::env::args().nth(1).map(PathBuf::from).filter(|p| p.is_dir() || p.extension().is_some_and(|e| e == sf_project::PACKAGE_EXTENSION || e == sf_project::SCREEN_STUDIO_EXTENSION)) };
         crate::open_docs::set_context(&cc.egui_ctx);
         // a project on the command line opens on the first frame (`pending_open`)
         app
@@ -192,7 +195,7 @@ impl App {
     }
 
     fn window_h(fixed: bool, wanted: f32) -> f32 {
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "windows"))]
         if fixed {
             return PICKER_FIXED_H.max(wanted);
         }
@@ -204,7 +207,11 @@ impl App {
     fn fixed_picker(&self) -> bool {
         #[cfg(target_os = "linux")]
         return self.input_region.is_some();
-        #[cfg(not(target_os = "linux"))]
+        // Windows: resizing the window while the clip region still fits the old size flashes a
+        // dark box, so the window keeps one height and only the region changes
+        #[cfg(target_os = "windows")]
+        return self.window_shape.is_some();
+        #[cfg(not(any(target_os = "linux", target_os = "windows")))]
         false
     }
 
@@ -218,6 +225,33 @@ impl App {
             _ => None,
         };
         region.set(rect, ctx.pixels_per_point());
+    }
+
+    /// Windows: clip the floating window to the pill plus every visible egui area (menus,
+    /// panels, dialogs) while the toolbar or HUD is shown; the editor gets the whole window.
+    #[cfg(target_os = "windows")]
+    fn update_window_shape(&mut self, ctx: &egui::Context) {
+        let Some(shape) = self.window_shape.as_mut() else { return };
+        let base = match &self.screen {
+            Screen::Picker(p) if self.window_mode == WindowMode::Picker => Some((p.bar_rect, p.recent_rect, crate::picker::PILL_RADIUS)),
+            Screen::Recording(r) if self.window_mode == WindowMode::Picker => Some((r.hud_rect, egui::Rect::NOTHING, crate::picker::PILL_RADIUS)),
+            _ => None,
+        };
+        let rects = base.map(|(bar, panel, radius)| {
+            let mut v = vec![(bar, radius), (panel, radius)];
+            // menus, popups, tooltips and dialogs are egui areas above the background layer
+            ctx.memory(|m| {
+                for layer in m.areas().visible_layer_ids() {
+                    if layer.order != egui::Order::Background {
+                        if let Some(r) = m.area_rect(layer.id) {
+                            v.push((r.expand(1.0), 0.0));
+                        }
+                    }
+                }
+            });
+            v
+        });
+        shape.set(rects.as_deref(), ctx.pixels_per_point());
     }
 
     /// Resize a window that is not user-resizable. On X11, winit pins the min/max size hints
@@ -337,6 +371,24 @@ impl App {
         if let Screen::Editor(ed) = &mut self.screen {
             ed.save_if_dirty();
         }
+    }
+
+    /// Move a project the editor just released to the Trash. Its ffmpeg readers may take a
+    /// moment to exit, so a refusal is retried briefly.
+    fn trash_project(&mut self, path: &std::path::Path) -> Result<(), String> {
+        let mut last = Ok(());
+        for attempt in 0..30 {
+            if attempt > 0 {
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            }
+            last = crate::os::move_to_trash(path);
+            if last.is_ok() {
+                self.prefs.recent.retain(|r| r != path);
+                self.prefs.save();
+                break;
+            }
+        }
+        last
     }
 
     fn show_picker(&mut self, ctx: &egui::Context) {
@@ -637,13 +689,12 @@ impl eframe::App for App {
                 if keep {
                     ed.save();
                 } else {
+                    // the editor holds the project's files open (Windows refuses to move the folder then)
                     let path = ed.path.clone();
-                    match crate::os::move_to_trash(&path) {
-                        Ok(()) => {
-                            self.prefs.recent.retain(|r| r != &path);
-                            self.prefs.save();
-                        }
-                        Err(e) => self.error = Some(format!("Could not move the recording to the Trash: {e}")),
+                    self.leave_editor();
+                    self.screen = Screen::Picker(Picker::default());
+                    if let Err(e) = self.trash_project(&path) {
+                        self.error = Some(format!("Could not move the recording to the Trash: {e}"));
                     }
                 }
                 if let Screen::Editor(ed) = &mut self.screen { ed.fresh_recording = false; }
@@ -656,6 +707,7 @@ impl eframe::App for App {
         }
         // editor Trash button: confirm, move the package to the Trash, back to the toolbar
         let mut removed: Option<String> = None;
+        let mut trash_request: Option<(PathBuf, String)> = None;
         if let Screen::Editor(ed) = &mut self.screen {
             if ed.remove_requested {
                 let name = ed.session.pkg.project.name.clone();
@@ -674,21 +726,19 @@ impl eframe::App for App {
                     ed.remove_requested = false;
                 } else if confirm {
                     ed.remove_requested = false;
-                    let path = ed.path.clone();
-                    match crate::os::move_to_trash(&path) {
-                        Ok(()) => {
-                            self.prefs.recent.retain(|r| r != &path);
-                            self.prefs.save();
-                            removed = Some(name);
-                            go_home = true;
-                        }
-                        Err(e) => self.error = Some(format!("Could not move “{name}” to the Trash: {e}")),
-                    }
+                    trash_request = Some((ed.path.clone(), name));
+                    go_home = true;
                 }
             }
         }
         if go_home {
             self.show_picker(ctx);
+            if let Some((path, name)) = trash_request.take() {
+                match self.trash_project(&path) {
+                    Ok(()) => removed = Some(name),
+                    Err(e) => self.error = Some(format!("Could not move “{name}” to the Trash: {e}")),
+                }
+            }
             if let (Some(name), Screen::Picker(p)) = (removed, &mut self.screen) {
                 p.status = Some(format!("Moved “{name}” to the Trash"));
             }
@@ -841,6 +891,8 @@ impl eframe::App for App {
         }
         #[cfg(target_os = "linux")]
         self.update_input_region(ctx);
+        #[cfg(target_os = "windows")]
+        self.update_window_shape(ctx);
     }
 }
 

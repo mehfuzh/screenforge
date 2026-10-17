@@ -12,5 +12,18 @@ fn main() {
             }
         }
     }
+    // Windows: the executable's icon and version resource
+    #[cfg(target_os = "windows")]
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
+        let mut res = winresource::WindowsResource::new();
+        res.set_icon("assets/icon.ico");
+        res.set("ProductName", "ScreenForge");
+        res.set("FileDescription", "ScreenForge screen recorder and editor");
+        res.set("LegalCopyright", "Mehfuz Hossain");
+        if let Err(e) = res.compile() {
+            println!("cargo:warning=could not embed the Windows resources: {e}");
+        }
+        println!("cargo:rerun-if-changed=assets/icon.ico");
+    }
     println!("cargo:rerun-if-changed=build.rs");
 }

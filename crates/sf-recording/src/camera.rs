@@ -1,9 +1,10 @@
-//! Camera recorder: ffmpeg reads the webcam (AVFoundation on macOS, V4L2 on Linux) and writes
+//! Camera recorder: ffmpeg reads the webcam (AVFoundation on macOS, V4L2 on Linux, DirectShow
+//! on Windows) and writes
 //! YUV4MPEG frames to a pipe; the latest frame feeds the shared frame repeater, which writes
 //! `channel-N-camera-S.m3u8` (HLS/fMP4 like the display) at a constant frame rate. Sessions
 //! begin and end together with the display's, so the editor plays both on the same clock.
 
-#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
 pub use imp::{CameraCapture, CameraRecorder};
 
 use std::sync::Arc;
@@ -133,7 +134,22 @@ pub fn capture_input_attempts(device: &str) -> Vec<Vec<String>> {
         .collect()
 }
 
-#[cfg(any(target_os = "macos", target_os = "linux"))]
+/// DirectShow: `device` is `video=<name>` (see [`crate::discover::camera_input`]).
+#[cfg(target_os = "windows")]
+pub fn capture_input_attempts(device: &str) -> Vec<Vec<String>> {
+    let fps = CAMERA_FPS.to_string();
+    [vec!["-framerate", &fps, "-video_size", "1280x720"], vec!["-video_size", "1280x720"], vec![]]
+        .into_iter()
+        .map(|opts| {
+            let mut a: Vec<String> = ["-f", "dshow", "-rtbufsize", "64M"].map(String::from).to_vec();
+            a.extend(opts.into_iter().map(String::from));
+            a.extend(["-i".into(), device.to_string()]);
+            a
+        })
+        .collect()
+}
+
+#[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
 mod imp {
     use std::io::{BufRead, BufReader, Read};
     use std::path::Path;

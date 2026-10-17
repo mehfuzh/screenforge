@@ -200,7 +200,39 @@ mod imp {
     }
 }
 
-#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+/// Windows: desktop apps capture the screen and input without per-app prompts. Microphone and
+/// camera access can be switched off for desktop apps in Settings → Privacy; the device then
+/// simply fails to open, and [`open_settings`] links there.
+#[cfg(target_os = "windows")]
+mod imp {
+    use super::PermissionStatus;
+    pub fn screen_recording() -> PermissionStatus {
+        PermissionStatus::Granted
+    }
+    pub fn request_screen_recording() -> PermissionStatus {
+        PermissionStatus::Granted
+    }
+    pub fn input_monitoring() -> PermissionStatus {
+        PermissionStatus::Granted
+    }
+    pub fn request_input_monitoring() -> PermissionStatus {
+        PermissionStatus::Granted
+    }
+    pub fn microphone() -> PermissionStatus {
+        PermissionStatus::Granted
+    }
+    pub fn request_microphone() -> PermissionStatus {
+        PermissionStatus::Granted
+    }
+    pub fn camera() -> PermissionStatus {
+        PermissionStatus::Granted
+    }
+    pub fn request_camera() -> PermissionStatus {
+        PermissionStatus::Granted
+    }
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
 mod imp {
     use super::PermissionStatus;
     pub fn screen_recording() -> PermissionStatus {
@@ -264,8 +296,12 @@ pub fn request_camera() -> PermissionStatus {
 
 /// Accessibility permission (`AXIsProcessTrusted`), used to read the text caret while typing.
 pub fn accessibility() -> PermissionStatus {
+    if cfg!(target_os = "windows") {
+        // the caret comes from GetGUIThreadInfo, no permission involved
+        return PermissionStatus::Granted;
+    }
     if !cfg!(target_os = "macos") {
-        // caret tracking is macOS-only; elsewhere typing zooms follow the mouse
+        // caret tracking is macOS and Windows only; elsewhere typing zooms follow the mouse
         return PermissionStatus::Unsupported;
     }
     if crate::caret::accessibility_trusted() { PermissionStatus::Granted } else { PermissionStatus::NotDetermined }
@@ -287,6 +323,15 @@ pub fn open_settings(permission: Permission) -> std::io::Result<()> {
     let url = format!("x-apple.systempreferences:com.apple.preference.security?{anchor}");
     if cfg!(target_os = "macos") {
         std::process::Command::new("open").arg(url).status().map(|_| ())
+    } else if cfg!(target_os = "windows") {
+        let page = match permission {
+            Permission::Microphone => "ms-settings:privacy-microphone",
+            Permission::Camera => "ms-settings:privacy-webcam",
+            _ => "ms-settings:privacy",
+        };
+        let mut c = std::process::Command::new("cmd");
+        crate::ffmpeg::hide_console(&mut c);
+        c.args(["/C", "start", "", page]).status().map(|_| ())
     } else {
         Err(std::io::Error::new(std::io::ErrorKind::Unsupported, "macOS only"))
     }

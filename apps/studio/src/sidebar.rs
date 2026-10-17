@@ -963,7 +963,7 @@ fn wallpaper_tile(ui: &mut egui::Ui, path: Option<&std::path::Path>, name: &str,
     let radius = 9.0;
     let mut drawn = false;
     if let Some(p) = path {
-        let uri = format!("file://{}", p.display());
+        let uri = crate::os::texture_uri(p);
         if let Ok(egui::load::TexturePoll::Ready { texture }) = ui.ctx().try_load_texture(&uri, egui::TextureOptions::LINEAR, egui::load::SizeHint::Size { width: 256, height: 256, maintain_aspect_ratio: true }) {
             let (w, h) = (texture.size.x.max(1.0), texture.size.y.max(1.0));
             // centre crop to a square in UV space

@@ -4,12 +4,12 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Download — ScreenForge</title>
-<meta name="description" content="Download ScreenForge for macOS or Linux: a screen recorder and timeline editor that makes polished videos.">
+<meta name="description" content="Download ScreenForge for macOS, Windows or Linux: a screen recorder and timeline editor that makes polished videos.">
 <link rel="canonical" href="https://screenforge.studio/download">
 <meta name="color-scheme" content="light dark">
 <meta property="og:type" content="website">
 <meta property="og:title" content="Download — ScreenForge">
-<meta property="og:description" content="Download ScreenForge for macOS or Linux: a screen recorder and timeline editor that makes polished videos.">
+<meta property="og:description" content="Download ScreenForge for macOS, Windows or Linux: a screen recorder and timeline editor that makes polished videos.">
 <meta property="og:image" content="https://screenforge.studio/og.png?v=3">
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
@@ -416,6 +416,7 @@ gtag('config', 'G-ZYRJDJ736V');
   <div class="eyebrow">Download</div>
   <div class="mode-toggle os-switch" role="group" aria-label="Platform">
     <button type="button" data-os="mac" aria-pressed="true">macOS</button>
+    <button type="button" data-os="windows" aria-pressed="false">Windows</button>
     <button type="button" data-os="linux" aria-pressed="false">Linux</button>
   </div>
 
@@ -452,7 +453,7 @@ gtag('config', 'G-ZYRJDJ736V');
 <pre><code><span class="p">$ </span>git clone https://github.com/mehfuzh/screenforge &amp;&amp; cargo build --release -p studio</code></pre>
     <p>The binary lands in <code>target/release/screenforge</code>; <code>scripts/bundle.sh</code> wraps it in an <code>.app</code>. The export gate is ordinary Apache-2.0 code: a source build can remove it. The license exists to fund the signed, notarized download, the CI that produces it and ongoing maintenance.</p>
   </div>
-  <p style="margin-top:28px">On Linux? <a href="#linux" data-os-link="linux">Get the Linux version</a>.</p>
+  <p style="margin-top:28px">On Windows? <a href="#windows" data-os-link="windows">Get the Windows version</a>. On Linux? <a href="#linux" data-os-link="linux">Get the Linux version</a>.</p>
   </section>
 
   <section class="plat" id="linux" data-os="linux">
@@ -482,13 +483,46 @@ gtag('config', 'G-ZYRJDJ736V');
   <ol class="steps">
     <li><b>Step 1</b><strong>Install the package</strong>From the folder you downloaded to, run <code>sudo apt install ./screenforge_amd64.deb</code>, or open it in your software center. <i class="hl">ffmpeg</i> comes bundled; nothing else to install.</li>
     <li><b>Step 2</b><strong>Share your screen</strong>Recording works on <i class="hl">X11</i> and <i class="hl">Wayland</i>. On Wayland (GNOME, KDE Plasma) your first recording opens the system's "Share your screen" dialog: pick your screen and click Share. ScreenForge remembers the choice and only asks again for a different monitor. To record a window, pick it on the dialog's Window tab. On Wayland the cursor is part of the video and clicks and keystrokes are not recorded, so automatic zooms and cursor effects are not available there yet.</li>
-    <li><b>Step 3</b><strong>Launch</strong>Open ScreenForge from your app menu, or run <code>screenforge</code> in a terminal. System audio recording is macOS-only for now; the microphone works.</li>
+    <li><b>Step 3</b><strong>Launch</strong>Open ScreenForge from your app menu, or run <code>screenforge</code> in a terminal. System audio recording is not available on Linux yet; the microphone works.</li>
   </ol>
 <pre style="margin-top:28px"><code><span class="p">$ </span>sudo apt install ./screenforge_amd64.deb   <span class="c"># Debian / Ubuntu</span>
 <span class="p">$ </span>tar xzf ScreenForge-linux-x86_64.tar.gz &amp;&amp; ./ScreenForge/screenforge   <span class="c"># other distros</span>
 <span class="p">$ </span>systemctl --user restart xdg-desktop-portal   <span class="c"># Wayland: no "Share your screen" dialog? restart the portal</span></code></pre>
   <p>The app runs without a license. Recording, editing and your first three exports are free; after that, exporting needs a key from the <a href="pricing.html">pricing page</a>.</p>
-  <p style="margin-top:28px">On a Mac? <a href="#mac" data-os-link="mac">Get the macOS version</a>.</p>
+  <p style="margin-top:28px">On a Mac? <a href="#mac" data-os-link="mac">Get the macOS version</a>. On Windows? <a href="#windows" data-os-link="windows">Get the Windows version</a>.</p>
+  </section>
+
+  <section class="plat" id="windows" data-os="windows">
+  <h1>Download ScreenForge for <em>Windows.</em></h1>
+  <p class="stamp">x86_64 · Windows 10 or later · ffmpeg included · recording and editing are free</p>
+
+  <div class="reqs" aria-label="requirements">
+    <span class="badge"><span class="k">arch</span><span class="v">x86_64</span></span>
+    <span class="badge"><span class="k">Windows</span><span class="v">10 (2004) or later</span></span>
+    <span class="badge"><span class="k">ffmpeg</span><span class="v">included</span></span>
+    <span class="badge gold"><span class="k">status</span><span class="v">beta</span></span>
+  </div>
+
+  <div class="cta">
+    <a class="go" id="dl-win" href="https://github.com/mehfuzh/screenforge/releases/latest/download/ScreenForge-windows-x86_64-setup.exe" rel="noopener">
+      <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1.5v8.3l2.7-2.7 1 1L8 11.8 4.3 8.1l1-1L8 9.8V1.5zM2.5 12h11v1.5h-11z"/></svg>
+      Download installer
+    </a>
+    <a class="alt" id="dl-win-zip" href="https://github.com/mehfuzh/screenforge/releases/latest/download/ScreenForge-windows-x86_64.zip" rel="noopener">
+      <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1.5v8.3l2.7-2.7 1 1L8 11.8 4.3 8.1l1-1L8 9.8V1.5zM2.5 12h11v1.5h-11z"/></svg>
+      Portable .zip
+    </a>
+    <span class="dl-meta" id="dl-meta-windows" aria-live="polite">installer: Start menu and uninstall · zip: run from any folder</span>
+  </div>
+
+  <h2>Install</h2>
+  <ol class="steps">
+    <li><b>Step 1</b><strong>Run the installer</strong>It installs for your user account only, so no administrator prompt. Windows SmartScreen may warn that the download is not signed yet: choose <i class="hl">More info</i>, then <i class="hl">Run anyway</i>. Prefer no install? Unzip the portable build anywhere and run <code>screenforge.exe</code>.</li>
+    <li><b>Step 2</b><strong>Record</strong>No permissions to grant: the screen is captured through the Desktop Duplication API, and the cursor, clicks and keystrokes are recorded separately so the editor can smooth and zoom them. System audio and the microphone both work.</li>
+    <li><b>Step 3</b><strong>Launch</strong>Open ScreenForge from the Start menu. <i class="hl">ffmpeg</i> comes bundled; nothing else to install.</li>
+  </ol>
+  <p style="margin-top:18px">The app runs without a license. Recording, editing and your first three exports are free; after that, exporting needs a key from the <a href="pricing.html">pricing page</a>.</p>
+  <p style="margin-top:28px">On a Mac? <a href="#mac" data-os-link="mac">Get the macOS version</a>. On Linux? <a href="#linux" data-os-link="linux">Get the Linux version</a>.</p>
   </section>
 
   <h2>Older versions</h2>
@@ -535,6 +569,7 @@ gtag('config', 'G-ZYRJDJ736V');
     var ua = navigator.userAgent || '';
     var plat = (navigator.userAgentData && navigator.userAgentData.platform) || navigator.platform || '';
     var linux = /linux/i.test(plat + ' ' + ua) && !/android|cros/i.test(ua);
+    var windows = /win/i.test(plat + ' ' + ua) && !/darwin|mac/i.test(plat);
     var secs = document.querySelectorAll('.plat'), btns = document.querySelectorAll('.os-switch button');
     function show(os) {
       secs.forEach(function (s) { s.hidden = s.dataset.os !== os; });
@@ -545,7 +580,7 @@ gtag('config', 'G-ZYRJDJ736V');
       a.addEventListener('click', function (e) { e.preventDefault(); show(a.dataset.osLink); history.replaceState(null, '', '#' + a.dataset.osLink); scrollTo(0, 0); });
     });
     var h = location.hash.slice(1);
-    show(h === 'linux' || h === 'mac' ? h : (linux ? 'linux' : 'mac'));
+    show(h === 'linux' || h === 'mac' || h === 'windows' ? h : (linux ? 'linux' : windows ? 'windows' : 'mac'));
   })();
 </script>
 <script>
@@ -561,6 +596,8 @@ gtag('config', 'G-ZYRJDJ736V');
         (rel.assets || []).forEach(function (x) {
           if (/_amd64\.deb$/i.test(x.name || '')) document.getElementById('dl-deb').href = x.browser_download_url;
           if (/linux-x86_64\.tar\.gz$/i.test(x.name || '')) document.getElementById('dl-tar').href = x.browser_download_url;
+          if (/windows-x86_64-setup\.exe$/i.test(x.name || '')) document.getElementById('dl-win').href = x.browser_download_url;
+          if (/windows-x86_64\.zip$/i.test(x.name || '')) document.getElementById('dl-win-zip').href = x.browser_download_url;
         });
         if (!dmg || !dmg.browser_download_url) return fail();
         a.href = dmg.browser_download_url;

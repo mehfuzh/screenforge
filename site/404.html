@@ -460,9 +460,11 @@ gtag('config', 'G-ZYRJDJ736V');
   (function () {
     var ua = navigator.userAgent || '';
     var plat = (navigator.userAgentData && navigator.userAgentData.platform) || navigator.platform || '';
-    if (!/linux/i.test(plat + ' ' + ua) || /android|cros/i.test(ua)) return;
-    document.querySelectorAll('.os-dl').forEach(function (a) { a.href = 'download.html#linux'; });
-    document.querySelectorAll('.os-label').forEach(function (l) { l.textContent = 'Download for Linux'; });
+    var os = /linux/i.test(plat + ' ' + ua) && !/android|cros/i.test(ua) ? 'linux' : /win/i.test(plat + ' ' + ua) && !/darwin|mac/i.test(plat) ? 'windows' : '';
+    if (!os) return;
+    var name = os === 'linux' ? 'Linux' : 'Windows';
+    document.querySelectorAll('.os-dl').forEach(function (a) { a.href = 'download.html#' + os; });
+    document.querySelectorAll('.os-label').forEach(function (l) { l.textContent = 'Download for ' + name; });
   })();
 </script>
 </body>

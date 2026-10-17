@@ -176,3 +176,46 @@ fn records_picked_window() {
     let log = InputLog::load(&out, &input.sessions[0]).expect("event logs parse");
     println!("moves={} (window-relative points)", log.mouse_moves.len());
 }
+
+/// Windows: pointer positions recorded through the hooks must be in points (pixels / DPI
+/// scale). Moves the cursor programmatically and reads the event log back.
+#[cfg(target_os = "windows")]
+#[test]
+#[ignore = "moves the real mouse pointer"]
+fn hook_positions_are_in_points() {
+    use sf_recording::input::InputRecorder;
+    use sf_recording::log::RecLog;
+    use windows::Win32::UI::Input::KeyboardAndMouse::{SendInput, INPUT, INPUT_0, INPUT_MOUSE, MOUSEEVENTF_ABSOLUTE, MOUSEEVENTF_MOVE, MOUSEINPUT};
+    use windows::Win32::UI::WindowsAndMessaging::{GetSystemMetrics, SM_CXSCREEN, SM_CYSCREEN};
+    sf_recording::win::ensure_dpi_aware();
+    // SetCursorPos bypasses the hooks; SendInput goes through them like a real mouse
+    let (sw, sh) = unsafe { (GetSystemMetrics(SM_CXSCREEN) as f64, GetSystemMetrics(SM_CYSCREEN) as f64) };
+    let send = |x: i32, y: i32| {
+        let mi = MOUSEINPUT { dx: (x as f64 * 65535.0 / sw).round() as i32, dy: (y as f64 * 65535.0 / sh).round() as i32, mouseData: 0, dwFlags: MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE, time: 0, dwExtraInfo: 0 };
+        let input = INPUT { r#type: INPUT_MOUSE, Anonymous: INPUT_0 { mi } };
+        unsafe { SendInput(&[input], std::mem::size_of::<INPUT>() as i32) };
+    };
+    let tmp = tempfile::tempdir().unwrap();
+    let log = RecLog::open(tmp.path()).unwrap();
+    let rec = InputRecorder::start(log, false).unwrap();
+    rec.begin_session(0, tmp.path()).unwrap();
+    // move the pointer ourselves (the hooks see injected moves too) and note where Windows
+    // says it is in physical pixels right after
+    use windows::Win32::Foundation::POINT;
+    use windows::Win32::UI::WindowsAndMessaging::GetCursorPos;
+    let mut physical = POINT::default();
+    for i in 0..5 {
+        send(1000 + i * 3, 500 + i * 2);
+        std::thread::sleep(Duration::from_millis(40));
+        let _ = unsafe { GetCursorPos(&mut physical) };
+    }
+    std::thread::sleep(Duration::from_millis(200));
+    rec.end_session().unwrap();
+    let scale = sf_recording::win::scale_at(physical.x as f64, physical.y as f64);
+    let moves = sf_project::recording::load_events(&tmp.path().join("mousemoves-0.json")).unwrap();
+    println!("scale={scale} physical=({},{}) moves={:?}", physical.x, physical.y, moves.iter().map(|m| (m.x, m.y)).collect::<Vec<_>>());
+    assert!(!moves.is_empty(), "no mouse moves recorded");
+    let last = moves.last().unwrap();
+    let (ex, ey) = (physical.x as f64 / scale, physical.y as f64 / scale);
+    assert!((last.x.unwrap() - ex).abs() < 3.0 && (last.y.unwrap() - ey).abs() < 3.0, "got {:?} {:?}, expected ({ex},{ey}) at scale {scale}", last.x, last.y);
+}

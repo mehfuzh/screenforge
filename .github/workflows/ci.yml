@@ -51,3 +51,38 @@ jobs:
           path: |
             target/screenforge_amd64.deb
             target/ScreenForge-linux-x86_64.tar.gz
+
+  windows:
+    name: Build & test (Windows)
+    runs-on: windows-2022
+    defaults:
+      run:
+        shell: bash
+    env:
+      # bindgen (whisper-rs) needs libclang; the runners ship LLVM
+      LIBCLANG_PATH: C:\Program Files\LLVM\bin
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: ffmpeg for the tests
+        run: |
+          DIR=$(./scripts/fetch-ffmpeg.sh)
+          echo "SF_FFMPEG=$PWD/$DIR/ffmpeg.exe" >> "$GITHUB_ENV"
+          echo "SF_FFPROBE=$PWD/$DIR/ffprobe.exe" >> "$GITHUB_ENV"
+        env:
+          GH_TOKEN: ${{ github.token }}
+      - name: Build
+        run: cargo build --workspace --all-targets
+      - name: Test
+        run: cargo test --workspace
+      - name: Windows package (.zip)
+        run: ./scripts/bundle-windows.sh
+        env:
+          GH_TOKEN: ${{ github.token }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: |
+            target/ScreenForge-windows-x86_64.zip
+            target/ScreenForge-windows-x86_64-setup.exe

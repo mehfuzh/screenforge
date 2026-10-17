@@ -137,8 +137,13 @@ pub fn window_stream_plan(width: u32, height: u32, scale: f64, discovery: &Disco
 
 /// Target H.264 bitrate: Screen Studio's ~17 Mb/s for 2400×1800 scaled by pixel count and
 /// quality, clamped to a sane range.
-/// H.264 encoder for live captures: VideoToolbox when this ffmpeg has it, else x264.
+/// H.264 encoder for live captures: VideoToolbox when this ffmpeg has it, else x264
+/// (`SF_VIDEO_ENCODER=<name>` overrides, e.g. `h264_nvenc` on Windows).
 pub fn video_encoder() -> &'static str {
+    static FORCED: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+    if let Some(name) = FORCED.get_or_init(|| std::env::var("SF_VIDEO_ENCODER").ok().filter(|n| crate::ffmpeg::has_encoder(n))) {
+        return name.as_str();
+    }
     if cfg!(target_os = "macos") && crate::ffmpeg::has_encoder("h264_videotoolbox") { "h264_videotoolbox" } else { "libx264" }
 }
 
@@ -158,7 +163,7 @@ pub fn hls_args(width: u32, height: u32, fps: u32, bitrate: u64, encoder: &str, 
 }
 
 /// [`hls_args`] for any raw stdin input, with an optional filter chain to the output size.
-#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
 pub(crate) fn hls_raw_args(input: &crate::repeater::RawInput, fps: u32, bitrate: u64, encoder: &str, base: &str, session: usize) -> Vec<String> {
     let mut args: Vec<String> = ["-y", "-f", "rawvideo", "-pix_fmt"].map(String::from).to_vec();
     args.extend([input.pix_fmt.into(), "-video_size".into(), format!("{}x{}", input.width, input.height)]);
@@ -182,10 +187,13 @@ pub const DISPLAY_CHANNEL: &str = "channel-1-display";
 pub fn hls_encode_args_for(channel: &str, bitrate: u64, encoder: &str, session: usize) -> Vec<String> {
     let base = format!("{channel}-{session}");
     let mut args: Vec<String> = vec!["-c:v".into(), encoder.into()];
-    if encoder == "libx264" {
-        args.extend(["-preset", "veryfast", "-tune", "zerolatency"].map(String::from));
-    } else {
-        args.extend(["-allow_sw", "1", "-realtime", "1"].map(String::from));
+    match encoder {
+        "libx264" => args.extend(["-preset", "veryfast", "-tune", "zerolatency"].map(String::from)),
+        "h264_videotoolbox" => args.extend(["-allow_sw", "1", "-realtime", "1"].map(String::from)),
+        "h264_nvenc" => args.extend(["-preset", "p4", "-tune", "ll"].map(String::from)),
+        "h264_qsv" => args.extend(["-preset", "veryfast"].map(String::from)),
+        "h264_amf" => args.extend(["-usage", "lowlatency"].map(String::from)),
+        _ => {}
     }
     args.extend(
         [
@@ -390,6 +398,183 @@ mod linux {
 }
 #[cfg(target_os = "linux")]
 pub use linux::unsupported_reason;
+#[cfg(target_os = "windows")]
+pub use windows_impl::DisplayRecorder;
+
+/// Windows: ffmpeg grabs the region itself, one ffmpeg per session, through the Desktop
+/// Duplication API (`ddagrab`, GPU-side and cheap) or, when that is unavailable, GDI
+/// (`gdigrab`). The cursor is left out of the video; the editor draws it from the input log.
+/// `SF_WIN_CAPTURE=gdigrab|ddagrab` forces a backend.
+#[cfg(target_os = "windows")]
+mod windows_impl {
+    use std::path::Path;
+
+    use parking_lot::Mutex;
+
+    use super::{hls_encode_args, target_bitrate, DisplayPlan};
+    use crate::config::RecordingConfig;
+    use crate::ffmpeg::FfmpegProc;
+    use crate::log::RecLog;
+    use crate::{Error, Result};
+
+    const COMPONENT: &str = "DisplayRecorder";
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    enum Backend {
+        /// Desktop Duplication on DXGI output `output_idx` of the default adapter.
+        Dda { output_idx: u32 },
+        Gdi,
+    }
+
+    pub struct DisplayRecorder {
+        plan: DisplayPlan,
+        fps: u32,
+        quality: f64,
+        backend: Backend,
+        /// Region in physical pixels of the virtual screen.
+        region_px: (i64, i64, u32, u32),
+        /// Region relative to the monitor's top-left corner, in pixels (ddagrab).
+        monitor_offset_px: (i64, i64),
+        excluded: Vec<u32>,
+        log: RecLog,
+        proc: Mutex<Option<(FfmpegProc, std::time::Instant)>>,
+        error: Mutex<Option<String>>,
+    }
+
+    /// Does `ddagrab` work on this machine (cached)? A one-frame test capture: the filter is
+    /// listed by every recent build but needs a D3D11 device and a desktop session.
+    fn ddagrab_works(output_idx: u32, log: &RecLog) -> bool {
+        use std::sync::OnceLock;
+        static CACHE: OnceLock<Mutex<std::collections::HashMap<u32, bool>>> = OnceLock::new();
+        let cache = CACHE.get_or_init(Default::default);
+        if let Some(ok) = cache.lock().get(&output_idx) {
+            return *ok;
+        }
+        let ok = crate::ffmpeg::has_filter("ddagrab")
+            && crate::ffmpeg::ffmpeg_cmd()
+                .map(|mut c| {
+                    c.args(["-f", "lavfi", "-i", &format!("ddagrab=output_idx={output_idx}:framerate=5:draw_mouse=0,hwdownload,format=bgra"), "-frames:v", "2", "-f", "null", "-"])
+                        .stdout(std::process::Stdio::null())
+                        .stderr(std::process::Stdio::null());
+                    c.status().map(|s| s.success()).unwrap_or(false)
+                })
+                .unwrap_or(false);
+        log.notice(COMPONENT, format!("ddagrab probe on output {output_idx}: {}", if ok { "ok" } else { "unavailable" }));
+        cache.lock().insert(output_idx, ok);
+        ok
+    }
+
+    impl DisplayRecorder {
+        pub fn start(cfg: &RecordingConfig, plan: DisplayPlan, log: RecLog, _system_audio: Option<()>) -> Result<Self> {
+            let monitor = crate::win::monitors().into_iter().find(|m| m.id == plan.display_id).ok_or_else(|| Error::InvalidConfig(format!("display {} not found", plan.display_id)))?;
+            let s = monitor.scale;
+            let b = plan.bounds;
+            // physical region; the plan's pixel size is bounds × scale, so this is it (even-sized)
+            let x = (b.x * s).round() as i64;
+            let y = (b.y * s).round() as i64;
+            let (w, h) = ((b.width * s).round() as u32 & !1, (b.height * s).round() as u32 & !1);
+            let region_px = (x, y, w.max(2), h.max(2));
+            let monitor_offset_px = (x - monitor.rect_px.x.round() as i64, y - monitor.rect_px.y.round() as i64);
+            let forced = std::env::var("SF_WIN_CAPTURE").ok();
+            let dda = match forced.as_deref() {
+                Some("gdigrab") => None,
+                Some("ddagrab") => crate::win::dxgi_output_index(monitor.handle),
+                _ => crate::win::dxgi_output_index(monitor.handle).filter(|i| ddagrab_works(*i, &log)),
+            };
+            let backend = match dda {
+                Some(output_idx) => Backend::Dda { output_idx },
+                None => {
+                    if !crate::ffmpeg::has_device("gdigrab") {
+                        return Err(Error::Capture("this ffmpeg has neither ddagrab nor gdigrab".into()));
+                    }
+                    Backend::Gdi
+                }
+            };
+            // our own windows (toolbar, HUD, camera bubble) disappear from the capture
+            let excluded: Vec<u32> = cfg.exclude_window_ids.iter().copied().filter(|id| crate::win::set_excluded_from_capture(*id, true)).collect();
+            log.notice(COMPONENT, format!("{backend:?} region={region_px:?} monitorOffset={monitor_offset_px:?} scale={s} excludedWindows={} plan={plan:?}", excluded.len()));
+            Ok(DisplayRecorder { plan, fps: cfg.fps.max(1), quality: cfg.video_quality, backend, region_px, monitor_offset_px, excluded, log, proc: Mutex::new(None), error: Mutex::new(None) })
+        }
+
+        fn input_args(&self) -> Vec<String> {
+            let (_, _, gw, gh) = self.region_px;
+            match self.backend {
+                Backend::Dda { output_idx } => {
+                    let (ox, oy) = self.monitor_offset_px;
+                    let graph = format!("ddagrab=output_idx={output_idx}:framerate={}:draw_mouse=0:offset_x={ox}:offset_y={oy}:video_size={gw}x{gh},hwdownload,format=bgra", self.fps);
+                    vec!["-y".into(), "-f".into(), "lavfi".into(), "-i".into(), graph]
+                }
+                Backend::Gdi => {
+                    let (x, y, _, _) = self.region_px;
+                    vec![
+                        "-y".into(),
+                        "-f".into(),
+                        "gdigrab".into(),
+                        "-draw_mouse".into(),
+                        "0".into(),
+                        "-framerate".into(),
+                        self.fps.to_string(),
+                        "-offset_x".into(),
+                        x.to_string(),
+                        "-offset_y".into(),
+                        y.to_string(),
+                        "-video_size".into(),
+                        format!("{gw}x{gh}"),
+                        "-i".into(),
+                        "desktop".into(),
+                    ]
+                }
+            }
+        }
+
+        pub fn begin_session(&self, index: usize, dir: &Path) -> Result<()> {
+            let (w, h) = (self.plan.width_px, self.plan.height_px);
+            let (_, _, gw, gh) = self.region_px;
+            let mut args = self.input_args();
+            if (gw, gh) != (w, h) {
+                args.extend(["-vf".into(), format!("scale={w}:{h}:flags=bicubic")]);
+            }
+            args.extend(hls_encode_args(target_bitrate(w, h, self.quality), super::video_encoder(), index));
+            let proc = FfmpegProc::spawn_grab(&args, dir, self.log.clone(), COMPONENT)?;
+            *self.proc.lock() = Some((proc, std::time::Instant::now()));
+            Ok(())
+        }
+
+        /// Stop the session's ffmpeg; returns the approximate number of frames recorded.
+        pub fn end_session(&self) -> Result<u64> {
+            let Some((proc, started)) = self.proc.lock().take() else { return Ok(0) };
+            let frames = (started.elapsed().as_secs_f64() * self.fps as f64) as u64;
+            if let Err(e) = proc.interrupt() {
+                *self.error.lock() = Some(e.to_string());
+                return Err(e);
+            }
+            Ok(frames)
+        }
+
+        pub fn frames_received(&self) -> u64 {
+            self.proc.lock().as_ref().map(|(_, t)| (t.elapsed().as_secs_f64() * self.fps as f64) as u64).unwrap_or(0)
+        }
+
+        pub fn error(&self) -> Option<String> {
+            self.error.lock().clone()
+        }
+
+        pub fn stop(&mut self) {
+            if let Some((proc, _)) = self.proc.lock().take() {
+                let _ = proc.interrupt();
+            }
+            for id in self.excluded.drain(..) {
+                crate::win::set_excluded_from_capture(id, false);
+            }
+        }
+    }
+
+    impl Drop for DisplayRecorder {
+        fn drop(&mut self) {
+            self.stop();
+        }
+    }
+}
 
 #[cfg(target_os = "macos")]
 mod imp {

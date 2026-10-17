@@ -1,6 +1,7 @@
 //! Resize another app's window through the Accessibility API, so a window can be brought to a
-//! chosen aspect ratio before it is recorded. Needs Accessibility access; without it (and on
-//! other platforms) [`set_window_frame`] returns `false` and the window is left as it is.
+//! chosen aspect ratio before it is recorded. macOS needs Accessibility access, Windows uses
+//! `SetWindowPos`; elsewhere (and when the window refuses) [`set_window_frame`] returns `false`
+//! and the window is left as it is.
 
 use sf_project::schema::common::Rect;
 
@@ -25,7 +26,12 @@ pub fn set_window_frame(pid: i32, current: Rect, target: Rect) -> bool {
     imp::set_window_frame(pid, current, target)
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(target_os = "windows")]
+pub fn set_window_frame(pid: i32, current: Rect, target: Rect) -> bool {
+    crate::win::set_window_frame(pid, current, target)
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
 pub fn set_window_frame(pid: i32, current: Rect, target: Rect) -> bool {
     let _ = (pid, current, target);
     false

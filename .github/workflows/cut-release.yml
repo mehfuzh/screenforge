@@ -49,5 +49,5 @@ jobs:
         run: gh workflow run release.yml --ref "v${{ inputs.version }}" -f publish=true -f draft=${{ inputs.draft }}
       - name: Summary
         run: |
-          echo "Tagged v${{ inputs.version }}. Follow the build under Actions → Release (macOS + Linux)." >> "$GITHUB_STEP_SUMMARY"
+          echo "Tagged v${{ inputs.version }}. Follow the build under Actions → Release (macOS + Linux + Windows)." >> "$GITHUB_STEP_SUMMARY"
           echo "Release: https://github.com/${{ github.repository }}/releases/tag/v${{ inputs.version }}" >> "$GITHUB_STEP_SUMMARY"

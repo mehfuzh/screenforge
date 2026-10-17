@@ -334,6 +334,8 @@ mod background_audio_tests {
 ///   after the distribution (`NAME` in `/etc/os-release`, e.g. "Ubuntu"). JPEG and PNG are
 ///   symlinked into `~/.cache/screenforge/system-wallpapers/backgrounds/<category>/`; WebP is
 ///   converted once to JPEG.
+/// - Windows: `C:\Windows\Web\Wallpaper\*` and `C:\Windows\Web\Screen`, copied into
+///   `%LOCALAPPDATA%\screenforge\system-wallpapers\backgrounds\Windows\`.
 ///
 /// The cache is then an ordinary assets root.
 pub mod system_wallpapers {
@@ -350,7 +352,12 @@ pub mod system_wallpapers {
         Some(NAME.get_or_init(|| distro_name(&std::fs::read_to_string("/etc/os-release").unwrap_or_default())).clone())
     }
 
-    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    #[cfg(target_os = "windows")]
+    pub fn category() -> Option<String> {
+        Some("Windows".into())
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
     pub fn category() -> Option<String> {
         None
     }
@@ -369,6 +376,8 @@ pub mod system_wallpapers {
         let category = category()?;
         let root = if cfg!(target_os = "macos") {
             PathBuf::from(std::env::var_os("HOME")?).join("Library/Caches/dev.screenforge.ScreenForge/system-wallpapers")
+        } else if cfg!(target_os = "windows") {
+            PathBuf::from(std::env::var_os("LOCALAPPDATA")?).join("screenforge/system-wallpapers")
         } else {
             let cache = std::env::var_os("XDG_CACHE_HOME")
                 .map(PathBuf::from)
@@ -384,6 +393,15 @@ pub mod system_wallpapers {
         if cfg!(target_os = "macos") {
             let mut dirs = vec![PathBuf::from("/System/Library/Desktop Pictures")];
             dirs.extend(home.map(|h| h.join("Library/Application Support/com.apple.mobileAssetDesktop")));
+            dirs
+        } else if cfg!(target_os = "windows") {
+            let windir = std::env::var_os("SystemRoot").map(PathBuf::from).unwrap_or_else(|| PathBuf::from("C:\\Windows"));
+            let wallpaper = windir.join("Web").join("Wallpaper");
+            // one folder per theme (Windows, Spotlight, ThemeA…)
+            let mut dirs: Vec<PathBuf> = std::fs::read_dir(&wallpaper).map(|rd| rd.flatten().map(|e| e.path()).filter(|p| p.is_dir()).collect()).unwrap_or_default();
+            dirs.sort();
+            dirs.insert(0, wallpaper);
+            dirs.push(windir.join("Web").join("Screen"));
             dirs
         } else {
             let mut dirs = vec![PathBuf::from("/usr/share/backgrounds")];
@@ -424,7 +442,7 @@ pub mod system_wallpapers {
     fn cached_name(src: &Path) -> Option<String> {
         let name = src.file_name()?.to_str()?;
         let ext = src.extension().and_then(|e| e.to_str()).map(|e| e.to_ascii_lowercase());
-        if !cfg!(target_os = "macos") && matches!(ext.as_deref(), Some("jpg" | "jpeg" | "png")) {
+        if cfg!(target_os = "linux") && matches!(ext.as_deref(), Some("jpg" | "jpeg" | "png")) {
             return Some(name.to_string());
         }
         Some(format!("{}.jpg", src.file_stem()?.to_str()?))
@@ -445,6 +463,11 @@ pub mod system_wallpapers {
             names.retain(|n| n.ends_with(".jpg"));
             const PREFERRED: [&str; 7] = ["Tahoe", "Sequoia", "Sonoma", "Ventura", "Monterey", "Big Sur", "Catalina"];
             let pick = PREFERRED.iter().find_map(|p| names.iter().find(|n| n.starts_with(p))).or(names.first())?;
+            return Some(format!("{category}/{pick}"));
+        }
+        if cfg!(target_os = "windows") {
+            // img0 is the default wallpaper of every Windows release
+            let pick = names.iter().find(|n| n.starts_with("img0")).or(names.first())?;
             return Some(format!("{category}/{pick}"));
         }
         let current = current_desktop_wallpaper().and_then(|p| std::fs::canonicalize(&p).ok().or(Some(p)))?;
@@ -541,8 +564,20 @@ pub mod system_wallpapers {
             .unwrap_or(false)
     }
 
+    /// Longest side kept in the cache (macOS resizes with `sips -Z 2880`; Windows wallpapers
+    /// are 4K and would otherwise cost ~35 MB of texture memory each in the picker).
+    #[cfg(not(target_os = "macos"))]
+    const MAX_SIDE: u32 = 2880;
+
     #[cfg(not(target_os = "macos"))]
     fn convert(src: &Path, dest: &Path, tmp: &Path) -> bool {
+        if cfg!(target_os = "windows") {
+            let Ok(img) = image::open(src) else { return false };
+            let img = if img.width().max(img.height()) > MAX_SIDE { img.resize(MAX_SIDE, MAX_SIDE, image::imageops::FilterType::Triangle) } else { img };
+            let Ok(file) = std::fs::File::create(tmp) else { return false };
+            let mut enc = image::codecs::jpeg::JpegEncoder::new_with_quality(std::io::BufWriter::new(file), 88);
+            return enc.encode_image(&img.to_rgb8()).is_ok();
+        }
         if dest.extension() == src.extension() {
             #[cfg(unix)]
             return std::os::unix::fs::symlink(src, tmp).is_ok();
@@ -558,6 +593,15 @@ pub mod system_wallpapers {
     #[cfg(test)]
     mod tests {
         use super::*;
+
+        /// Fills the real cache on this machine (`cargo test -p sf-session sync_system -- --ignored`).
+        #[test]
+        #[ignore = "writes the wallpaper cache of this machine"]
+        fn sync_system_wallpapers_here() {
+            let root = cache_root().expect("a cache root");
+            sync(&root);
+            assert!(default_name().is_some(), "no wallpaper found in {}", root.display());
+        }
 
         #[test]
         fn distro_name_from_os_release() {

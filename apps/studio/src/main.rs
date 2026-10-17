@@ -24,6 +24,15 @@ mod update;
 mod vibrancy;
 mod widgets;
 
+/// eframe's defaults, except that the backends follow `sf_render::Gpu::default_backends`
+/// (Direct3D 12 on Windows: the Vulkan path crashes inside some drivers before an adapter is
+/// listed). `WGPU_BACKEND` still overrides.
+fn wgpu_options() -> eframe::egui_wgpu::WgpuConfiguration {
+    let mut setup = eframe::egui_wgpu::WgpuSetupCreateNew::without_display_handle();
+    setup.instance_descriptor.backends = eframe::wgpu::Backends::from_env().unwrap_or(sf_render::Gpu::default_backends());
+    eframe::egui_wgpu::WgpuConfiguration { wgpu_setup: setup.into(), ..Default::default() }
+}
+
 fn main() -> eframe::Result {
     // The toolbar and HUD place themselves at absolute screen positions, which Wayland does not
     // allow; run the windows on XWayland. Recording still goes through the screen-cast portal.
@@ -47,6 +56,7 @@ fn main() -> eframe::Result {
             .with_resizable(false)
             .with_title("ScreenForge"),
         renderer: eframe::Renderer::Wgpu,
+        wgpu_options: wgpu_options(),
         persist_window: false,
         ..Default::default()
     };

@@ -228,7 +228,7 @@ pub struct Picker {
     /// Page dot clicked in the recent panel: the card to scroll to on the next frame.
     recent_scroll_to: Option<usize>,
     /// Screen rect of the recent panel (last frame), for click-outside detection.
-    recent_rect: egui::Rect,
+    pub recent_rect: egui::Rect,
     /// The bar, in window points (last frame).
     pub bar_rect: egui::Rect,
     /// Height the window should have this frame (bar only, or bar + open panel/menu).
