@@ -48,6 +48,7 @@ pub mod input;
 pub mod log;
 pub mod metadata;
 pub mod permissions;
+pub mod window_frame;
 #[cfg(target_os = "linux")]
 pub mod portal;
 #[cfg(any(target_os = "macos", target_os = "linux"))]
