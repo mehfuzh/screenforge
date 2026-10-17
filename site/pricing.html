@@ -374,7 +374,9 @@
   .err { display: none; font-family: var(--mono); font-size: 12.5px; color: var(--coral); margin-top: 10px; line-height: 1.5; }
   .err.on { display: block; }
   /* pricing: the studios & teams band under the plans */
-  .studio { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr); gap: 40px; margin-top: 56px; padding: 28px 28px 30px; border: 1px solid var(--line-2); background: var(--panel); }
+  .studio { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr); margin-top: 56px; padding: 0; border: 1px solid var(--line-2); background: var(--panel); }
+  .studio > div { padding: 28px 28px 30px; }
+  .studio > .perks { display: flex; align-items: center; border-left: 1px solid var(--line-2); background: var(--ink); background: color-mix(in srgb, var(--jade) 7%, var(--panel)); }
   .studio .name { font-family: var(--mono); font-size: 12.5px; letter-spacing: .08em; text-transform: uppercase; color: var(--jade); margin-bottom: 10px; }
   .studio h2 { margin: 0 0 12px; }
   .studio p { margin: 0 0 22px; font-size: 14.5px; color: var(--dim); }
@@ -382,7 +384,11 @@
   .studio li { font-size: 14.5px; margin-bottom: 9px; padding-left: 20px; position: relative; }
   .studio li::before { content: "▪"; position: absolute; left: 0; color: var(--jade); }
   .studio .go { justify-content: center; }
-  @media (max-width: 860px) { .studio { grid-template-columns: minmax(0, 1fr); gap: 22px; padding: 22px 18px 24px; } }
+  @media (max-width: 860px) {
+    .studio { grid-template-columns: minmax(0, 1fr); }
+    .studio > div { padding: 22px 18px 24px; }
+    .studio > .perks { border-left: 0; border-top: 1px solid var(--line-2); }
+  }
   .faq { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1px; margin-top: 24px; background: var(--line); border: 1px solid var(--line); }
   .faq div { background: var(--ground); padding: 22px 22px 24px; }
   .faq h3 { margin: 0 0 8px; }
@@ -471,7 +477,7 @@ gtag('config', 'G-ZYRJDJ736V');
       <p>Design studios, agencies and product teams that record a lot get one invoice for every seat and keys issued in bulk to each person's email. Existing screen recording projects open as they are, so nobody has to redo their work. Tell us how many people record and what you use today; a person replies, usually the same day.</p>
       <a class="go" href="mailto:license@screenforge.studio?subject=ScreenForge%20for%20our%20studio&amp;body=Team%20or%20studio%20name%3A%0AHow%20many%20people%20record%3A%0AWhat%20you%20use%20today%3A%0A">Contact us about a team license</a>
     </div>
-    <div>
+    <div class="perks">
       <ul>
         <li>Volume pricing for 5 seats and up</li>
         <li>One invoice, card or bank transfer</li>
