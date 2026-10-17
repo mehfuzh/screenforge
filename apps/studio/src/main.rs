@@ -9,6 +9,7 @@ mod captions;
 mod crop;
 mod editor;
 mod export;
+mod masks;
 mod mic_meter;
 mod open_docs;
 mod os;
@@ -19,6 +20,7 @@ mod sidebar;
 mod theme;
 mod timeline;
 mod tray;
+mod update;
 mod vibrancy;
 mod widgets;
 

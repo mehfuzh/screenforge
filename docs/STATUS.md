@@ -19,6 +19,8 @@
   (`sf transcribe`, `sf srt`, or the Captions panel).
 - Keyboard shortcut overlay: key caps (`⇧ ⌘ S`) for shortcuts pressed while recording, near the bottom of the video in preview and export (`captions.enableShortcuts`, size, single keys); key symbols come from an Inter subset (`Inter-SemiBold-symbols.ttf`). New recordings also store the macOS `keyCode` of each key event.
 - Crop: the Crop tool in the preview toolbar shows the whole recording with a draggable frame (move, eight resize handles, ⏎ apply, ⎋ cancel) and writes `config.crop.rect01`.
+- Masks: the Mask button on the tool rail adds a blur mask at the playhead. Masks get their own timeline lane (move, resize, Blur / Highlight, disable, remove), an inspector (blur amount or dimming, several areas per mask), and their areas are moved and resized on the preview while the playhead is inside the mask.
+- Update available: on launch (at most daily, `prefs.check_updates`) or on request the app asks GitHub's releases API for the newest version; a dot on the toolbar's gear, an "Update to vX…" menu item and an editor title-bar button open the release page.
 - Export: MP4 (H.264/HEVC), ProRes, GIF, WebM with mixed audio and quality presets.
 - Recording: picker toolbar (Display/Window/Area/Device, camera/mic/system audio pickers,
   countdown), ScreenCaptureKit recorder writing the package's `recording/` layout
@@ -46,7 +48,6 @@
 
 ## Roadmap items (disabled in the UI)
 
-- Masks and highlights: blur or hide regions, spotlight areas
 - Device frames: iPhone/iPad recording and mockup frames
 - Unsplash backgrounds: online wallpaper search
 - Face tracking and color grading: camera centring, looks and LUTs

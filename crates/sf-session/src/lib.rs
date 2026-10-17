@@ -79,6 +79,8 @@ pub struct Session {
     pub decode_speed: f64,
     pub captions: captions::Captions,
     pub shortcuts: shortcuts::Shortcuts,
+    /// Where the screen was drawn in the last frame (output px), for editing masks on the preview.
+    pub last_screen_px: Option<Rect>,
 }
 
 impl Session {
@@ -116,6 +118,7 @@ impl Session {
             decode_speed: 1.0,
             captions,
             shortcuts,
+            last_screen_px: None,
         };
         s.load_cursor_sprites();
         Ok(s)
@@ -356,6 +359,7 @@ impl Session {
             ((i.size * s) as f32, Color::from_hex(&i.color).unwrap_or(Color::BLACK).with_alpha(i.alpha as f32))
         });
         let corner_radius = (cfg.styles.screen_border_radius * zoom_factor * s) as f32;
+        self.last_screen_px = screen_visible.then_some(screen_px);
         if screen_visible {
             layers.push(Layer::Screen(ScreenLayer { texture: self.screen.texture.clone(), src01: crop, dst: screen_px, corner_radius, shadow, inset }));
             self.push_masks(&mut layers, source_ms, screen_px, corner_radius);

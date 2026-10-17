@@ -66,6 +66,16 @@ pub struct Prefs {
     pub recent: Vec<PathBuf>,
     #[serde(default)]
     pub appearance: crate::picker::Appearance,
+    /// Look for a newer GitHub release on launch (at most daily).
+    #[serde(default = "yes")]
+    pub check_updates: bool,
+    /// Unix seconds of the last automatic update check.
+    #[serde(default)]
+    pub last_update_check: Option<u64>,
+}
+
+fn yes() -> bool {
+    true
 }
 
 impl Prefs {
@@ -103,8 +113,14 @@ impl App {
         egui_extras::install_image_loaders(&cc.egui_ctx);
         let rs = cc.wgpu_render_state.as_ref().expect("wgpu renderer required");
         let gpu = Gpu::from_parts(Arc::new(rs.device.clone()), Arc::new(rs.queue.clone()));
-        let prefs = Prefs::load();
+        let mut prefs = Prefs::load();
         prefs.appearance.apply(&cc.egui_ctx);
+        let now = crate::update::now_secs();
+        if prefs.check_updates && crate::update::due(prefs.last_update_check, now) {
+            crate::update::check(&cc.egui_ctx);
+            prefs.last_update_check = Some(now);
+            prefs.save();
+        }
         crate::theme::apply(&cc.egui_ctx);
         let mut picker = Picker::default();
         picker.load_inputs();
@@ -722,6 +738,11 @@ impl eframe::App for App {
                 self.prefs.save();
                 a.apply(ctx);
             }
+            Some(PickerAction::SetCheckUpdates(on)) => {
+                self.prefs.check_updates = on;
+                self.prefs.save();
+            }
+            Some(PickerAction::CheckUpdates) => crate::update::check(ctx),
             Some(PickerAction::RemoveProject(p)) => {
                 let name = p.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
                 match crate::os::move_to_trash(&p) {

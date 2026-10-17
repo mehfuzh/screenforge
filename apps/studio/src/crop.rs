@@ -1,6 +1,8 @@
 //! Crop editor: while it is open the preview shows the whole recording and a crop frame with
 //! eight handles over it. Drag inside the frame to move it, drag a handle to resize; ⏎ applies,
 //! ⎋ cancels. The result is `config.crop.rect01`, which the renderer already honours.
+//!
+//! The frame helpers (`hit`, `drag`, `paint_frame`) also edit mask regions (`masks.rs`).
 
 use egui::{pos2, vec2, CornerRadius, Pos2, Rect, Sense, Stroke};
 use sf_project::schema::common::Rect as Rect01;
@@ -68,22 +70,8 @@ impl CropEditor {
         ] {
             p.rect_filled(r, CornerRadius::ZERO, shade);
         }
-        // rule-of-thirds guides while dragging
-        if self.grab.is_some() {
-            let guide = Stroke::new(1.0, pal.text.gamma_multiply(0.35));
-            for k in [1.0 / 3.0, 2.0 / 3.0] {
-                let x = frame.left() + frame.width() * k;
-                let y = frame.top() + frame.height() * k;
-                p.line_segment([pos2(x, frame.top()), pos2(x, frame.bottom())], guide);
-                p.line_segment([pos2(frame.left(), y), pos2(frame.right(), y)], guide);
-            }
-        }
-        p.rect_stroke(frame, CornerRadius::ZERO, Stroke::new(1.5, pal.accent), egui::StrokeKind::Middle);
+        paint_frame(&p, frame, pal.accent, self.grab.is_some());
         let p = ui.painter();
-        for (hx, hy) in HANDLES {
-            let c = pos2(lerp(frame.left(), frame.right(), hx), lerp(frame.top(), frame.bottom(), hy));
-            p.rect(Rect::from_center_size(c, vec2(HANDLE, HANDLE)), CornerRadius::same(2), pal.text, Stroke::new(1.0, pal.accent), egui::StrokeKind::Middle);
-        }
         // size readout under the frame
         let label = format!("{:.0} % × {:.0} %", self.draft.width * 100.0, self.draft.height * 100.0);
         p.text(pos2(frame.center().x, (frame.bottom() + 8.0).min(img.bottom() - 18.0)), egui::Align2::CENTER_TOP, label, egui::FontId::proportional(12.0), pal.text);
@@ -107,14 +95,34 @@ fn lerp(a: f32, b: f32, t: f32) -> f32 {
     a + (b - a) * t
 }
 
-fn to_screen(r: Rect01, img: Rect) -> Rect {
+/// Outline, eight handles and (while dragging) rule-of-thirds guides of an editable frame.
+pub fn paint_frame(p: &egui::Painter, frame: Rect, color: egui::Color32, guides: bool) {
+    let pal = theme::p();
+    if guides {
+        let guide = Stroke::new(1.0, pal.text.gamma_multiply(0.35));
+        for k in [1.0 / 3.0, 2.0 / 3.0] {
+            let x = frame.left() + frame.width() * k;
+            let y = frame.top() + frame.height() * k;
+            p.line_segment([pos2(x, frame.top()), pos2(x, frame.bottom())], guide);
+            p.line_segment([pos2(frame.left(), y), pos2(frame.right(), y)], guide);
+        }
+    }
+    p.rect_stroke(frame, CornerRadius::ZERO, Stroke::new(1.5, color), egui::StrokeKind::Middle);
+    for (hx, hy) in HANDLES {
+        let c = pos2(lerp(frame.left(), frame.right(), hx), lerp(frame.top(), frame.bottom(), hy));
+        p.rect(Rect::from_center_size(c, vec2(HANDLE, HANDLE)), CornerRadius::same(2), pal.text, Stroke::new(1.0, color), egui::StrokeKind::Middle);
+    }
+}
+
+/// `r` (fractions of `area`) in screen points.
+pub fn to_screen(r: Rect01, img: Rect) -> Rect {
     let x = |v: f64| img.left() + v as f32 * img.width();
     let y = |v: f64| img.top() + v as f32 * img.height();
     Rect::from_min_max(pos2(x(r.x), y(r.y)), pos2(x(r.x + r.width), y(r.y + r.height)))
 }
 
 /// What a press at `p` grabs: a handle or edge first, else the inside of the frame.
-fn hit(frame: Rect, p: Pos2) -> Option<Handle> {
+pub fn hit(frame: Rect, p: Pos2) -> Option<Handle> {
     let axis = |v: f32, lo: f32, hi: f32| -> Option<i8> {
         if (v - lo).abs() <= GRAB {
             Some(-1)
@@ -130,7 +138,7 @@ fn hit(frame: Rect, p: Pos2) -> Option<Handle> {
     Some(Handle(hx, hy))
 }
 
-fn cursor_for(h: Handle) -> egui::CursorIcon {
+pub fn cursor_for(h: Handle) -> egui::CursorIcon {
     use egui::CursorIcon::*;
     match (h.0, h.1) {
         (0, 0) => Grab,

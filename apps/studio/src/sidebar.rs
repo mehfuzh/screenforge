@@ -46,6 +46,57 @@ fn color_edit(ui: &mut egui::Ui, label: &str, hex: &mut String) -> bool {
     }
 }
 
+/// Inspector for the selected mask (`Editor::selected_mask`).
+pub fn mask_item_ui(ed: &mut Editor, ui: &mut egui::Ui) {
+    use sf_project::v4::Mask;
+    let Some(id) = ed.selected_mask.clone() else { return };
+    let Some(m) = ed.session.pkg.project.scenes[0].masks.iter().find(|m| m.id == id).cloned() else {
+        ed.selected_mask = None;
+        return;
+    };
+    let with = |id: &str, p: &mut sf_project::Project, f: &dyn Fn(&mut Mask)| {
+        if let Some(m) = p.scenes[0].masks.iter_mut().find(|m| m.id == id) {
+            f(m)
+        }
+    };
+    widgets::title(ui, "Mask");
+    widgets::hint(ui, "Drag the frame on the preview to move or resize it.");
+    let highlight = m.kind == Mask::HIGHLIGHT;
+    if let Some(i) = widgets::segmented(ui, highlight as usize, &["Blur", "Highlight"]) {
+        let kind = if i == 1 { Mask::HIGHLIGHT } else { Mask::SENSITIVE_DATA };
+        let mid = id.clone();
+        ed.edit(move |p| with(&mid, p, &|m| m.kind = kind.into()));
+    }
+    let (gid, sid) = (id.clone(), id.clone());
+    if highlight {
+        widgets::hint(ui, "Everything outside the areas is dimmed.");
+        cfg_slider(ed, ui, "Dim surroundings", move |p| p.scenes[0].masks.iter().find(|m| m.id == gid).map(|m| m.highlight_mask_opacity).unwrap_or(0.5), move |p, v| with(&sid, p, &|m| m.highlight_mask_opacity = v), 0.0..=1.0, Some(0.5), "");
+    } else {
+        widgets::hint(ui, "The areas are blurred, for passwords, emails and other private details.");
+        cfg_slider(ed, ui, "Blur amount", move |p| p.scenes[0].masks.iter().find(|m| m.id == gid).map(|m| m.blur).unwrap_or(32.0), move |p, v| with(&sid, p, &|m| m.blur = v), 4.0..=100.0, Some(32.0), "");
+    }
+    ui.horizontal(|ui| {
+        ui.label(RichText::new(match m.bounds.len() { 1 => "1 area".to_string(), n => format!("{n} areas") }).color(theme::p().text_dim));
+        if ui.button("Add area").clicked() {
+            let r = crate::masks::new_region(ed);
+            let mid = id.clone();
+            ed.edit(move |p| with(&mid, p, &|m| m.bounds.push(r)));
+        }
+        if m.bounds.len() > 1 && ui.button("Remove last").clicked() {
+            let mid = id.clone();
+            ed.edit(move |p| with(&mid, p, &|m| { m.bounds.pop(); }));
+        }
+    });
+    let mut disabled = m.is_disabled;
+    if ui.checkbox(&mut disabled, "Disabled").changed() {
+        let mid = id.clone();
+        ed.edit(move |p| with(&mid, p, &|m| m.is_disabled = disabled));
+    }
+    if ui.button("Remove mask").clicked() {
+        ed.delete_selected();
+    }
+}
+
 /// Inspector for the selected zoom item (`Editor::selected_zoom`).
 pub fn zoom_item_ui(ed: &mut Editor, ui: &mut egui::Ui) {
     let Some(id) = ed.selected_zoom.clone() else { return };
@@ -190,6 +241,11 @@ pub fn ui(ed: &mut Editor, ui: &mut egui::Ui, section: Section) {
         ui.add_space(8.0);
         if ed.selected_zoom.is_some() {
             zoom_item_ui(ed, ui);
+            ui.add_space(12.0);
+            ui.separator();
+        }
+        if ed.selected_mask.is_some() {
+            mask_item_ui(ed, ui);
             ui.add_space(12.0);
             ui.separator();
         }

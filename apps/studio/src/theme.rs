@@ -25,6 +25,8 @@ pub struct Palette {
     pub marker: Color32,
     pub zoom: Color32,
     pub zoom_selected: Color32,
+    pub mask: Color32,
+    pub mask_selected: Color32,
     pub track_empty: Color32,
     pub playhead: Color32,
     pub ruler_text: Color32,
@@ -64,6 +66,8 @@ pub const DARK: Palette = Palette {
     marker: Color32::from_rgb(0xf9, 0xe2, 0xaf),      // yellow
     zoom: Color32::from_rgb(0xf5, 0xc2, 0xe7),        // pink
     zoom_selected: Color32::from_rgb(0xf8, 0xd4, 0xee),
+    mask: Color32::from_rgb(0x89, 0xdc, 0xeb),        // sky
+    mask_selected: Color32::from_rgb(0xa6, 0xe5, 0xf0),
     track_empty: Color32::from_rgb(0x1b, 0x1b, 0x29),
     playhead: Color32::from_rgb(0xcd, 0xd6, 0xf4),
     ruler_text: Color32::from_rgb(0x7f, 0x84, 0x9c),  // overlay1
@@ -98,6 +102,8 @@ pub const LIGHT: Palette = Palette {
     marker: Color32::from_rgb(0xcb, 0x4b, 0x16),
     zoom: Color32::from_rgb(0xd3, 0x36, 0x82),
     zoom_selected: Color32::from_rgb(0xe0, 0x4a, 0x95),
+    mask: Color32::from_rgb(0x2a, 0xa1, 0x98),
+    mask_selected: Color32::from_rgb(0x35, 0xb5, 0xab),
     track_empty: Color32::from_rgb(0xe4, 0xdd, 0xc8),
     playhead: Color32::from_rgb(0x07, 0x36, 0x42),
     ruler_text: Color32::from_rgb(0x83, 0x94, 0x96),
@@ -133,6 +139,8 @@ pub const OSAKA_JADE: Palette = Palette {
     marker: Color32::from_rgb(0xe5, 0xc7, 0x36),
     zoom: Color32::from_rgb(0xd2, 0x68, 0x9c),
     zoom_selected: Color32::from_rgb(0xdb, 0x7f, 0xae),
+    mask: Color32::from_rgb(0x5f, 0x9e, 0xc9),
+    mask_selected: Color32::from_rgb(0x76, 0xae, 0xd4),
     track_empty: Color32::from_rgb(0x14, 0x21, 0x1b),
     playhead: Color32::from_rgb(0xf6, 0xf5, 0xdd),
     ruler_text: Color32::from_rgb(0x6b, 0x83, 0x72),
