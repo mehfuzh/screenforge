@@ -15,11 +15,11 @@
 <meta property="og:image:height" content="630">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:image" content="https://screenforge.studio/og.png?v=3">
-<link rel="icon" href="favicon.ico?v=4" sizes="any">
-<link rel="icon" type="image/svg+xml" href="favicon.svg?v=4">
-<link rel="icon" type="image/png" sizes="512x512" href="icon.png?v=4">
-<link rel="shortcut icon" href="icon.png?v=4">
-<link rel="apple-touch-icon" href="apple-touch-icon.png?v=4">
+<link rel="icon" href="favicon.ico?v=5" sizes="any">
+<link rel="icon" type="image/svg+xml" href="favicon.svg?v=5">
+<link rel="icon" type="image/png" sizes="512x512" href="icon.png?v=5">
+<link rel="shortcut icon" href="icon.png?v=5">
+<link rel="apple-touch-icon" href="apple-touch-icon.png?v=5">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;700;900&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
@@ -378,15 +378,21 @@
   .err { display: none; font-family: var(--mono); font-size: 12.5px; color: var(--coral); margin-top: 10px; line-height: 1.5; }
   .err.on { display: block; }
   /* pricing: the studios & teams band under the plans */
-  .studio { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr); gap: 40px; margin-top: 56px; padding: 28px 28px 30px; border: 1px solid var(--line-2); background: var(--panel); }
+  .studio { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr); margin-top: 56px; padding: 0; border: 1px solid var(--line-2); background: var(--panel); }
+  .studio > div { padding: 28px 28px 30px; }
+  .studio > .perks { display: flex; align-items: center; border-left: 1px solid var(--line-2); background: var(--ink); background: color-mix(in srgb, var(--jade) 7%, var(--panel)); }
   .studio .name { font-family: var(--mono); font-size: 12.5px; letter-spacing: .08em; text-transform: uppercase; color: var(--jade); margin-bottom: 10px; }
   .studio h2 { margin: 0 0 12px; }
-  .studio p { margin: 0; font-size: 14.5px; color: var(--dim); }
-  .studio ul { list-style: none; margin: 0 0 22px; }
+  .studio p { margin: 0 0 22px; font-size: 14.5px; color: var(--dim); }
+  .studio ul { list-style: none; margin: 0; }
   .studio li { font-size: 14.5px; margin-bottom: 9px; padding-left: 20px; position: relative; }
   .studio li::before { content: "▪"; position: absolute; left: 0; color: var(--jade); }
-  .studio .alt { width: 100%; justify-content: center; }
-  @media (max-width: 860px) { .studio { grid-template-columns: minmax(0, 1fr); gap: 22px; padding: 22px 18px 24px; } }
+  .studio .go { justify-content: center; }
+  @media (max-width: 860px) {
+    .studio { grid-template-columns: minmax(0, 1fr); }
+    .studio > div { padding: 22px 18px 24px; }
+    .studio > .perks { border-left: 0; border-top: 1px solid var(--line-2); }
+  }
   .faq { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1px; margin-top: 24px; background: var(--line); border: 1px solid var(--line); }
   .faq div { background: var(--ground); padding: 22px 22px 24px; }
   .faq h3 { margin: 0 0 8px; }
@@ -415,7 +421,7 @@ gtag('config', 'G-ZYRJDJ736V');
 
 <nav>
   <div class="wrap nav-in">
-    <a class="brand" href="index.html"><img class="on-light" src="icon.png?v=4" alt="" width="24" height="24"><img class="on-dark" src="icon-dark.png?v=4" alt="" width="24" height="24">ScreenForge</a>
+    <a class="brand" href="index.html"><img class="on-light" src="icon.png?v=5" alt="" width="24" height="24"><img class="on-dark" src="icon-dark.png?v=5" alt="" width="24" height="24">ScreenForge</a>
     <div class="nav-links">
       <a href="index.html#features">Features</a>
       <a href="index.html#roadmap">Roadmap</a>
@@ -441,7 +447,6 @@ gtag('config', 'G-ZYRJDJ736V');
       <div class="per">no account · no key · no card</div>
       <ul>
         <li>Record a display, a window or an area</li>
-        <li>Import your existing projects (<code>.screenstudio</code>)</li>
         <li>Automatic zooms, captions and the independent audio track</li>
         <li>Your first three exports, in every format</li>
         <li>Apache-2.0 source on <a href="https://github.com/mehfuzh/screenforge">GitHub</a>: build it yourself and remove the gate if you want</li>
@@ -473,19 +478,17 @@ gtag('config', 'G-ZYRJDJ736V');
   <section class="studio" id="studios">
     <div>
       <div class="name">Studios &amp; teams</div>
-      <h2>Moving a whole team over?</h2>
-      <p>Design studios, agencies and product teams that record a lot get one invoice for every seat, keys issued in bulk to each person's email, and help bringing existing Screen Studio projects and presets across. Tell us how many people record and what you use today; a person replies, usually the same day.</p>
+      <p>Design studios, agencies and product teams that record a lot get one invoice for every seat and keys issued in bulk to each person's email. Existing screen recording projects open as they are, so nobody has to redo their work. Tell us how many people record and what you use today; a person replies, usually the same day.</p>
+      <a class="go" href="mailto:license@screenforge.studio?subject=ScreenForge%20for%20our%20studio&amp;body=Team%20or%20studio%20name%3A%0AHow%20many%20people%20record%3A%0AWhat%20you%20use%20today%3A%0A">Contact us about a team license</a>
     </div>
-    <div>
+    <div class="perks">
       <ul>
         <li>Volume pricing for 5 seats and up</li>
         <li>One invoice, card or bank transfer</li>
         <li>Keys for every teammate, re-issued when people change</li>
         <li>Shared presets so every video matches the brand</li>
-        <li>Help importing <code>.screenstudio</code> projects</li>
         <li>Priority email support and a say in the roadmap</li>
       </ul>
-      <a class="alt" href="mailto:license@screenforge.studio?subject=ScreenForge%20for%20our%20studio&amp;body=Team%20or%20studio%20name%3A%0AHow%20many%20people%20record%3A%0AWhat%20you%20use%20today%3A%0A">Contact us about a team license</a>
     </div>
   </section>
 
