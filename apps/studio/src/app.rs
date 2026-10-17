@@ -61,7 +61,7 @@ enum WindowMode {
     Editor,
 }
 
-#[derive(Default, serde::Serialize, serde::Deserialize)]
+#[derive(serde::Serialize, serde::Deserialize)]
 pub struct Prefs {
     pub recent: Vec<PathBuf>,
     #[serde(default)]
@@ -76,6 +76,13 @@ pub struct Prefs {
 
 fn yes() -> bool {
     true
+}
+
+impl Default for Prefs {
+    /// Same as an empty prefs file, so the serde defaults (update check on) apply to new installs.
+    fn default() -> Self {
+        serde_json::from_str("{\"recent\": []}").expect("prefs defaults")
+    }
 }
 
 impl Prefs {
@@ -834,5 +841,17 @@ impl eframe::App for App {
         }
         #[cfg(target_os = "linux")]
         self.update_input_region(ctx);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn new_installs_check_for_updates_in_screenforge_dark() {
+        let p = Prefs::default();
+        assert!(p.check_updates && p.last_update_check.is_none() && p.recent.is_empty());
+        assert_eq!(p.appearance, crate::picker::Appearance::ScreenForge);
     }
 }

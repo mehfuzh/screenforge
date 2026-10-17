@@ -1,6 +1,7 @@
-//! Visual theme matching Screen Studio's editor (rounded cards, purple accent, amber clips), in a
-//! Dark (Catppuccin Mocha, the default), Osaka Jade and Light (Solarized Light); the user can
-//! also follow the system appearance.
+//! Visual theme matching Screen Studio's editor (rounded cards, accent colour, amber clips). The
+//! default is ScreenForge Dark, the website's dark colours (`site/*.html` tokens); ScreenForge
+//! Light, Match system (ScreenForge light/dark), Catppuccin Mocha, Solarized Light and Osaka Jade
+//! can be picked instead.
 
 use egui::{Color32, CornerRadius, FontFamily, FontId, Stroke, TextStyle, Visuals};
 
@@ -155,17 +156,92 @@ pub const OSAKA_JADE: Palette = Palette {
     thumb_empty: Color32::from_rgb(0x1f, 0x33, 0x2a),
 };
 
-static PALETTE: std::sync::RwLock<Palette> = std::sync::RwLock::new(DARK);
-/// Palette used when egui's theme is dark (Catppuccin Mocha or Osaka Jade).
-static DARK_PALETTE: std::sync::RwLock<Palette> = std::sync::RwLock::new(DARK);
+/// ScreenForge dark: the website's dark tokens (ground #15161e, ink, panel, orange accent).
+pub const FORGE_DARK: Palette = Palette {
+    dark: true,
+    bg: Color32::from_rgb(0x15, 0x16, 0x1e),          // --ground
+    card: Color32::from_rgb(0x1e, 0x1f, 0x29),        // --ink
+    card_2: Color32::from_rgb(0x28, 0x2a, 0x36),      // --panel
+    card_3: Color32::from_rgb(0x36, 0x38, 0x47),
+    border: Color32::from_rgb(0x2b, 0x2d, 0x3a),
+    text: Color32::from_rgb(0xe6, 0xe7, 0xf0),
+    text_dim: Color32::from_rgb(0x8e, 0x90, 0xa6),    // --dim
+    text_faint: Color32::from_rgb(0x5f, 0x61, 0x75),
+    accent: Color32::from_rgb(0xff, 0x8a, 0x5c),      // --jade (orange)
+    accent_hover: Color32::from_rgb(0xff, 0xa2, 0x7d),
+    clip: Color32::from_rgb(0xff, 0xb8, 0x6c),        // --gold
+    clip_selected: Color32::from_rgb(0xff, 0xc9, 0x8d),
+    clip_text: Color32::from_rgb(0x1e, 0x1f, 0x29),
+    clip_line: Color32::from_rgba_premultiplied(0, 0, 0, 40),
+    marker: Color32::from_rgb(0xf1, 0xfa, 0x8c),
+    zoom: Color32::from_rgb(0xe0, 0x50, 0x7a),        // --jade-deep
+    zoom_selected: Color32::from_rgb(0xe8, 0x6c, 0x91),
+    mask: Color32::from_rgb(0x8b, 0xe9, 0xfd),
+    mask_selected: Color32::from_rgb(0xa8, 0xef, 0xfd),
+    track_empty: Color32::from_rgb(0x1a, 0x1b, 0x24),
+    playhead: Color32::from_rgb(0xf8, 0xf8, 0xf2),    // --white
+    ruler_text: Color32::from_rgb(0x8e, 0x90, 0xa6),
+    danger: Color32::from_rgb(0xff, 0x55, 0x55),      // --coral
+    meter: Color32::from_rgb(0x50, 0xfa, 0x7b),
+    glass: Color32::from_rgba_premultiplied(16, 17, 23, 190),
+    glass_solid: Color32::from_rgba_premultiplied(18, 19, 25, 216),
+    glass_border: Color32::from_rgba_premultiplied(34, 34, 34, 34),
+    on_glass: Color32::from_rgb(0xf8, 0xf8, 0xf2),
+    glass_button: Color32::from_rgb(0xf8, 0xf8, 0xf2),
+    glass_button_fg: Color32::from_rgb(0x1e, 0x1f, 0x29),
+    thumb_empty: Color32::from_rgb(0x28, 0x2a, 0x36),
+};
 
-/// Choose which dark palette the dark appearance uses; call `sync` afterwards.
-pub fn set_dark_palette(pal: Palette) {
-    *DARK_PALETTE.write().unwrap_or_else(|e| e.into_inner()) = pal;
+/// ScreenForge light: the website's light tokens (ground #ececf1, white panels, red-orange accent).
+pub const FORGE_LIGHT: Palette = Palette {
+    dark: false,
+    bg: Color32::from_rgb(0xec, 0xec, 0xf1),          // --ground
+    card: Color32::from_rgb(0xff, 0xff, 0xff),        // --panel
+    card_2: Color32::from_rgb(0xec, 0xec, 0xf2),
+    card_3: Color32::from_rgb(0xdd, 0xdd, 0xe6),
+    border: Color32::from_rgb(0xd6, 0xd6, 0xdf),
+    text: Color32::from_rgb(0x1a, 0x1b, 0x24),        // --white (light)
+    text_dim: Color32::from_rgb(0x5f, 0x61, 0x75),    // --dim
+    text_faint: Color32::from_rgb(0x93, 0x95, 0xa7),
+    accent: Color32::from_rgb(0xd4, 0x44, 0x2a),      // --jade (red-orange)
+    accent_hover: Color32::from_rgb(0xe0, 0x5b, 0x40),
+    clip: Color32::from_rgb(0xb8, 0x63, 0x1a),        // --gold
+    clip_selected: Color32::from_rgb(0xc9, 0x75, 0x2a),
+    clip_text: Color32::from_rgb(0xff, 0xff, 0xff),
+    clip_line: Color32::from_rgba_premultiplied(0, 0, 0, 40),
+    marker: Color32::from_rgb(0xc4, 0x8a, 0x00),
+    zoom: Color32::from_rgb(0xb8, 0x32, 0x5f),        // --jade-deep
+    zoom_selected: Color32::from_rgb(0xc9, 0x48, 0x74),
+    mask: Color32::from_rgb(0x1f, 0x8a, 0xa3),
+    mask_selected: Color32::from_rgb(0x2b, 0x9e, 0xb8),
+    track_empty: Color32::from_rgb(0xe3, 0xe3, 0xea),
+    playhead: Color32::from_rgb(0x1a, 0x1b, 0x24),
+    ruler_text: Color32::from_rgb(0x5f, 0x61, 0x75),
+    danger: Color32::from_rgb(0xd2, 0x3b, 0x3b),      // --coral
+    meter: Color32::from_rgb(0x2e, 0x9e, 0x4f),
+    glass: Color32::from_rgba_premultiplied(175, 175, 179, 190),
+    glass_solid: Color32::from_rgba_premultiplied(212, 212, 217, 230),
+    glass_border: Color32::from_rgba_premultiplied(1, 2, 6, 30),
+    on_glass: Color32::from_rgb(0x1a, 0x1b, 0x24),
+    glass_button: Color32::from_rgb(0x1a, 0x1b, 0x24),
+    glass_button_fg: Color32::from_rgb(0xff, 0xff, 0xff),
+    thumb_empty: Color32::from_rgb(0xe3, 0xe3, 0xea),
+};
+
+static PALETTE: std::sync::RwLock<Palette> = std::sync::RwLock::new(FORGE_DARK);
+/// Palettes used when egui's theme is dark / light (ScreenForge by default).
+static DARK_PALETTE: std::sync::RwLock<Palette> = std::sync::RwLock::new(FORGE_DARK);
+static LIGHT_PALETTE: std::sync::RwLock<Palette> = std::sync::RwLock::new(FORGE_LIGHT);
+
+/// Choose the palettes the dark and light appearances use; call `sync` afterwards.
+pub fn set_palettes(dark: Palette, light: Palette) {
+    *DARK_PALETTE.write().unwrap_or_else(|e| e.into_inner()) = dark;
+    *LIGHT_PALETTE.write().unwrap_or_else(|e| e.into_inner()) = light;
 }
 
 fn wanted(ctx: &egui::Context) -> Palette {
-    if ctx.theme() == egui::Theme::Dark { *DARK_PALETTE.read().unwrap_or_else(|e| e.into_inner()) } else { LIGHT }
+    let slot = if ctx.theme() == egui::Theme::Dark { &DARK_PALETTE } else { &LIGHT_PALETTE };
+    *slot.read().unwrap_or_else(|e| e.into_inner())
 }
 
 /// The active palette.

@@ -644,7 +644,7 @@ impl Editor {
                         self.undo();
                     }
                     if let Some((version, url)) = crate::update::available() {
-                        if widgets::secondary_button(ui, "Update available").on_hover_text(format!("ScreenForge v{version} is out: open the release page")).clicked() {
+                        if widgets::accent_badge(ui, &format!("Update v{version}")).on_hover_text(format!("ScreenForge v{version} is out: open the release page to download it")).clicked() {
                             crate::os::open(url);
                         }
                     }
