@@ -11,6 +11,7 @@ name = "screenforge"
 path = "src/main.rs"
 
 [dependencies]
+ureq = "2"
 sf-project.workspace = true
 sf-engine.workspace = true
 sf-media.workspace = true

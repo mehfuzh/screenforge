@@ -109,6 +109,10 @@ pub enum PickerAction {
     /// Open the click-a-window overlay; the app starts the recording with the chosen window.
     SelectWindow(RecordRequest),
     SetAppearance(Appearance),
+    /// Turn the automatic update check on or off.
+    SetCheckUpdates(bool),
+    /// Check for a newer release now.
+    CheckUpdates,
     /// Move a recent project to the Trash and forget it.
     RemoveProject(PathBuf),
     Quit,
@@ -414,8 +418,12 @@ impl Picker {
         if self.show_recent {
             ui.painter().circle_filled(pos2(folder.rect.right() - 4.0, folder.rect.top() + 4.0), 3.0, theme::p().accent_hover);
         }
-        // settings
+        // settings (a dot when a newer release is out)
+        let update = crate::update::current();
         let gear = widgets::icon_text_button(ui, Some(widgets::Icon::Gear), "", true);
+        if matches!(update, crate::update::State::Available { .. }) {
+            ui.painter().circle_filled(pos2(gear.rect.left() + 20.0, gear.rect.top() + 7.0), 3.0, theme::p().accent_hover);
+        }
         // fit the bar to what it holds (14 px inner margin each side)
         let fit = (gear.rect.right() - pill.left() + 14.0).ceil();
         if (fit - self.bar_w).abs() > 0.5 {
@@ -444,6 +452,32 @@ impl Picker {
                 if sf_recording::permissions::request_accessibility() != sf_recording::PermissionStatus::Granted {
                     let _ = sf_recording::permissions::open_settings(sf_recording::Permission::Accessibility);
                 }
+            }
+            ui.separator();
+            ui.label(RichText::new(format!("Updates · v{}", env!("CARGO_PKG_VERSION"))).small().color(theme::p().text_dim));
+            match &update {
+                crate::update::State::Available { version, url } => {
+                    if ui.button(RichText::new(format!("Update to v{version}…")).color(theme::p().accent)).on_hover_text("Open the release page to download it").clicked() {
+                        crate::os::open(url);
+                    }
+                }
+                crate::update::State::Checking => {
+                    ui.label(RichText::new("Checking…").small().color(theme::p().text_dim));
+                }
+                crate::update::State::UpToDate => {
+                    ui.label(RichText::new("ScreenForge is up to date").small().color(theme::p().text_dim));
+                }
+                crate::update::State::Failed(_) => {
+                    ui.label(RichText::new("Could not reach GitHub").small().color(theme::p().text_dim));
+                }
+                crate::update::State::Idle => {}
+            }
+            if !matches!(update, crate::update::State::Checking) && ui.button("Check for updates now").clicked() {
+                action = Some(PickerAction::CheckUpdates);
+            }
+            let mut auto = prefs.check_updates;
+            if ui.checkbox(&mut auto, "Check automatically").on_hover_text("Once a day at launch: one request to GitHub's public releases API, nothing about you is sent").changed() {
+                action = Some(PickerAction::SetCheckUpdates(auto));
             }
             ui.separator();
             if ui.button("Quit ScreenForge").clicked() {

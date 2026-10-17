@@ -643,6 +643,11 @@ impl Editor {
                     if undo.clicked() && can_undo {
                         self.undo();
                     }
+                    if let Some((version, url)) = crate::update::available() {
+                        if widgets::secondary_button(ui, "Update available").on_hover_text(format!("ScreenForge v{version} is out: open the release page")).clicked() {
+                            crate::os::open(url);
+                        }
+                    }
                     ui.add_space(6.0);
                     widgets::icon_button(ui, widgets::Icon::Command, 16.0, "Shortcuts: Space play · S split · ⌫ delete · ⌘Z undo · ⌘S save · ⌘⇧E export · [ ] jump cuts · ⌘1…⌘0 sidebar · ⌘\\ toggle sidebar");
                     if let Some((s, t)) = &self.status {

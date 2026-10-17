@@ -20,6 +20,7 @@ mod sidebar;
 mod theme;
 mod timeline;
 mod tray;
+mod update;
 mod vibrancy;
 mod widgets;
 

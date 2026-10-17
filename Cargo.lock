@@ -4705,6 +4705,7 @@ dependencies = [
  "tempfile",
  "tracing",
  "tracing-subscriber",
+ "ureq",
  "wgpu",
  "x11rb",
 ]

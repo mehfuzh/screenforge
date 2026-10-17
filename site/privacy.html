@@ -415,20 +415,21 @@ gtag('config', 'G-ZYRJDJ736V');
 
   <div class="tldr">
     <div class="k">The short version</div>
-    <p>ScreenForge runs on your computer. It contacts a server only when you press <strong>Activate</strong> or <strong>Buy</strong>, which send your email address, or when you first make captions, which downloads a speech model and sends nothing about you. There are no analytics, no crash reports and no version pings. Your recordings, transcripts and exports never leave your computer unless you move them yourself.</p>
+    <p>ScreenForge runs on your computer. It contacts a server only when you press <strong>Activate</strong> or <strong>Buy</strong>, which send your email address, when you first make captions, which downloads a speech model and sends nothing about you, and once a day to ask GitHub whether a newer version is out, which you can turn off. There are no analytics and no crash reports. Your recordings, transcripts and exports never leave your computer unless you move them yourself.</p>
   </div>
 
   <h2><span class="n">01</span>What stays on your computer</h2>
   <p>Everything the app makes: recordings, projects, the audio track, transcripts and captions, exports, and the license key once it has been activated. ScreenForge writes them to the folders you choose and reads them back. None of it is uploaded, synced or copied anywhere by the app.</p>
 
   <h2><span class="n">02</span>When the app talks to a server</h2>
-  <p>Three actions and nothing else:</p>
+  <p>These four, and nothing else:</p>
   <ul>
     <li><strong>Activate</strong> sends the email you typed to the license server so it can return the key issued to that address. The key is then verified on your computer, and the app does not need the server again.</li>
     <li><strong>Buy</strong> sends the email you typed to the license server to open a Stripe checkout page. The purchase itself happens on Stripe's site.</li>
     <li><strong>Generate transcript</strong>, the first time you use a speech model, downloads that model (142 MB or 466 MB) from our GitHub releases, or from Hugging Face if GitHub is unreachable. It is a plain file download: nothing about you or your recording is sent. The file is checked against a known checksum, kept on your computer, and not downloaded again. Transcription itself runs on your computer, and your audio never leaves it.</li>
+    <li><strong>Update check</strong>: at launch, at most once a day, the app asks GitHub's public releases API for the newest version number, and shows "Update available" when it is newer than yours. It is one plain request with no account, no identifier and nothing about you or your projects; GitHub sees it like any other visit. Turn it off with <em>Check automatically</em> in the toolbar's settings menu; <em>Check for updates now</em> does the same once, on request. Updating is up to you: the app only opens the release page.</li>
   </ul>
-  <p>All three go over HTTPS. Opening the app, recording, editing, captioning with a model you already have, and exporting make no network requests at all.</p>
+  <p>All four go over HTTPS. Apart from the update check, opening the app, recording, editing, captioning with a model you already have, and exporting make no network requests at all.</p>
 
   <h2><span class="n">03</span>What we keep</h2>
   <p>If you buy a license: the email address you paid with, the plan, and the key issued to it. That record exists so the key can be resent or refunded. We do not keep a profile, a usage history or anything about the recordings you make.</p>
