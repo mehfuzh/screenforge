@@ -1,5 +1,4 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="188 202 648 648">
-  <style>.dot { fill: #140f1a } @media (prefers-color-scheme: dark) { .dot { fill: url(#dotfire) } }</style>
   <defs>
     <linearGradient id="fire" x1="0" y1="0" x2="0" y2="1">
       <stop offset="0" stop-color="#ffd98a"/>
@@ -21,5 +20,5 @@
     C264 482 308 404 374 356
     C414 322 476 282 512 214 Z
     M512 412 A178 178 0 1 0 512.1 412 Z"/>
-  <circle class="dot" cx="512" cy="590" r="104"/>
+  <circle fill="url(#dotfire)" cx="512" cy="590" r="104"/>
 </svg>
