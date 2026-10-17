@@ -31,6 +31,10 @@ pub struct Editor {
     pub selected_slice: Option<usize>,
     /// Selected zoom item (id), shown in the sidebar inspector.
     pub selected_zoom: Option<String>,
+    /// Selected mask (id): its regions are edited on the preview.
+    pub selected_mask: Option<String>,
+    /// Mask region being dragged on the preview.
+    pub mask_drag: Option<crate::masks::RegionDrag>,
     /// Selected detached audio clip (id).
     pub selected_audio: Option<String>,
     /// The background music block is selected (⌫ removes the music).
@@ -102,6 +106,8 @@ impl Editor {
             last_rendered_ms: None,
             selected_slice: None,
             selected_zoom: None,
+            selected_mask: None,
+            mask_drag: None,
             selected_audio: None,
             selected_music: false,
             dirty: false,
@@ -160,6 +166,26 @@ impl Editor {
         }
         f(&mut self.session.pkg.project);
         self.after_edit();
+    }
+
+    /// Push one undo entry for a finished live edit (a drag that changed the project as it went):
+    /// restore the snapshot from before it and re-apply the final state through `edit`.
+    pub fn commit_live_edit(&mut self, snapshot: sf_project::Project) {
+        let current = self.session.pkg.project.clone();
+        if current == snapshot {
+            return;
+        }
+        self.session.pkg.project = snapshot;
+        self.edit(move |p| *p = current);
+    }
+
+    /// Select a mask (and nothing else).
+    pub fn select_mask(&mut self, id: String) {
+        self.selected_mask = Some(id);
+        self.selected_zoom = None;
+        self.selected_slice = None;
+        self.selected_audio = None;
+        self.selected_music = false;
     }
 
     /// `edit` for a speed change: the playhead stays on the same source frame (and so the same
@@ -521,6 +547,11 @@ impl Editor {
             self.set_status("Removed zoom");
             return;
         }
+        if let Some(id) = self.selected_mask.take() {
+            self.edit(move |p| p.scenes[0].masks.retain(|m| m.id != id));
+            self.set_status("Removed mask");
+            return;
+        }
         if let Some(i) = self.selected_slice.take() {
             if self.session.pkg.project.scenes[0].slices.len() > 1 {
                 self.edit(|p| {
@@ -681,6 +712,9 @@ impl Editor {
                         None => {}
                     }
                 } else {
+                    if crate::masks::ui(self, ui, img_rect) {
+                        self.invalidate_preview();
+                    }
                     if resp.clicked() {
                         self.toggle_play();
                     }
@@ -707,7 +741,9 @@ impl Editor {
             if widgets::rail_icon(&mut rail_ui, widgets::Icon::Layout, false, "Camera layout").clicked() {
                 self.section = Section::CameraLayout;
             }
-            widgets::roadmap(&mut rail_ui, |ui| widgets::rail_icon(ui, widgets::Icon::Mask, false, "Mask"));
+            if widgets::rail_icon(&mut rail_ui, widgets::Icon::Mask, false, "Add blur mask at playhead").clicked() {
+                crate::masks::add_at_playhead(self);
+            }
         });
 
         self.export_modal(ctx);
@@ -901,7 +937,7 @@ impl Editor {
         if widgets::icon_button(&mut left, widgets::Icon::Scissors, 20.0, "Split at playhead (S)").clicked() {
             self.split_at_playhead();
         }
-        let can_delete = self.selected_zoom.is_some() || self.selected_audio.is_some() || (self.selected_slice.is_some() && self.session.pkg.project.scenes[0].slices.len() > 1);
+        let can_delete = self.selected_zoom.is_some() || self.selected_mask.is_some() || self.selected_audio.is_some() || (self.selected_slice.is_some() && self.session.pkg.project.scenes[0].slices.len() > 1);
         if widgets::icon_button(&mut left, widgets::Icon::Trash, 16.0, "Delete selection (⌫)").clicked() && can_delete {
             self.delete_selected();
         }

@@ -59,10 +59,34 @@ enum DragKind {
     ZoomEdge { left: bool },
 }
 
+/// Lanes of time-ranged items (source time, no overlaps within a lane).
+#[derive(Clone, Copy, PartialEq)]
+enum Lane {
+    Zoom,
+    Mask,
+}
+
+/// An item on a [`Lane`]: id and source range.
+#[derive(Clone)]
+struct LaneItem {
+    id: String,
+    start: f64,
+    end: f64,
+}
+
+fn lane_items(p: &Project, lane: Lane) -> Vec<LaneItem> {
+    let scene = &p.scenes[0];
+    match lane {
+        Lane::Zoom => scene.zooms.iter().map(|z| LaneItem { id: z.id.clone(), start: z.source_start_ms, end: z.source_end_ms }).collect(),
+        Lane::Mask => scene.masks.iter().map(|m| LaneItem { id: m.id.clone(), start: m.source_start_ms, end: m.source_end_ms }).collect(),
+    }
+}
+
 /// An in-progress drag; the project is mutated live and one undo entry is pushed on release.
 struct Drag {
     kind: DragKind,
-    zoom_id: String,
+    lane: Lane,
+    item_id: String,
     start_x: f32,
     /// Original source range of the dragged item.
     src0: f64,
@@ -123,12 +147,14 @@ impl TimelineWidget {
         // lanes stack: an optional lane (audio, zooms) is only laid out while it has content, so
         // deleting its last item collapses it and the lanes below move up
         let has_zooms = !ed.session.pkg.project.scenes[0].zooms.is_empty();
+        let has_masks = !ed.session.pkg.project.scenes[0].masks.is_empty();
         let show_audio_lane = audio_lane_visible(ed);
         let show_music_lane = music_lane_visible(ed);
         let zoom_track_h = if has_zooms { ZOOM_H + GAP } else { 0.0 };
+        let mask_track_h = if has_masks { ZOOM_H + GAP } else { 0.0 };
         let audio_track_h = if show_audio_lane { AUDIO_H + GAP } else { 0.0 };
         let music_track_h = if show_music_lane { MUSIC_H + GAP } else { 0.0 };
-        let (rect, resp) = ui.allocate_exact_size(vec2(avail.x, avail.y.max(RULER_H + MARKER_H + CLIP_H + audio_track_h + music_track_h + zoom_track_h + GAP * 2.0)), Sense::click_and_drag());
+        let (rect, resp) = ui.allocate_exact_size(vec2(avail.x, avail.y.max(RULER_H + MARKER_H + CLIP_H + audio_track_h + music_track_h + mask_track_h + zoom_track_h + GAP * 2.0)), Sense::click_and_drag());
         let painter = ui.painter_at(rect);
         painter.rect_filled(rect, 0.0, theme::p().bg);
 
@@ -195,7 +221,7 @@ impl TimelineWidget {
                 self.drag = Some(drag);
                 ui.ctx().request_repaint();
             } else {
-                commit_drag(ed, drag.snapshot);
+                ed.commit_live_edit(drag.snapshot);
                 self.snap_x = None;
             }
         }
@@ -211,7 +237,7 @@ impl TimelineWidget {
                 self.audio_drag = Some(drag);
                 ui.ctx().request_repaint();
             } else {
-                commit_drag(ed, drag.snapshot);
+                ed.commit_live_edit(drag.snapshot);
                 self.snap_x = None;
             }
         }
@@ -337,6 +363,7 @@ impl TimelineWidget {
                 if body.clicked() {
                     ed.selected_slice = Some(index);
                     ed.selected_zoom = None;
+                    ed.selected_mask = None;
                     ed.selected_audio = None;
                     seek_to = Some(ms_of(p.x));
                 }
@@ -346,6 +373,7 @@ impl TimelineWidget {
                 if body.secondary_clicked() {
                     ed.selected_slice = Some(index);
                     ed.selected_zoom = None;
+                    ed.selected_mask = None;
                     ed.selected_audio = None;
                     self.ctx_ms = ms_of(p.x);
                 }
@@ -369,6 +397,7 @@ impl TimelineWidget {
                         if let Some(p) = h.interact_pointer_pos() {
                             ed.selected_slice = Some(index);
                             ed.selected_zoom = None;
+                            ed.selected_mask = None;
                             let slices = &ed.session.pkg.project.scenes[0].slices;
                             let (lo, hi) = clip_bounds(slices, index, src_duration);
                             let mut targets: Vec<f64> = spans.iter().filter(|s| s.index <= index).map(|s| s.output_start_ms).collect();
@@ -387,7 +416,8 @@ impl TimelineWidget {
                             }
                             self.drag = Some(Drag {
                                 kind: DragKind::ClipEdge { index, left: is_left },
-                                zoom_id: String::new(),
+                                lane: Lane::Zoom,
+                                item_id: String::new(),
                                 start_x: p.x,
                                 src0: span.source_start_ms,
                                 src1: span.source_end_ms,
@@ -417,9 +447,34 @@ impl TimelineWidget {
             self.music_track_ui(ed, ui, rect, music_top, x_of, ms_of, &mut seek_to);
         }
 
+        // mask track (only shown once the project has masks; add them from the tool rail)
+        let mask_top = if show_music_lane { music_top + MUSIC_H + GAP } else { music_top };
+        let clip_boundaries: Vec<f64> = spans.iter().map(|s| s.output_start_ms).chain(std::iter::once(duration)).collect();
+        if has_masks {
+            let track_rect = Rect::from_min_max(pos2(rect.left(), mask_top), pos2(rect.right(), mask_top + ZOOM_H));
+            painter.rect(track_rect.shrink2(vec2(1.5, 0.0)), 10.0, theme::p().track_empty, Stroke::new(1.0, theme::p().border), egui::StrokeKind::Inside);
+            let track = ui.interact(track_rect, base_id.with("masktrack"), Sense::click_and_drag());
+            if let Some(p) = track.interact_pointer_pos() {
+                if track.clicked() || track.drag_started() || track.dragged() {
+                    seek_to = Some(ms_of(p.x));
+                }
+                if track.secondary_clicked() {
+                    self.ctx_ms = ms_of(p.x);
+                }
+            }
+            let ctx_ms = self.ctx_ms;
+            track.context_menu(|ui| {
+                if ui.button("Add mask here").clicked() {
+                    ed.seek(ctx_ms);
+                    crate::masks::add_at_playhead(ed);
+                }
+            });
+            self.lane_ui(ed, ui, &painter, rect, mask_top, Lane::Mask, base_id, x_of, ms_of, &clip_boundaries, src_duration, &mut seek_to);
+        }
+
         // zoom track (only shown once the project has zooms; add them from the tool rail,
         // the sidebar, or the empty-space context menu below the other lanes)
-        let zoom_top = if show_music_lane { music_top + MUSIC_H + GAP } else { music_top };
+        let zoom_top = mask_top + mask_track_h;
         let track_rect = if has_zooms { Rect::from_min_max(pos2(rect.left(), zoom_top), pos2(rect.right(), zoom_top + ZOOM_H)) } else { Rect::from_min_max(pos2(rect.left(), zoom_top), pos2(rect.right(), rect.bottom().max(zoom_top))) };
         if has_zooms {
             painter.rect(track_rect.shrink2(vec2(1.5, 0.0)), 10.0, theme::p().track_empty, Stroke::new(1.0, theme::p().border), egui::StrokeKind::Inside);
@@ -440,72 +495,7 @@ impl TimelineWidget {
         track.context_menu(|ui| zoom_track_menu(ed, ui, ctx_ms));
 
         // zoom items (source time; mapped through the slices, so cut parts are hidden)
-        let clip_boundaries: Vec<f64> = spans.iter().map(|s| s.output_start_ms).chain(std::iter::once(duration)).collect();
-        for z in &zooms {
-            let segments = visible_segments(&ed.session.timeline, z.source_start_ms, z.source_end_ms);
-            if segments.is_empty() {
-                continue;
-            }
-            let selected = ed.selected_zoom.as_deref() == Some(z.id.as_str());
-            let color = if selected { theme::p().zoom_selected } else { theme::p().zoom };
-            let color = if z.is_disabled { color.gamma_multiply(0.45) } else { color };
-            let mut min_x = f32::MAX;
-            let mut max_x = f32::MIN;
-            for (o0, o1) in &segments {
-                let r = Rect::from_min_max(pos2(x_of(*o0) + 1.5, zoom_top + 4.0), pos2(x_of(*o1) - 1.5, zoom_top + ZOOM_H - 4.0));
-                min_x = min_x.min(r.left());
-                max_x = max_x.max(r.right());
-                glass_block(&painter, r, 8.0, color, selected);
-            }
-            let item_full = Rect::from_min_max(pos2(min_x, zoom_top), pos2(max_x, zoom_top + ZOOM_H));
-            zoom_label(&painter, item_full.shrink2(vec2(6.0, 4.0)).intersect(rect), z);
-            let item_rect = item_full.intersect(rect);
-            if item_rect.width() <= 0.0 {
-                continue;
-            }
-            let item_id = base_id.with(("zoom", &z.id));
-            let item = ui.interact(item_rect, item_id, Sense::click_and_drag()).on_hover_cursor(CursorIcon::Grab);
-            if let Some(p) = item.interact_pointer_pos() {
-                if item.clicked() {
-                    ed.selected_zoom = Some(z.id.clone());
-                    ed.selected_slice = None;
-                    seek_to = Some(ms_of(p.x));
-                }
-                if item.secondary_clicked() {
-                    ed.selected_zoom = Some(z.id.clone());
-                    ed.selected_slice = None;
-                    self.ctx_ms = ms_of(p.x);
-                }
-                if item.drag_started() {
-                    ed.selected_zoom = Some(z.id.clone());
-                    ed.selected_slice = None;
-                    self.drag = Some(zoom_drag(ed, z, &zooms, DragKind::ZoomMove, p.x, &clip_boundaries, src_duration));
-                }
-            }
-            let zid = z.id.clone();
-            item.context_menu(|ui| zoom_menu(ed, ui, &zid));
-
-            if item_full.width() > HANDLE_W * 3.0 {
-                for is_left in [true, false] {
-                    let hr = if is_left { Rect::from_min_max(item_full.left_top(), pos2(item_full.left() + HANDLE_W, item_full.bottom())) } else { Rect::from_min_max(pos2(item_full.right() - HANDLE_W, item_full.top()), item_full.right_bottom()) };
-                    let hr = hr.intersect(rect);
-                    if hr.width() <= 0.0 {
-                        continue;
-                    }
-                    let h = ui.interact(hr, item_id.with(is_left), Sense::drag()).on_hover_cursor(CursorIcon::ResizeHorizontal);
-                    if h.hovered() || h.dragged() {
-                        painter.rect_filled(hr, 2.0, theme::p().accent.gamma_multiply(0.7));
-                    }
-                    if h.drag_started() {
-                        if let Some(p) = h.interact_pointer_pos() {
-                            ed.selected_zoom = Some(z.id.clone());
-                            ed.selected_slice = None;
-                            self.drag = Some(zoom_drag(ed, z, &zooms, DragKind::ZoomEdge { left: is_left }, p.x, &clip_boundaries, src_duration));
-                        }
-                    }
-                }
-            }
-        }
+        self.lane_ui(ed, ui, &painter, rect, zoom_top, Lane::Zoom, base_id, x_of, ms_of, &clip_boundaries, src_duration, &mut seek_to);
 
         // scrubbing on empty space / ruler
         if resp.clicked() || resp.drag_started() || resp.dragged() {
@@ -549,6 +539,105 @@ impl TimelineWidget {
 impl TimelineWidget {
     #[allow(clippy::too_many_arguments)]
     /// Refresh the cached waveform of `track` when the audio was reloaded.
+    /// Items of a zoom or mask lane at `top`: blocks you can select, move and resize, with a
+    /// context menu.
+    #[allow(clippy::too_many_arguments)]
+    fn lane_ui(&mut self, ed: &mut Editor, ui: &mut egui::Ui, painter: &egui::Painter, rect: Rect, top: f32, lane: Lane, base_id: egui::Id, x_of: impl Fn(f64) -> f32 + Copy, ms_of: impl Fn(f32) -> f64 + Copy, clip_boundaries: &[f64], src_duration: f64, seek_to: &mut Option<f64>) {
+        let pal = theme::p();
+        let (color, color_selected, tag) = match lane {
+            Lane::Zoom => (pal.zoom, pal.zoom_selected, "zoom"),
+            Lane::Mask => (pal.mask, pal.mask_selected, "mask"),
+        };
+        let scene = ed.session.pkg.project.scenes[0].clone();
+        for z in lane_items(&ed.session.pkg.project, lane) {
+            let segments = visible_segments(&ed.session.timeline, z.start, z.end);
+            if segments.is_empty() {
+                continue;
+            }
+            let (selected, disabled) = match lane {
+                Lane::Zoom => (ed.selected_zoom.as_deref() == Some(z.id.as_str()), scene.zooms.iter().any(|o| o.id == z.id && o.is_disabled)),
+                Lane::Mask => (ed.selected_mask.as_deref() == Some(z.id.as_str()), scene.masks.iter().any(|o| o.id == z.id && o.is_disabled)),
+            };
+            let c = if selected { color_selected } else { color };
+            let c = if disabled { c.gamma_multiply(0.45) } else { c };
+            let mut min_x = f32::MAX;
+            let mut max_x = f32::MIN;
+            for (o0, o1) in &segments {
+                let r = Rect::from_min_max(pos2(x_of(*o0) + 1.5, top + 4.0), pos2(x_of(*o1) - 1.5, top + ZOOM_H - 4.0));
+                min_x = min_x.min(r.left());
+                max_x = max_x.max(r.right());
+                glass_block(painter, r, 8.0, c, selected);
+            }
+            let item_full = Rect::from_min_max(pos2(min_x, top), pos2(max_x, top + ZOOM_H));
+            let inner = item_full.shrink2(vec2(6.0, 4.0)).intersect(rect);
+            match lane {
+                Lane::Zoom => {
+                    if let Some(zoom) = scene.zooms.iter().find(|o| o.id == z.id) {
+                        zoom_label(painter, inner, zoom);
+                    }
+                }
+                Lane::Mask => {
+                    if let Some(m) = scene.masks.iter().find(|o| o.id == z.id) {
+                        mask_label(painter, inner, m);
+                    }
+                }
+            }
+            let item_rect = item_full.intersect(rect);
+            if item_rect.width() <= 0.0 {
+                continue;
+            }
+            let select = |ed: &mut Editor| match lane {
+                Lane::Zoom => {
+                    ed.selected_zoom = Some(z.id.clone());
+                    ed.selected_mask = None;
+                    ed.selected_slice = None;
+                }
+                Lane::Mask => ed.select_mask(z.id.clone()),
+            };
+            let item_id = base_id.with((tag, &z.id));
+            let item = ui.interact(item_rect, item_id, Sense::click_and_drag()).on_hover_cursor(CursorIcon::Grab);
+            if let Some(p) = item.interact_pointer_pos() {
+                if item.clicked() {
+                    select(ed);
+                    *seek_to = Some(ms_of(p.x));
+                }
+                if item.secondary_clicked() {
+                    select(ed);
+                    self.ctx_ms = ms_of(p.x);
+                }
+                if item.drag_started() {
+                    select(ed);
+                    self.drag = item_drag(ed, lane, &z.id, DragKind::ZoomMove, p.x, clip_boundaries, src_duration);
+                }
+            }
+            let zid = z.id.clone();
+            item.context_menu(|ui| match lane {
+                Lane::Zoom => zoom_menu(ed, ui, &zid),
+                Lane::Mask => mask_menu(ed, ui, &zid),
+            });
+
+            if item_full.width() > HANDLE_W * 3.0 {
+                for is_left in [true, false] {
+                    let hr = if is_left { Rect::from_min_max(item_full.left_top(), pos2(item_full.left() + HANDLE_W, item_full.bottom())) } else { Rect::from_min_max(pos2(item_full.right() - HANDLE_W, item_full.top()), item_full.right_bottom()) };
+                    let hr = hr.intersect(rect);
+                    if hr.width() <= 0.0 {
+                        continue;
+                    }
+                    let h = ui.interact(hr, item_id.with(is_left), Sense::drag()).on_hover_cursor(CursorIcon::ResizeHorizontal);
+                    if h.hovered() || h.dragged() {
+                        painter.rect_filled(hr, 2.0, pal.accent.gamma_multiply(0.7));
+                    }
+                    if h.drag_started() {
+                        if let Some(p) = h.interact_pointer_pos() {
+                            select(ed);
+                            self.drag = item_drag(ed, lane, &z.id, DragKind::ZoomEdge { left: is_left }, p.x, clip_boundaries, src_duration);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     fn ensure_peaks(&mut self, ed: &Editor, track: &AudioTrack) {
         let gen = ed.audio.generation.load(std::sync::atomic::Ordering::Relaxed);
         if self.peaks_gen != gen || self.peaks.as_ref().map(|(t, _, _)| t != track).unwrap_or(true) {
@@ -587,6 +676,7 @@ impl TimelineWidget {
                 ed.selected_music = true;
                 ed.selected_slice = None;
                 ed.selected_zoom = None;
+                ed.selected_mask = None;
                 ed.selected_audio = None;
             }
             if lane.clicked() || lane.drag_started() || lane.dragged() {
@@ -700,6 +790,7 @@ impl TimelineWidget {
                 let Some(c) = ed.session.pkg.project.scenes[0].audio_clips().and_then(|cs| cs.into_iter().find(|c| c.track == span.track && (c.output_start_ms - span.output_start_ms).abs() < 1.0)) else { continue };
                 ed.selected_audio = Some(c.id.clone());
                 ed.selected_zoom = None;
+                ed.selected_mask = None;
                 ed.selected_slice = None;
                 if let Some(pp) = probe.interact_pointer_pos() {
                     *seek_to = Some(ms_of(pp.x));
@@ -713,6 +804,7 @@ impl TimelineWidget {
                 if item.clicked() {
                     ed.selected_audio = Some(id.clone());
                     ed.selected_zoom = None;
+                    ed.selected_mask = None;
                     ed.selected_slice = None;
                     *seek_to = Some(ms_of(p.x));
                 }
@@ -953,49 +1045,52 @@ fn clip_bounds(slices: &[sf_project::v4::Slice], index: usize, src_duration: f64
     (lo, hi)
 }
 
-/// Allowed source range for zoom `z` so it does not overlap the other zooms.
-fn zoom_bounds(z: &Zoom, zooms: &[Zoom], src_duration: f64) -> (f64, f64) {
+/// Allowed source range for item `z` so it does not overlap the other items of its lane.
+fn item_bounds(z: &LaneItem, items: &[LaneItem], src_duration: f64) -> (f64, f64) {
     let mut lo = 0.0f64;
-    let mut hi = src_duration.max(z.source_end_ms);
-    for o in zooms {
+    let mut hi = src_duration.max(z.end);
+    for o in items {
         if o.id == z.id {
             continue;
         }
-        if o.source_end_ms <= z.source_start_ms + 1.0 {
-            lo = lo.max(o.source_end_ms);
-        } else if o.source_start_ms >= z.source_end_ms - 1.0 {
-            hi = hi.min(o.source_start_ms);
+        if o.end <= z.start + 1.0 {
+            lo = lo.max(o.end);
+        } else if o.start >= z.end - 1.0 {
+            hi = hi.min(o.start);
         }
     }
     (lo, hi)
 }
 
-fn zoom_drag(ed: &Editor, z: &Zoom, zooms: &[Zoom], kind: DragKind, start_x: f32, clip_boundaries: &[f64], src_duration: f64) -> Drag {
-    let (lo, hi) = zoom_bounds(z, zooms, src_duration);
+fn item_drag(ed: &Editor, lane: Lane, id: &str, kind: DragKind, start_x: f32, clip_boundaries: &[f64], src_duration: f64) -> Option<Drag> {
+    let items = lane_items(&ed.session.pkg.project, lane);
+    let z = items.iter().find(|i| i.id == id)?;
+    let (lo, hi) = item_bounds(z, &items, src_duration);
     let mut targets = clip_boundaries.to_vec();
-    for o in zooms {
+    for o in &items {
         if o.id == z.id {
             continue;
         }
-        for e in [o.source_start_ms, o.source_end_ms] {
+        for e in [o.start, o.end] {
             if let Some(out) = ed.session.timeline.source_to_output(e) {
                 targets.push(out);
             }
         }
     }
-    Drag {
+    Some(Drag {
         kind,
-        zoom_id: z.id.clone(),
+        lane,
+        item_id: z.id.clone(),
         start_x,
-        src0: z.source_start_ms,
-        src1: z.source_end_ms,
+        src0: z.start,
+        src1: z.end,
         out0: 0.0,
         out1: 0.0,
         lo,
         hi,
         targets,
         snapshot: ed.session.pkg.project.clone(),
-    }
+    })
 }
 
 /// Nearest snap target (output ms) within `SNAP_PX` of output time `v`.
@@ -1090,7 +1185,7 @@ fn apply_drag(drag: &mut Drag, ed: &mut Editor, x: f32, shift: bool, map: ViewMa
                     }
                 }
             }
-            // clamp inside the recording and away from neighbouring zooms
+            // clamp inside the recording and away from neighbouring items
             match drag.kind {
                 DragKind::ZoomMove => {
                     let max_start = drag.hi - dur;
@@ -1105,12 +1200,16 @@ fn apply_drag(drag: &mut Drag, ed: &mut Editor, x: f32, shift: bool, map: ViewMa
                 _ => ne = ne.clamp(drag.src0 + MIN_MS, drag.hi),
             }
             let (ns, ne) = (ns.round(), ne.round());
-            let id = drag.zoom_id.clone();
-            let p = &mut ed.session.pkg.project;
-            if let Some(z) = p.scenes[0].zooms.iter_mut().find(|z| z.id == id) {
-                if z.source_start_ms != ns || z.source_end_ms != ne {
-                    z.source_start_ms = ns;
-                    z.source_end_ms = ne;
+            let id = drag.item_id.as_str();
+            let scene = &mut ed.session.pkg.project.scenes[0];
+            let range = match drag.lane {
+                Lane::Zoom => scene.zooms.iter_mut().find(|z| z.id == id).map(|z| (&mut z.source_start_ms, &mut z.source_end_ms)),
+                Lane::Mask => scene.masks.iter_mut().find(|m| m.id == id).map(|m| (&mut m.source_start_ms, &mut m.source_end_ms)),
+            };
+            if let Some((s0, s1)) = range {
+                if *s0 != ns || *s1 != ne {
+                    *s0 = ns;
+                    *s1 = ne;
                     ed.session.rebuild();
                     ed.invalidate_preview();
                 }
@@ -1120,16 +1219,6 @@ fn apply_drag(drag: &mut Drag, ed: &mut Editor, x: f32, shift: bool, map: ViewMa
     snap_x
 }
 
-/// Push one undo entry for a finished live drag: restore the pre-drag snapshot and re-apply
-/// the final state through `Editor::edit`.
-fn commit_drag(ed: &mut Editor, snapshot: Project) {
-    let current = ed.session.pkg.project.clone();
-    if current == snapshot {
-        return;
-    }
-    ed.session.pkg.project = snapshot;
-    ed.edit(move |p| *p = current);
-}
 
 /// Output-time segments of source range `[s0, s1)` that are not cut.
 fn visible_segments(tl: &Timeline, s0: f64, s1: f64) -> Vec<(f64, f64)> {
@@ -1203,6 +1292,17 @@ fn glass_block(painter: &egui::Painter, r: Rect, radius: f32, color: Color32, se
     let fill = color.gamma_multiply(if selected { 0.42 } else { 0.26 });
     let stroke = if selected { Stroke::new(2.0, color) } else { Stroke::new(1.0, color.gamma_multiply(0.75)) };
     painter.rect(r, radius, fill, stroke, egui::StrokeKind::Inside);
+}
+
+/// Mask item label: "Blur" or "Highlight" ("… off" when disabled), clipped to the block.
+fn mask_label(painter: &egui::Painter, inner: Rect, m: &sf_project::v4::Mask) {
+    if inner.width() <= 0.0 {
+        return;
+    }
+    let name = if m.kind == sf_project::v4::Mask::HIGHLIGHT { "Highlight" } else { "Blur" };
+    let text = if m.is_disabled { format!("{name} off") } else { name.to_string() };
+    let painter = painter.with_clip_rect(inner);
+    painter.text(inner.center(), egui::Align2::CENTER_CENTER, text, egui::FontId::proportional(13.0), theme::p().text);
 }
 
 // ───────────── context menus ─────────────
@@ -1299,6 +1399,7 @@ fn zoom_menu(ed: &mut Editor, ui: &mut egui::Ui, id: &str) {
             let dup_id = dup.id.clone();
             ed.edit(move |p| p.scenes[0].zooms.insert(i + 1, dup));
             ed.selected_zoom = Some(dup_id);
+            ed.selected_mask = None;
         } else {
             ed.set_status("No room after this zoom to duplicate it");
         }
@@ -1326,6 +1427,29 @@ fn zoom_menu(ed: &mut Editor, ui: &mut egui::Ui, id: &str) {
             p.scenes[0].zooms.insert(i + 1, right);
         });
         ed.set_status("Split zoom");
+    }
+}
+
+fn mask_menu(ed: &mut Editor, ui: &mut egui::Ui, id: &str) {
+    use sf_project::v4::Mask;
+    let Some(i) = ed.session.pkg.project.scenes[0].masks.iter().position(|m| m.id == id) else { return };
+    let m = ed.session.pkg.project.scenes[0].masks[i].clone();
+    ui.set_min_width(160.0);
+    for (kind, label) in [(Mask::SENSITIVE_DATA, "Blur"), (Mask::HIGHLIGHT, "Highlight")] {
+        if ui.selectable_label(m.kind == kind, label).clicked() {
+            ed.edit(move |p| p.scenes[0].masks[i].kind = kind.into());
+            ui.close();
+        }
+    }
+    ui.separator();
+    if ui.button(if m.is_disabled { "Enable" } else { "Disable" }).clicked() {
+        let v = !m.is_disabled;
+        ed.edit(move |p| p.scenes[0].masks[i].is_disabled = v);
+    }
+    if ui.button("Remove").clicked() {
+        ed.selected_mask = None;
+        ed.edit(move |p| { p.scenes[0].masks.remove(i); });
+        ed.set_status("Removed mask");
     }
 }
 
