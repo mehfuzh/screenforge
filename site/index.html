@@ -354,6 +354,8 @@
   .roadmap span { font-size: 14px; color: var(--dim); }
   .roadmap .box { font-style: normal; margin-right: 8px; color: var(--dim); }
   .roadmap li.done .box { color: var(--jade); }
+  /* an odd last item spans both columns instead of leaving an empty cell */
+  .roadmap li:last-child:nth-child(odd) { grid-column: 1 / -1; }
   @media (max-width: 720px) { .roadmap { grid-template-columns: 1fr; } }
 </style>
 <script>
@@ -458,9 +460,24 @@ gtag('config', 'G-ZYRJDJ736V');
         <p>A wgpu compositor renders the timeline. Export MP4 (H.264 / HEVC), ProRes, GIF or WebM, with mixed audio.</p>
       </div>
       <div class="card">
-        <div class="k">Captions <span class="tag">new</span></div>
+        <div class="k">Captions</div>
         <h3>Captions from your voice</h3>
         <p>Transcribed on your computer with Whisper, nothing uploaded. Line by line or word by word, burned into the export or saved as SRT.</p>
+      </div>
+      <div class="card">
+        <div class="k">Privacy <span class="tag">new</span></div>
+        <h3>Blur and highlight masks</h3>
+        <p>Blur passwords, emails and other private details, or dim everything except the part that matters. Draw the areas on the preview and time them on the timeline.</p>
+      </div>
+      <div class="card">
+        <div class="k">Framing <span class="tag">new</span></div>
+        <h3>Crop</h3>
+        <p>Trim the recording to the part of the screen you need. Drag the frame over the whole recording; zooms, cursor and masks follow the crop.</p>
+      </div>
+      <div class="card">
+        <div class="k">Keyboard <span class="tag">new</span></div>
+        <h3>Shortcuts on screen</h3>
+        <p>The shortcuts you press while recording show up as key caps, like <code>⇧ ⌘ S</code>, so viewers can follow along. Plain key presses too, if you want them.</p>
       </div>
     </div>
   </div>
@@ -473,15 +490,16 @@ gtag('config', 'G-ZYRJDJ736V');
     <p class="lead">Anything not built yet is greyed out in the app instead of half-working. Shipped items are ticked; the rest in order of likely arrival:</p>
     <ul class="roadmap">
         <li class="done"><strong><i class="box">[x]</i>Camera recording</strong><span>webcam capture with a live preview; overlay, split-screen and fullscreen camera layouts</span></li>
-        <li><strong><i class="box">[ ]</i>Masks and highlights</strong><span>blur or hide regions, spotlight areas</span></li>
-        <li><strong><i class="box">[ ]</i>Crop editing</strong><span>the Crop tool in the preview toolbar</span></li>
+        <li class="done"><strong><i class="box">[x]</i>Masks and highlights</strong><span>blur private details or dim everything but an area, drawn on the preview and timed on the timeline</span></li>
+        <li class="done"><strong><i class="box">[x]</i>Crop editing</strong><span>the Crop tool in the preview toolbar: drag a frame over the whole recording</span></li>
         <li class="done"><strong><i class="box">[x]</i>Captions</strong><span>on-device Whisper transcription, captions in the preview and export, SRT export</span></li>
-        <li><strong><i class="box">[ ]</i>Keyboard shortcut overlay</strong><span>key-cap rendering of recorded keystrokes</span></li>
+        <li class="done"><strong><i class="box">[x]</i>Keyboard shortcut overlay</strong><span>key caps for the shortcuts pressed while recording, in the preview and export</span></li>
         <li><strong><i class="box">[ ]</i>Device frames</strong><span>iPhone/iPad recording and mockup frames</span></li>
         <li><strong><i class="box">[ ]</i>Unsplash backgrounds</strong><span>online wallpaper search</span></li>
         <li><strong><i class="box">[ ]</i>Face tracking and color grading</strong><span>camera centring, looks and LUTs</span></li>
         <li class="done"><strong><i class="box">[x]</i>Remove project</strong><span>move a project to the Trash from the editor or the recent projects list</span></li>
         <li class="done"><strong><i class="box">[x]</i>Licensing backend</strong><span>hosted key issuing (Supabase + Stripe); a license unlocks Export</span></li>
+        <li class="done"><strong><i class="box">[x]</i>Update notifications</strong><span>"Update available" when a newer release is out; can be turned off</span></li>
     </ul>
   </div>
 </section>
@@ -492,7 +510,7 @@ gtag('config', 'G-ZYRJDJ736V');
       <div class="plans-copy">
         <div class="sec-label">Pricing</div>
         <h2>Pricing that fits<br><em>how you work.</em></h2>
-        <p class="sec-sub">Recording and editing are free and open source under Apache-2.0, and so are your first three exports. After that, exporting from the official build needs a license, verified offline. No account, no phone-home. You can always build from source and remove the gate; the license pays for the signed, notarized download, the CI and the maintenance.</p>
+        <p class="sec-sub">Recording and editing are free and open source under Apache-2.0, and so are your first three exports. After that, exporting from the official build needs a license, verified offline. No account, and no server checks your key. You can always build from source and remove the gate; the license pays for the signed, notarized download, the CI and the maintenance.</p>
         <div class="free">
           <div class="row"><b>Free</b><span>Record, open and edit projects. <i>Forever, no license needed.</i></span></div>
           <div class="row"><b>Source</b><span>Apache-2.0 on GitHub. <i>Build it yourself and remove the gate if you like; the license funds the ready-made build and its upkeep.</i></span></div>
