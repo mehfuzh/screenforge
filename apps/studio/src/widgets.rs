@@ -183,6 +183,22 @@ pub fn accent_icon_button(ui: &mut Ui, icon: Icon, tip: &str) -> Response {
 }
 
 /// Secondary action: card fill, normal text, same size as `accent_button`.
+/// Small accent-filled notice button (sparkle + text), e.g. "Update v0.1.17" in the title bar.
+pub fn accent_badge(ui: &mut Ui, text: &str) -> Response {
+    let font = egui::FontId::proportional(12.0);
+    let galley = ui.painter().layout_no_wrap(text.to_string(), font, Color32::WHITE);
+    let (icon, pad, gap) = (11.0, 8.0, 5.0);
+    let size = vec2(pad + icon + gap + galley.size().x + pad, 22.0);
+    let (rect, resp) = ui.allocate_exact_size(size, Sense::click());
+    let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
+    let fill = if resp.hovered() { theme::p().accent_hover } else { theme::p().accent };
+    let p = ui.painter();
+    p.rect_filled(rect, CornerRadius::same(BUTTON_RADIUS), fill);
+    paint_icon(p, Rect::from_center_size(pos2(rect.left() + pad + icon / 2.0, rect.center().y), vec2(icon, icon)), Icon::Sparkle, Color32::WHITE);
+    p.galley(pos2(rect.left() + pad + icon + gap, rect.center().y - galley.size().y / 2.0), galley, Color32::WHITE);
+    resp
+}
+
 pub fn secondary_button(ui: &mut Ui, text: &str) -> Response {
     ui.add(egui::Button::new(RichText::new(text).size(14.0).color(theme::p().text)).fill(theme::p().card_2).corner_radius(CornerRadius::same(BUTTON_RADIUS)).min_size(vec2(0.0, BUTTON_H)))
 }

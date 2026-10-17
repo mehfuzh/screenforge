@@ -71,10 +71,18 @@ impl Inputs {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Appearance {
-    System,
-    Light,
-    /// Catppuccin Mocha (the default).
+    /// ScreenForge dark: the website's dark colours (the default).
     #[default]
+    #[serde(rename = "screenforge")]
+    ScreenForge,
+    /// ScreenForge light: the website's light colours.
+    #[serde(rename = "screenforge-light")]
+    ScreenForgeLight,
+    /// ScreenForge light or dark, with the system.
+    System,
+    /// Solarized Light.
+    Light,
+    /// Catppuccin Mocha.
     Dark,
     /// Dark, with the Osaka Jade palette.
     #[serde(rename = "osaka-jade")]
@@ -85,14 +93,20 @@ impl Appearance {
     pub fn preference(self) -> egui::ThemePreference {
         match self {
             Appearance::System => egui::ThemePreference::System,
-            Appearance::Light => egui::ThemePreference::Light,
-            Appearance::Dark | Appearance::OsakaJade => egui::ThemePreference::Dark,
+            Appearance::Light | Appearance::ScreenForgeLight => egui::ThemePreference::Light,
+            Appearance::ScreenForge | Appearance::Dark | Appearance::OsakaJade => egui::ThemePreference::Dark,
         }
     }
 
     /// Make the theme module use this preference's dark palette, then set egui's theme.
     pub fn apply(self, ctx: &egui::Context) {
-        crate::theme::set_dark_palette(if self == Appearance::OsakaJade { crate::theme::OSAKA_JADE } else { crate::theme::DARK });
+        use crate::theme::{DARK, FORGE_DARK, FORGE_LIGHT, LIGHT, OSAKA_JADE};
+        let (dark, light) = match self {
+            Appearance::ScreenForge | Appearance::ScreenForgeLight | Appearance::System => (FORGE_DARK, FORGE_LIGHT),
+            Appearance::OsakaJade => (OSAKA_JADE, LIGHT),
+            Appearance::Light | Appearance::Dark => (DARK, LIGHT),
+        };
+        crate::theme::set_palettes(dark, light);
         ctx.set_theme(self.preference());
         crate::theme::sync(ctx);
     }
@@ -440,7 +454,7 @@ impl Picker {
             }
             ui.separator();
             ui.label(RichText::new("Appearance").small().color(theme::p().text_dim));
-            for (choice, l) in [(Appearance::System, "Match system"), (Appearance::Light, "Light"), (Appearance::Dark, "Dark"), (Appearance::OsakaJade, "Osaka Jade")] {
+            for (choice, l) in [(Appearance::ScreenForge, "ScreenForge Dark"), (Appearance::ScreenForgeLight, "ScreenForge Light"), (Appearance::System, "Match system"), (Appearance::Dark, "Catppuccin Mocha"), (Appearance::Light, "Solarized Light"), (Appearance::OsakaJade, "Osaka Jade")] {
                 if ui.selectable_label(prefs.appearance == choice, l).clicked() {
                     action = Some(PickerAction::SetAppearance(choice));
                 }
@@ -454,7 +468,7 @@ impl Picker {
                 }
             }
             ui.separator();
-            ui.label(RichText::new(format!("Updates · v{}", env!("CARGO_PKG_VERSION"))).small().color(theme::p().text_dim));
+            ui.label(RichText::new(format!("Updates · v{}", crate::update::version())).small().color(theme::p().text_dim));
             match &update {
                 crate::update::State::Available { version, url } => {
                     if ui.button(RichText::new(format!("Update to v{version}…")).color(theme::p().accent)).on_hover_text("Open the release page to download it").clicked() {

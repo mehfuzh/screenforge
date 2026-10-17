@@ -28,6 +28,11 @@ fn state() -> &'static Mutex<State> {
     S.get_or_init(|| Mutex::new(State::Idle))
 }
 
+/// This build's version; `SF_FAKE_VERSION` pretends to be another one, to see the notice.
+pub fn version() -> String {
+    std::env::var("SF_FAKE_VERSION").unwrap_or_else(|_| env!("CARGO_PKG_VERSION").to_string())
+}
+
 pub fn current() -> State {
     state().lock().map(|s| s.clone()).unwrap_or(State::Idle)
 }
@@ -51,7 +56,7 @@ pub fn check(ctx: &egui::Context) {
     }
     let ctx = ctx.clone();
     std::thread::spawn(move || {
-        let result = fetch_latest().map(|(tag, url)| if is_newer(&tag, env!("CARGO_PKG_VERSION")) { State::Available { version: tag.trim_start_matches('v').to_string(), url } } else { State::UpToDate });
+        let result = fetch_latest().map(|(tag, url)| if is_newer(&tag, &version()) { State::Available { version: tag.trim_start_matches('v').to_string(), url } } else { State::UpToDate });
         let next = result.unwrap_or_else(|e| {
             tracing::warn!("update check failed: {e}");
             State::Failed(e)
