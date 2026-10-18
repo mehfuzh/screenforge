@@ -461,9 +461,9 @@ fn cursor_ui(ed: &mut Editor, ui: &mut egui::Ui) {
     }
     cfg_slider(ed, ui, "Cursor size", |p| p.config.cursor.size, |p, v| p.config.cursor.size = v, 16.0..=128.0, Some(48.0), "");
     widgets::title(ui, "Cursor style");
-    // tiles: the recorded pointer (what is drawn today) and the bundled sets
-    let system = if cfg!(target_os = "windows") { "Windows" } else if cfg!(target_os = "linux") { "Linux" } else { "macOS Tahoe" };
-    let sets: [(&str, &str); 3] = [("macos-tahoe", system), ("macos", "macOS"), ("touch", "Touch")];
+    // tiles: the recorded pointer (what is drawn today) and the bundled sets. Generic names, as
+    // other recorders use, rather than the OS the sprites come from.
+    let sets: [(&str, &str); 3] = [("macos-tahoe", "Regular"), ("macos", "Classic"), ("touch", "Hand")];
     let cur = ed.session.pkg.project.config.cursor.set.id.clone();
     let idx = sets.iter().position(|(s, _)| *s == cur).unwrap_or(0);
     let arrow = ed.session.pkg.recording_dir().join("cursors").join("arrow.png");
