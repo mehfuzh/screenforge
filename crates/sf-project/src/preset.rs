@@ -105,6 +105,44 @@ impl Preset {
         Ok(())
     }
 
+    /// Package path for a preset called `name` inside `folder` (`<name>.screenforgepreset`).
+    pub fn path_for(folder: &Path, name: &str) -> PathBuf {
+        folder.join(format!("{}.{}", sanitize_preset_name(name), crate::PRESET_EXTENSION))
+    }
+
+    /// Whether a preset called `name` already exists in `folder` (either extension).
+    pub fn exists(folder: &Path, name: &str) -> bool {
+        let stem = sanitize_preset_name(name);
+        Self::list(folder).iter().any(|p| p.name().eq_ignore_ascii_case(&stem) || p.path.file_stem().is_some_and(|s| s.to_string_lossy().eq_ignore_ascii_case(&stem)))
+    }
+
+    /// Rename: the display name in `meta.json` and the package folder (`<name>.<ext>`, the
+    /// extension is kept). Fails when another preset already has that name.
+    pub fn rename(&mut self, new_name: &str) -> Result<()> {
+        let stem = sanitize_preset_name(new_name);
+        if stem.is_empty() {
+            return Err(Error::Io { path: self.path.clone(), source: std::io::Error::new(std::io::ErrorKind::InvalidInput, "empty preset name") });
+        }
+        let ext = self.path.extension().and_then(|e| e.to_str()).unwrap_or(crate::PRESET_EXTENSION).to_string();
+        let new_path = self.path.with_file_name(format!("{stem}.{ext}"));
+        if new_path != self.path && new_path.exists() {
+            return Err(Error::Io { path: new_path, source: std::io::Error::new(std::io::ErrorKind::AlreadyExists, "a preset with this name already exists") });
+        }
+        self.meta.name = Some(stem.clone());
+        let text = superjson::to_string_pretty(&self.meta, &[])?;
+        std::fs::write(self.path.join("meta.json"), text).map_err(|source| Error::Io { path: self.path.join("meta.json"), source })?;
+        if new_path != self.path {
+            std::fs::rename(&self.path, &new_path).map_err(|source| Error::Io { path: self.path.clone(), source })?;
+            self.path = new_path;
+        }
+        Ok(())
+    }
+
+    /// Remove the preset package from disk.
+    pub fn delete(self) -> Result<()> {
+        std::fs::remove_dir_all(&self.path).map_err(|source| Error::Io { path: self.path.clone(), source })
+    }
+
     /// Default presets folder (`~/Documents/Screen Studio Presets`).
     pub fn default_folder() -> Option<PathBuf> {
         let home = std::env::var_os("HOME")?;
@@ -129,9 +167,38 @@ impl Preset {
     }
 }
 
+/// A preset name as a file-system friendly stem: no path separators or quote characters,
+/// trimmed, at most 100 characters.
+pub fn sanitize_preset_name(name: &str) -> String {
+    let s: String = name.chars().filter(|c| !"?/\\*\"'`<>|:".contains(*c)).collect();
+    s.trim().chars().take(100).collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rename_and_delete() {
+        let folder = std::env::temp_dir().join(format!("sf-presets-{}", crate::ids::new_id()));
+        std::fs::create_dir_all(&folder).unwrap();
+        let cfg = Config::default();
+        let mut p = Preset::create(Preset::path_for(&folder, "First"), "First", &cfg, None).unwrap();
+        assert!(Preset::exists(&folder, "first"));
+        p.rename("Second: take/2").unwrap();
+        assert_eq!(p.name(), "Second take2");
+        assert!(p.path.ends_with(format!("Second take2.{}", crate::PRESET_EXTENSION)));
+        assert!(!Preset::exists(&folder, "First") && Preset::exists(&folder, "Second take2"));
+        // renaming onto an existing preset is refused
+        let mut other = Preset::create(Preset::path_for(&folder, "Other"), "Other", &cfg, None).unwrap();
+        assert!(other.rename("Second take2").is_err());
+        assert!(other.rename("").is_err());
+        let reopened = Preset::open(&p.path).unwrap();
+        assert_eq!(reopened.name(), "Second take2");
+        p.delete().unwrap();
+        assert_eq!(Preset::list(&folder).len(), 1);
+        let _ = std::fs::remove_dir_all(&folder);
+    }
 
     #[test]
     fn create_open_apply() {
