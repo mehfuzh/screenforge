@@ -23,14 +23,24 @@ struct Params {
     rotation: f32,           // radians, clockwise, around pivot
     mirror: u32,
     stop_count: u32,
-    _pad: u32,
+    grade: u32,              // mode 1: 1 = run the camera grade below
     extra: vec4<f32>,        // per-mode scalars (see above)
     stops: array<vec4<f32>, 8>, // mode 2: rgb, position; mode 6: hole rects; mode 7: edge colour
+    // camera grade (Resolve style primaries, math units; see sf_render::CameraGrade)
+    grade_lift: vec4<f32>,
+    grade_gamma: vec4<f32>,  // exponents
+    grade_gain: vec4<f32>,
+    grade_offset: vec4<f32>,
+    grade_a: vec4<f32>,      // temperature, tint, contrast, pivot
+    grade_b: vec4<f32>,      // shadows, highlights, color boost, saturation
+    grade_c: vec4<f32>,      // hue turns, lut mix, grain, sharpen
+    grade_d: vec4<f32>,      // lut size, texel w, texel h, grain seed
 };
 
 @group(0) @binding(0) var<uniform> P: Params;
 @group(0) @binding(1) var tex: texture_2d<f32>;
 @group(0) @binding(2) var samp: sampler;
+@group(0) @binding(3) var lut: texture_3d<f32>;
 
 struct VsOut {
     @builtin(position) pos: vec4<f32>,
@@ -115,6 +125,77 @@ fn blurred(tuv: vec2<f32>, px: vec2<f32>) -> vec4<f32> {
     return acc / wsum;
 }
 
+fn luma(c: vec3<f32>) -> f32 {
+    return dot(c, vec3<f32>(0.2126, 0.7152, 0.0722));
+}
+
+// Hue rotation in YIQ (the chroma plane turns, luma stays).
+fn rotate_hue(c: vec3<f32>, turns: f32) -> vec3<f32> {
+    let to_yiq = mat3x3<f32>(vec3<f32>(0.299, 0.596, 0.211), vec3<f32>(0.587, -0.274, -0.523), vec3<f32>(0.114, -0.322, 0.312));
+    let to_rgb = mat3x3<f32>(vec3<f32>(1.0, 1.0, 1.0), vec3<f32>(0.956, -0.272, -1.106), vec3<f32>(0.621, -0.647, 1.703));
+    let yiq = to_yiq * c;
+    let a = turns * 6.28318530;
+    let ca = cos(a);
+    let sa = sin(a);
+    let r = vec3<f32>(yiq.x, ca * yiq.y - sa * yiq.z, sa * yiq.y + ca * yiq.z);
+    return to_rgb * r;
+}
+
+// Camera picture pipeline: sharpen → white balance → offset → lift → gamma → gain → contrast
+// (pivot) → shadows/highlights → color boost → saturation → hue → 3D LUT → grain.
+fn camera_grade(sample: vec3<f32>, tuv: vec2<f32>, px: vec2<f32>) -> vec3<f32> {
+    var c = sample;
+    // unsharp mask over the four neighbours
+    let sharpen = P.grade_c.w;
+    if (sharpen > 0.0) {
+        let d = P.grade_d.yz;
+        let n = textureSampleLevel(tex, samp, tuv + vec2<f32>(d.x, 0.0), 0.0).rgb
+              + textureSampleLevel(tex, samp, tuv - vec2<f32>(d.x, 0.0), 0.0).rgb
+              + textureSampleLevel(tex, samp, tuv + vec2<f32>(0.0, d.y), 0.0).rgb
+              + textureSampleLevel(tex, samp, tuv - vec2<f32>(0.0, d.y), 0.0).rgb;
+        c = c + (c - n * 0.25) * sharpen * 1.5;
+    }
+    // temperature (warm = +red −blue) and tint (magenta = −green)
+    let t = P.grade_a.x;
+    let m = P.grade_a.y;
+    c = c * vec3<f32>(1.0 + 0.25 * t + 0.12 * m, 1.0 - 0.2 * m, 1.0 - 0.25 * t + 0.12 * m);
+    // primaries wheels
+    c = c + P.grade_offset.rgb;
+    c = c + P.grade_lift.rgb * (1.0 - c);
+    c = pow(max(c, vec3<f32>(0.0)), P.grade_gamma.rgb);
+    c = c * P.grade_gain.rgb;
+    // contrast around the pivot
+    c = (c - vec3<f32>(P.grade_a.w)) * P.grade_a.z + vec3<f32>(P.grade_a.w);
+    // shadows / highlights: weighted by how dark / bright the pixel is
+    let y0 = clamp(luma(c), 0.0, 1.0);
+    c = c + vec3<f32>(P.grade_b.x * 0.3 * (1.0 - y0) * (1.0 - y0));
+    c = c + vec3<f32>(P.grade_b.y * 0.3 * y0 * y0);
+    // color boost (vibrance): the least saturated colours gain the most
+    let y1 = luma(c);
+    let sat = clamp(max(max(c.r, c.g), c.b) - min(min(c.r, c.g), c.b), 0.0, 1.0);
+    c = mix(vec3<f32>(y1), c, 1.0 + P.grade_b.z * (1.0 - sat));
+    // saturation
+    c = mix(vec3<f32>(luma(c)), c, P.grade_b.w);
+    // hue
+    if (P.grade_c.x != 0.0) {
+        c = rotate_hue(c, P.grade_c.x);
+    }
+    // 3D LUT
+    if (P.grade_c.y > 0.0) {
+        let n = P.grade_d.x;
+        let cl = clamp(c, vec3<f32>(0.0), vec3<f32>(1.0));
+        let uvw = cl * (n - 1.0) / n + vec3<f32>(0.5 / n);
+        let l = textureSampleLevel(lut, samp, uvw, 0.0).rgb;
+        c = mix(c, l, P.grade_c.y);
+    }
+    // grain: static per pixel, re-seeded per frame
+    if (P.grade_c.z > 0.0) {
+        let g = ign(px + vec2<f32>(P.grade_d.w * 17.0, P.grade_d.w * 29.0)) - 0.5;
+        c = c + vec3<f32>(g * P.grade_c.z * 0.18);
+    }
+    return clamp(c, vec3<f32>(0.0), vec3<f32>(1.0));
+}
+
 @fragment
 fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let center = P.dst.xy + P.dst.zw * 0.5;
@@ -185,6 +266,10 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     }
     // mode 1
     let s = textureSample(tex, samp, tuv);
+    var rgb = s.rgb;
+    if (P.grade == 1u) {
+        rgb = camera_grade(rgb, tuv, in.px);
+    }
     let a = coverage * P.alpha;
-    return vec4<f32>(s.rgb * a, a);
+    return vec4<f32>(rgb * a, a);
 }

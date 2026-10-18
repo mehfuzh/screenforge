@@ -67,6 +67,8 @@ pub struct Editor {
     pub transcribe: crate::captions::TranscribeJob,
     /// Crop tool open: the preview shows the whole recording with the crop frame over it.
     pub crop: Option<crate::crop::CropEditor>,
+    /// "Save preset as…", "Rename preset" or "Delete preset" dialog.
+    preset_dialog: Option<PresetDialog>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -122,6 +124,8 @@ impl Editor {
                 Ok("cursor") => Section::Cursor,
                 Ok("animations") => Section::Animations,
                 Ok("shortcuts") => Section::Shortcuts,
+                Ok("camera-layout") => Section::CameraLayout,
+                Ok("camera-style") => Section::CameraStyle,
                 _ => Section::General,
             },
             sidebar_open: true,
@@ -135,6 +139,7 @@ impl Editor {
             transcribe: Default::default(),
             // SF_START_CROP opens the crop tool straight away (for screenshots)
             crop: std::env::var_os("SF_START_CROP").map(|_| crop::CropEditor::new(session_crop)),
+            preset_dialog: None,
         }
     }
 
@@ -754,8 +759,105 @@ impl Editor {
         });
 
         self.export_modal(ctx);
+        self.preset_modal(ctx);
 
         go_home
+    }
+
+    /// Name prompt for "Save preset as…" / "Rename preset", and the delete confirmation.
+    fn preset_modal(&mut self, ctx: &egui::Context) {
+        let Some(mut dlg) = self.preset_dialog.take() else { return };
+        let pal = theme::p();
+        let frame = egui::Frame::NONE.fill(pal.bg).stroke(egui::Stroke::new(1.0, pal.border)).corner_radius(theme::RADIUS).inner_margin(egui::Margin::symmetric(22, 18)).shadow(ctx.global_style().visuals.window_shadow);
+        let mut done = false;
+        let resp = egui::Modal::new(egui::Id::new("preset_dialog")).frame(frame).show(ctx, |ui| {
+            ui.set_width(360.0);
+            let (title, verb) = match &dlg.action {
+                PresetAction::SaveAs => ("Save preset as", "Save"),
+                PresetAction::Rename(_) => ("Rename preset", "Rename"),
+                PresetAction::Delete(_) => ("Delete preset", "Delete"),
+            };
+            ui.label(RichText::new(title).size(17.0).color(pal.text));
+            ui.add_space(10.0);
+            let enter = ui.input(|i| i.key_pressed(egui::Key::Enter));
+            let escape = ui.input(|i| i.key_pressed(egui::Key::Escape));
+            if let PresetAction::Delete(path) = &dlg.action {
+                let name = path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+                crate::widgets::hint(ui, &format!("Delete “{name}”? The preset is removed from the presets folder; this cannot be undone."));
+            } else {
+                crate::widgets::hint(ui, "Presets keep every setting except the crop and are listed in the Presets menu of every project.");
+                ui.add_space(6.0);
+                let r = crate::widgets::text_field(ui, &mut dlg.name, "Preset name");
+                if !dlg.focused {
+                    r.request_focus();
+                    dlg.focused = true;
+                }
+            }
+            if let Some(e) = &dlg.error {
+                ui.add_space(4.0);
+                ui.label(RichText::new(e).size(13.0).color(pal.danger));
+            }
+            ui.add_space(14.0);
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                let confirm = crate::widgets::accent_button(ui, verb).clicked() || enter;
+                let cancel = crate::widgets::secondary_button(ui, "Cancel").clicked() || escape;
+                if confirm {
+                    match self.run_preset_action(&dlg) {
+                        Ok(msg) => {
+                            self.set_status(msg);
+                            done = true;
+                        }
+                        Err(e) => dlg.error = Some(e),
+                    }
+                } else if cancel {
+                    done = true;
+                }
+            });
+        });
+        if resp.backdrop_response.clicked() {
+            done = true;
+        }
+        if !done {
+            self.preset_dialog = Some(dlg);
+        }
+    }
+
+    /// Perform a preset dialog's action; the message is shown in the status line.
+    fn run_preset_action(&mut self, dlg: &PresetDialog) -> std::result::Result<String, String> {
+        let folder = sf_project::Preset::default_folder().ok_or("no home folder")?;
+        std::fs::create_dir_all(&folder).map_err(|e| e.to_string())?;
+        match &dlg.action {
+            PresetAction::SaveAs => {
+                let name = sf_project::preset::sanitize_preset_name(&dlg.name);
+                if name.is_empty() {
+                    return Err("Give the preset a name.".into());
+                }
+                if sf_project::Preset::exists(&folder, &name) {
+                    return Err(format!("A preset called “{name}” already exists."));
+                }
+                let assets = self.session.pkg.path.join("assets");
+                sf_project::Preset::create(sf_project::Preset::path_for(&folder, &name), &name, &self.session.pkg.project.config, assets.is_dir().then_some(assets.as_path())).map_err(|e| e.to_string())?;
+                Ok(format!("Saved preset {name}"))
+            }
+            PresetAction::Rename(path) => {
+                let mut p = sf_project::Preset::open(path).map_err(|e| e.to_string())?;
+                let name = sf_project::preset::sanitize_preset_name(&dlg.name);
+                if name.is_empty() {
+                    return Err("Give the preset a name.".into());
+                }
+                if !name.eq_ignore_ascii_case(&p.name()) && sf_project::Preset::exists(&folder, &name) {
+                    return Err(format!("A preset called “{name}” already exists."));
+                }
+                p.rename(&name).map_err(|e| e.to_string())?;
+                Ok(format!("Renamed preset to {name}"))
+            }
+            PresetAction::Delete(path) => {
+                let p = sf_project::Preset::open(path).map_err(|e| e.to_string())?;
+                let name = p.name();
+                p.delete().map_err(|e| e.to_string())?;
+                Ok(format!("Deleted preset {name}"))
+            }
+        }
     }
 
     /// Export dialog over the dimmed editor, like Screen Studio's: settings first, then the
@@ -819,35 +921,40 @@ impl Editor {
     }
 
     fn presets_menu(&mut self, ui: &mut egui::Ui) {
-        ui.set_min_width(260.0);
+        const MENU_W: f32 = 232.0;
+        ui.set_width(MENU_W);
+        ui.spacing_mut().item_spacing.y = 2.0;
         let folder = sf_project::Preset::default_folder();
         let presets = folder.as_ref().map(|f| sf_project::Preset::list(f)).unwrap_or_default();
         if presets.is_empty() {
             ui.label(RichText::new("No presets yet").color(theme::p().text_dim));
         }
         for p in presets {
-            if ui.button(p.name()).clicked() {
-                let dir = self.session.pkg.path.clone();
-                let pr = p.clone();
-                self.edit(move |proj| {
-                    let _ = pr.apply(proj, &dir);
-                });
-                self.set_status(format!("Applied preset {}", p.name()));
-                ui.close();
+            // a plain list row: the name applies the preset; rename / delete icons show on hover
+            match preset_row(ui, &p.name(), MENU_W) {
+                PresetRowAction::None => {}
+                PresetRowAction::Apply => {
+                    let dir = self.session.pkg.path.clone();
+                    let pr = p.clone();
+                    self.edit(move |proj| {
+                        let _ = pr.apply(proj, &dir);
+                    });
+                    self.set_status(format!("Applied preset {}", p.name()));
+                    ui.close();
+                }
+                PresetRowAction::Rename => {
+                    self.preset_dialog = Some(PresetDialog::new(PresetAction::Rename(p.path.clone()), p.name()));
+                    ui.close();
+                }
+                PresetRowAction::Delete => {
+                    self.preset_dialog = Some(PresetDialog::new(PresetAction::Delete(p.path.clone()), p.name()));
+                    ui.close();
+                }
             }
         }
         ui.separator();
-        if ui.button("Create new preset…").clicked() {
-            if let Some(folder) = folder {
-                let _ = std::fs::create_dir_all(&folder);
-                let name = format!("Preset {}", chrono_like_stamp());
-                let out = folder.join(format!("{name}.{}", sf_project::PRESET_EXTENSION));
-                let assets = self.session.pkg.path.join("assets");
-                match sf_project::Preset::create(&out, &name, &self.session.pkg.project.config, assets.is_dir().then_some(assets.as_path())) {
-                    Ok(_) => self.set_status(format!("Saved {name}")),
-                    Err(e) => self.set_status(format!("Preset failed: {e}")),
-                }
-            }
+        if ui.button("Save preset as…").clicked() {
+            self.preset_dialog = Some(PresetDialog::new(PresetAction::SaveAs, format!("Preset {}", chrono_like_stamp())));
             ui.close();
         }
         if ui.button("Open presets folder").clicked() {
@@ -1019,6 +1126,71 @@ pub fn fmt_clock(ms: f64) -> String {
     let m = (total / 60.0).floor() as u32;
     let s = total - m as f64 * 60.0;
     format!("{m}:{s:05.2}")
+}
+
+enum PresetRowAction {
+    None,
+    Apply,
+    Rename,
+    Delete,
+}
+
+/// One preset in the Presets menu: a full-width list row (name on the left) that applies the
+/// preset when clicked, with pencil and trash icons appearing at the right edge on hover.
+fn preset_row(ui: &mut egui::Ui, name: &str, width: f32) -> PresetRowAction {
+    use crate::widgets::{paint_icon, Icon};
+    let (rect, row) = ui.allocate_exact_size(vec2(width, 26.0), Sense::click());
+    let pal = theme::p();
+    let icon = 14.0;
+    let delete_rect = Rect::from_center_size(pos2(rect.right() - 14.0, rect.center().y), vec2(icon + 8.0, icon + 8.0));
+    let rename_rect = delete_rect.translate(vec2(-(icon + 12.0), 0.0));
+    let delete = ui.interact(delete_rect, row.id.with("delete"), Sense::click());
+    let rename = ui.interact(rename_rect, row.id.with("rename"), Sense::click());
+    let hovered = row.hovered() || delete.hovered() || rename.hovered();
+    if hovered {
+        ui.painter().rect_filled(rect, CornerRadius::same(4), pal.card_2);
+    }
+    let text_w = if hovered { rename_rect.left() - rect.left() - 16.0 } else { rect.width() - 16.0 };
+    let galley = ui.painter().layout(name.to_string(), FontId::proportional(14.0), pal.text, text_w.max(20.0));
+    let galley = if galley.rows.len() > 1 { ui.painter().layout_no_wrap(format!("{}…", name.chars().take(28).collect::<String>()), FontId::proportional(14.0), pal.text) } else { galley };
+    ui.painter().galley(pos2(rect.left() + 8.0, rect.center().y - galley.size().y / 2.0), galley, pal.text);
+    if hovered {
+        for (r, ic, resp) in [(rename_rect, Icon::Pencil, &rename), (delete_rect, Icon::Trash, &delete)] {
+            let color = if resp.hovered() { pal.text } else { pal.text_dim };
+            paint_icon(ui.painter(), Rect::from_center_size(r.center(), vec2(icon, icon)), ic, color);
+        }
+    }
+    let _ = rename.clone().on_hover_text("Rename this preset");
+    let _ = delete.clone().on_hover_text("Delete this preset");
+    if delete.clicked() {
+        PresetRowAction::Delete
+    } else if rename.clicked() {
+        PresetRowAction::Rename
+    } else if row.clicked() {
+        PresetRowAction::Apply
+    } else {
+        PresetRowAction::None
+    }
+}
+
+/// What the preset dialog does when confirmed.
+enum PresetAction {
+    SaveAs,
+    Rename(PathBuf),
+    Delete(PathBuf),
+}
+
+struct PresetDialog {
+    action: PresetAction,
+    name: String,
+    error: Option<String>,
+    focused: bool,
+}
+
+impl PresetDialog {
+    fn new(action: PresetAction, name: String) -> Self {
+        PresetDialog { action, name, error: None, focused: false }
+    }
 }
 
 fn chrono_like_stamp() -> String {

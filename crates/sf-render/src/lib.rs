@@ -7,10 +7,12 @@
 //! or shown in egui.
 
 pub mod gpu;
+pub mod lut;
 pub mod texture;
 pub mod text;
 
 pub use gpu::Gpu;
+pub use lut::{CubeLut, LutTexture};
 pub use texture::Texture;
 
 use sf_project::schema::common::Rect;
@@ -109,6 +111,109 @@ pub struct CameraLayer {
     pub corner_radius: f32,
     pub mirror: bool,
     pub shadow: Option<ShadowLayer>,
+    /// Picture processing (Resolve style primaries, LUT, sharpen, grain); `None` = untouched.
+    pub grade: Option<CameraGrade>,
+    /// 3D LUT applied by `grade.lut_mix` (ignored when `grade` is `None`).
+    pub lut: Option<std::sync::Arc<LutTexture>>,
+}
+
+/// Per-pixel camera processing, in math units ready for the shader. Built from the project's
+/// Resolve-style [`sf_project::v4::ColorGrade`] with [`CameraGrade::from_config`].
+///
+/// Order of operations (`composite.wgsl`): sharpen → temperature/tint → offset → lift → gamma
+/// → gain → contrast around the pivot → shadows/highlights → color boost → saturation → hue →
+/// 3D LUT (mixed by `lut_mix`) → grain.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CameraGrade {
+    /// Added to the signal, scaled by `1 − signal` (raises blacks, pins white).
+    pub lift: [f32; 3],
+    /// Per-channel exponents (`1` = unity).
+    pub gamma_exp: [f32; 3],
+    /// Per-channel multipliers (`1` = unity).
+    pub gain: [f32; 3],
+    /// Added to every channel.
+    pub offset: [f32; 3],
+    /// −1 … 1 (warm).
+    pub temperature: f32,
+    /// −1 … 1 (magenta).
+    pub tint: f32,
+    pub contrast: f32,
+    pub pivot: f32,
+    /// −1 … 1.
+    pub shadows: f32,
+    /// −1 … 1.
+    pub highlights: f32,
+    /// −1 … 1.
+    pub color_boost: f32,
+    /// Multiplier, `1` = unity.
+    pub saturation: f32,
+    /// Hue rotation in turns (−0.5 … 0.5).
+    pub hue_turns: f32,
+    /// 0 … 1 blend toward the LUT output.
+    pub lut_mix: f32,
+    /// 0 … 1.
+    pub grain: f32,
+    /// 0 … 1.
+    pub sharpen: f32,
+    /// Changes the grain pattern per frame.
+    pub seed: f32,
+}
+
+impl CameraGrade {
+    pub const NEUTRAL: CameraGrade = CameraGrade {
+        lift: [0.0; 3],
+        gamma_exp: [1.0; 3],
+        gain: [1.0; 3],
+        offset: [0.0; 3],
+        temperature: 0.0,
+        tint: 0.0,
+        contrast: 1.0,
+        pivot: 0.435,
+        shadows: 0.0,
+        highlights: 0.0,
+        color_boost: 0.0,
+        saturation: 1.0,
+        hue_turns: 0.0,
+        lut_mix: 0.0,
+        grain: 0.0,
+        sharpen: 0.0,
+        seed: 0.0,
+    };
+
+    /// Convert Resolve display units. `lut_mix` is `config.camera.lutIntensity` when a LUT is
+    /// bound (pass 0 otherwise); `grain`/`sharpen` are `config.camera.grain`/`sharpen01`.
+    pub fn from_config(g: &sf_project::v4::ColorGrade, lut_mix: f64, grain: f64, sharpen: f64, seed: f32) -> CameraGrade {
+        let f3 = |v: [f64; 3]| [v[0] as f32, v[1] as f32, v[2] as f32];
+        let gamma = g.gamma_rgb();
+        let gamma_exp = |v: f64| -> f32 {
+            // +γ brightens midtones (exponent < 1), −γ darkens; the same slope either side of 0
+            let v = v.clamp(-4.0, 4.0);
+            (if v >= 0.0 { 1.0 / (1.0 + v) } else { 1.0 - v }) as f32
+        };
+        CameraGrade {
+            lift: f3(g.lift_rgb()).map(|v| v.clamp(-1.0, 1.0)),
+            gamma_exp: [gamma_exp(gamma[0]), gamma_exp(gamma[1]), gamma_exp(gamma[2])],
+            gain: f3(g.gain_rgb()).map(|v| v.clamp(0.0, 4.0)),
+            offset: f3(g.offset_rgb()).map(|v| v.clamp(-1.0, 1.0)),
+            temperature: (g.temperature / 100.0).clamp(-1.0, 1.0) as f32,
+            tint: (g.tint / 100.0).clamp(-1.0, 1.0) as f32,
+            contrast: g.contrast.clamp(0.0, 4.0) as f32,
+            pivot: g.pivot.clamp(0.0, 1.0) as f32,
+            shadows: (g.shadows / 100.0).clamp(-1.0, 1.0) as f32,
+            highlights: (g.highlights / 100.0).clamp(-1.0, 1.0) as f32,
+            color_boost: (g.color_boost / 100.0).clamp(-1.0, 1.0) as f32,
+            saturation: (g.saturation / 50.0).clamp(0.0, 4.0) as f32,
+            hue_turns: ((g.hue - 50.0) / 100.0).clamp(-0.5, 0.5) as f32,
+            lut_mix: lut_mix.clamp(0.0, 1.0) as f32,
+            grain: grain.clamp(0.0, 1.0) as f32,
+            sharpen: sharpen.clamp(0.0, 1.0) as f32,
+            seed,
+        }
+    }
+
+    pub fn is_neutral(&self) -> bool {
+        CameraGrade { seed: self.seed, ..Self::NEUTRAL } == *self
+    }
 }
 
 #[derive(Debug, Clone)]

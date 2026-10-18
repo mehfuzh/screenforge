@@ -12,6 +12,7 @@ pub mod assets;
 pub mod captions;
 pub mod create;
 pub mod preview;
+pub mod face;
 pub mod layout;
 pub mod shortcuts;
 pub mod source;
@@ -31,7 +32,7 @@ use sf_media::Frame;
 use sf_project::schema::common::Rect;
 use sf_project::v4::{ClickEffect, Mask};
 use sf_project::ProjectPackage;
-use sf_render::{BackgroundLayer, CameraLayer, Color, FrameDesc, Gpu, Layer, MaskLayer, RingLayer, ScreenLayer, ShadowLayer, SpriteLayer, Texture};
+use sf_render::{BackgroundLayer, CameraGrade, CameraLayer, Color, FrameDesc, Gpu, Layer, LutTexture, MaskLayer, RingLayer, ScreenLayer, ShadowLayer, SpriteLayer, Texture};
 
 use crate::layout::{CameraSlot, ResolvedLayout};
 pub use source::SourceInfo;
@@ -71,6 +72,10 @@ pub struct Session {
     /// Animated webcam rect (stage units: x, y, w, h).
     camera_rect: SpringVec<4>,
     camera_rect_initialised: bool,
+    /// Face tracking for the webcam window (`config.camera.enableFaceTracking`).
+    pub face_tracker: face::FaceTracker,
+    /// The camera LUT (`config.camera.lut`) as uploaded, keyed by name; `None` inside = failed to load.
+    lut_tex: Option<(String, Option<Arc<LutTexture>>)>,
     last_output_ms: Option<f64>,
     /// Decode width cap for previews (None = native).
     pub decode_max_width: Option<u32>,
@@ -113,6 +118,8 @@ impl Session {
             cursor_smoother,
             camera_rect,
             camera_rect_initialised: false,
+            face_tracker: face::FaceTracker::new(),
+            lut_tex: None,
             last_output_ms: None,
             decode_max_width: None,
             decode_speed: 1.0,
@@ -382,14 +389,28 @@ impl Session {
                 self.camera_rect.step(t, dt)
             };
             let dst = Rect { x: cam[0] * s, y: cam[1] * s, width: cam[2] * s, height: cam[3] * s };
+            let lut = self.camera_lut(cfg.camera.lut.as_deref());
             if let Some(stream) = &self.camera_stream {
                 let tex = stream.texture.clone();
                 let crop01 = cfg.camera.crop01.unwrap_or(Rect::UNIT);
-                let src_aspect = (tex.width as f64 * crop01.width) / (tex.height as f64 * crop01.height).max(1e-6);
-                let src01 = layout::cover_crop(crop01, src_aspect, dst.width / dst.height.max(1e-6));
+                let dst_aspect = dst.width / dst.height.max(1e-6);
+                let tex_aspect = tex.width as f64 / tex.height.max(1) as f64;
+                let src01 = if cfg.camera.enable_face_tracking {
+                    if let Some(f) = stream.frame() {
+                        self.face_tracker.observe(&f.data, f.width, f.height, f.format == sf_media::PixelFormat::Bgra8, f.pts_ms, source_ms);
+                    }
+                    self.face_tracker.window(source_ms, dt, crossed_cut, crop01, dst_aspect, tex_aspect, cfg.camera.face_tracking_zoom())
+                } else {
+                    let src_aspect = (tex.width as f64 * crop01.width) / (tex.height as f64 * crop01.height).max(1e-6);
+                    layout::cover_crop(crop01, src_aspect, dst_aspect)
+                };
                 let fullscreen = matches!(frame.camera, CameraSlot::Fixed(r) if r == geo.stage);
                 let radius = if fullscreen { 0.0 } else { (cfg.styles.camera_border_radius_ratio01.clamp(0.0, 0.5) * dst.width.min(dst.height)) as f32 };
-                layers.push(Layer::Camera(CameraLayer { texture: tex, src01, dst, corner_radius: radius, mirror: cfg.camera.mirror, shadow: if fullscreen { None } else { shadow } }));
+                // grain changes pattern per camera frame (30 fps), not per output frame
+                let seed = ((source_ms / (1000.0 / 30.0)).floor() % 997.0) as f32;
+                let grade = CameraGrade::from_config(&cfg.camera.grade(), if lut.is_some() { cfg.camera.lut_intensity } else { 0.0 }, cfg.camera.grain, cfg.camera.sharpen01, seed);
+                let grade = (!grade.is_neutral()).then_some(grade);
+                layers.push(Layer::Camera(CameraLayer { texture: tex, src01, dst, corner_radius: radius, mirror: cfg.camera.mirror, shadow: if fullscreen { None } else { shadow }, grade, lut }));
             }
         } else {
             self.camera_rect_initialised = false;
@@ -419,6 +440,37 @@ impl Session {
         self.shortcuts.push_layer(&self.pkg, &self.gpu, source_ms, out.width, out.height, &mut layers);
 
         Ok(FrameDesc { width: out.width, height: out.height, background: self.background_layer(), layers })
+    }
+
+    /// The camera LUT named by `config.camera.lut`: the project's `assets/` first (imported
+    /// `.cube` files), then the bundled looks (`assets/luts/`). Uploaded once per name.
+    fn camera_lut(&mut self, name: Option<&str>) -> Option<Arc<LutTexture>> {
+        let name = name?.trim();
+        if name.is_empty() {
+            return None;
+        }
+        if let Some((n, t)) = &self.lut_tex {
+            if n == name {
+                return t.clone();
+            }
+        }
+        let local = self.pkg.path.join("assets").join(name.rsplit('/').next().unwrap_or(name));
+        let path = if local.is_file() { Some(local) } else { self.assets.lut(name) };
+        let tex = match path {
+            Some(p) => match sf_render::CubeLut::load(&p) {
+                Ok(lut) => Some(LutTexture::upload(&self.gpu.device, &self.gpu.queue, &lut, &p.display().to_string())),
+                Err(e) => {
+                    tracing::warn!("camera LUT {name:?}: {e:#}");
+                    None
+                }
+            },
+            None => {
+                tracing::warn!("camera LUT {name:?} not found");
+                None
+            }
+        };
+        self.lut_tex = Some((name.to_string(), tex.clone()));
+        tex
     }
 
     /// Canvas for the whole, uncropped recording at a given height (the crop editor's picture).

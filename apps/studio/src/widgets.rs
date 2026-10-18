@@ -27,7 +27,7 @@ pub fn roadmap<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
 }
 
 pub fn hint(ui: &mut Ui, text: &str) {
-    ui.label(RichText::new(text).size(13.0).color(theme::p().text_dim));
+    ui.add(egui::Label::new(RichText::new(text).size(13.0).color(theme::p().text_dim)).wrap());
 }
 
 /// A row of mutually exclusive buttons. Returns the newly selected index if it changed.
@@ -271,6 +271,7 @@ pub enum Icon {
     DeviceFrame,
     Folder,
     Trash,
+    Pencil,
     Gear,
     Command,
     Waveform,
@@ -481,6 +482,15 @@ pub fn paint_icon(p: &egui::Painter, rect: Rect, icon: Icon, color: Color32) {
             line((-0.2, -0.3), (-0.2, 0.55));
             line((0.2, -0.3), (0.2, 0.55));
         }
+        Icon::Pencil => {
+            // slanted pencil body with a tip at the lower left
+            line((-0.75, 0.75), (-0.55, 0.2));
+            line((-0.55, 0.2), (0.45, -0.8));
+            line((0.45, -0.8), (0.8, -0.45));
+            line((0.8, -0.45), (-0.2, 0.55));
+            line((-0.2, 0.55), (-0.75, 0.75));
+            line((-0.35, 0.0), (0.0, 0.35));
+        }
         Icon::Gear => {
             p.circle_stroke(c, 0.35 * r, s);
             for i in 0..8 {
@@ -554,5 +564,69 @@ pub fn icon_text_button(ui: &mut Ui, icon: Option<Icon>, text: &str, chevron: bo
     if chevron {
         paint_icon(p, Rect::from_center_size(pos2(rect.right() - 14.0, rect.center().y), vec2(10.0, 10.0)), Icon::ChevronDown, theme::p().text_dim);
     }
+    resp
+}
+
+/// A DaVinci Resolve style colour wheel: a hue disc whose puck sets a zero-sum `[r, g, b]`
+/// chroma offset (±0.5 at the rim, red at twelve o'clock, hue clockwise). Drag to move the
+/// puck, double-click to centre it. Returns the disc's response (`changed()` when `rgb` moved).
+pub fn color_wheel(ui: &mut Ui, rgb: &mut [f64; 3], diameter: f32) -> Response {
+    let (rect, mut resp) = ui.allocate_exact_size(vec2(diameter, diameter), Sense::click_and_drag());
+    let c = rect.center();
+    let radius = diameter / 2.0 - 1.0;
+    // chroma basis: red up, green at +120°, blue at +240° (clockwise, y down)
+    let dir = |deg: f32| {
+        let a = (deg - 90.0).to_radians();
+        vec2(a.cos(), a.sin())
+    };
+    let (dr, dg, db) = (dir(0.0), dir(120.0), dir(240.0));
+    if resp.double_clicked() {
+        if *rgb != [0.0; 3] {
+            *rgb = [0.0; 3];
+            resp.mark_changed();
+        }
+    } else if resp.dragged() || resp.clicked() {
+        if let Some(pos) = resp.interact_pointer_pos() {
+            let mut v = (pos - c) / radius;
+            if v.length() > 1.0 {
+                v = v.normalized();
+            }
+            // rim = magnitude 0.5; c_i = m·cos(angle − φ_i)
+            let m = v.length() as f64 * 0.5;
+            let next = if m < 1e-4 {
+                [0.0; 3]
+            } else {
+                let u = v.normalized();
+                [m * u.dot(dr) as f64, m * u.dot(dg) as f64, m * u.dot(db) as f64]
+            };
+            if next != *rgb {
+                *rgb = next;
+                resp.mark_changed();
+            }
+        }
+    }
+    let painter = ui.painter();
+    // hue disc: neutral centre, saturated rim
+    let segments = 48;
+    let mut mesh = egui::epaint::Mesh::default();
+    mesh.vertices.push(egui::epaint::Vertex { pos: c, uv: egui::epaint::WHITE_UV, color: theme::p().card_3 });
+    for i in 0..=segments {
+        let t = i as f32 / segments as f32;
+        let a = (t * 360.0 - 90.0).to_radians();
+        let color: Color32 = egui::ecolor::Hsva::new(t, 0.65, if theme::is_dark() { 0.85 } else { 0.95 }, 1.0).into();
+        mesh.vertices.push(egui::epaint::Vertex { pos: pos2(c.x + a.cos() * radius, c.y + a.sin() * radius), uv: egui::epaint::WHITE_UV, color });
+    }
+    for i in 0..segments {
+        mesh.indices.extend_from_slice(&[0, i as u32 + 1, i as u32 + 2]);
+    }
+    painter.add(egui::Shape::mesh(mesh));
+    painter.circle_stroke(c, radius, Stroke::new(1.0, theme::p().border));
+    // crosshair and puck: p = 4/3 Σ c_i d_i (rim = 1)
+    let p = (dr * rgb[0] as f32 + dg * rgb[1] as f32 + db * rgb[2] as f32) * (4.0 / 3.0);
+    let p = if p.length() > 1.0 { p.normalized() } else { p };
+    let puck = c + p * radius;
+    painter.line_segment([pos2(c.x - 4.0, c.y), pos2(c.x + 4.0, c.y)], Stroke::new(1.0, theme::p().text_faint));
+    painter.line_segment([pos2(c.x, c.y - 4.0), pos2(c.x, c.y + 4.0)], Stroke::new(1.0, theme::p().text_faint));
+    painter.circle(puck, 4.5, theme::p().bg, Stroke::new(1.5, theme::p().text));
     resp
 }

@@ -1,0 +1,15 @@
+[package]
+name = "sf-vision"
+description = "On-device computer vision for the camera feed: face detection (SeetaFace via rustface)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+rustface = { version = "0.1.7", default-features = false }
+anyhow.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+image.workspace = true

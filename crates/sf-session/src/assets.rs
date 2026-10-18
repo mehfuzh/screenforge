@@ -87,6 +87,28 @@ impl Assets {
         self.find(&format!("sounds/clicks/{set}/{kind}.wav")).or_else(|| self.find(&format!("sounds/clicks/{set}/{kind}.mp3")))
     }
 
+    /// `luts/<name>` (`.cube`; the extension may be left off).
+    pub fn lut(&self, name: &str) -> Option<PathBuf> {
+        self.find(&format!("luts/{name}")).or_else(|| self.find(&format!("luts/{name}.cube")))
+    }
+
+    /// Bundled looks: file names under `luts/` (with extension), sorted.
+    pub fn list_luts(&self) -> Vec<String> {
+        let mut out: Vec<String> = vec![];
+        for r in &self.roots {
+            if let Ok(files) = std::fs::read_dir(r.join("luts")) {
+                for f in files.flatten() {
+                    let name = f.file_name().to_string_lossy().into_owned();
+                    if name.to_ascii_lowercase().ends_with(".cube") && !out.contains(&name) {
+                        out.push(name);
+                    }
+                }
+            }
+        }
+        out.sort();
+        out
+    }
+
     pub fn list_backgrounds(&self) -> Vec<String> {
         let mut out = vec![];
         for r in &self.roots {
