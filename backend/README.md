@@ -1,8 +1,8 @@
 # ScreenForge license backend (Supabase + Stripe)
 
-Recording and editing are free; **export needs a license**: a one-time US$29 lifetime key.
-(A US$10/month subscription was sold until 14 October 2026; `create-checkout` now refuses
-`plan: "monthly"`, while `stripe-webhook` keeps renewing the subscriptions that exist.)
+Recording and editing are free; **export needs a license**: a one-time US$49 lifetime key.
+(A US$10/month subscription was offered until 14 October 2026 and never sold; `create-checkout` refuses
+`plan: "monthly"`, `setup.sh` archives the Stripe price, and `stripe-webhook` would still renew a legacy subscription if one existed.)
 
 Keys are Ed25519-signed tokens the app verifies **offline** against the public key embedded in `crates/sf-license` — the private key only ever lives here as a Supabase
 secret, so the public GitHub repo exposes nothing sensitive.
@@ -23,9 +23,8 @@ manual steps, for reference:
 
 1. `cargo run -p sf-cli -- license keygen` → put `SF_LICENSE_SIGNING_KEY` in Supabase secrets and
    paste `ISSUER_PUBLIC_KEY_B64` into `crates/sf-license/src/lib.rs`.
-2. Stripe: create a product with a one-time US$29 price; set `STRIPE_SECRET_KEY`,
-   `STRIPE_WEBHOOK_SECRET`, `STRIPE_PRICE_LIFETIME` (`STRIPE_PRICE_MONTHLY` only matters for the
-   legacy subscriptions, which `setup.sh` still creates the price for).
+2. Stripe: create a product with a one-time US$49 price (`setup.sh` does this; `update-price.sh <cents>` changes the price later, Stripe and Supabase in one go); set `STRIPE_SECRET_KEY`,
+   `STRIPE_WEBHOOK_SECRET`, `STRIPE_PRICE_LIFETIME`.
 3. Resend: `RESEND_API_KEY`, `LICENSE_FROM_EMAIL`.
 4. `supabase db push && supabase functions deploy create-checkout stripe-webhook license-refresh`
 5. Point `PURCHASE_URL` in `crates/sf-license` at your checkout page (or the `create-checkout` URL).

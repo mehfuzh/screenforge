@@ -1,5 +1,5 @@
 //! License keys gate video export. Recording and editing are free and open source; a key
-//! (US$29 once, lifetime) is checked offline against the embedded Ed25519 public key.
+//! (US$49 once, lifetime) is checked offline against the embedded Ed25519 public key.
 //!
 //! Key format: `SF1.<base64url payload>.<base64url signature>`, payload JSON:
 //! `{ "email": "...", "plan": "monthly" | "lifetime", "expires": "2026-11-12" | null, "issued": "2026-10-12" }`
@@ -18,8 +18,8 @@ use serde::{Deserialize, Serialize};
 /// `sf license keygen` prints a matching pair).
 pub const ISSUER_PUBLIC_KEY_B64: &str = "fq9T9G8fJeZSPJtnjCsgO1V0BzXYds8UxAqAEjir4CM";
 
-pub const PRICE_LABEL: &str = "US$29 once";
-pub const PRICE_LIFETIME: &str = "US$29 once";
+pub const PRICE_LABEL: &str = "US$49 once";
+pub const PRICE_LIFETIME: &str = "US$49 once";
 pub const PURCHASE_URL: &str = "https://screenforge.studio/pricing.html";
 
 /// Supabase project hosting the edge functions in `backend/` (see backend/README.md).
