@@ -461,11 +461,23 @@ fn cursor_ui(ed: &mut Editor, ui: &mut egui::Ui) {
     }
     cfg_slider(ed, ui, "Cursor size", |p| p.config.cursor.size, |p, v| p.config.cursor.size = v, 16.0..=128.0, Some(48.0), "");
     widgets::title(ui, "Cursor style");
-    let sets = ["macos-tahoe", "macos", "touch"];
+    // tiles: the recorded pointer (what is drawn today) and the bundled sets
+    let system = if cfg!(target_os = "windows") { "Windows" } else if cfg!(target_os = "linux") { "Linux" } else { "macOS Tahoe" };
+    let sets: [(&str, &str); 3] = [("macos-tahoe", system), ("macos", "macOS"), ("touch", "Touch")];
     let cur = ed.session.pkg.project.config.cursor.set.id.clone();
-    let idx = sets.iter().position(|s| *s == cur).unwrap_or(0);
-    if let Some(i) = widgets::segmented(ui, idx, &["macOS Tahoe", "macOS", "Touch"]) {
-        let id = sets[i].to_string();
+    let idx = sets.iter().position(|(s, _)| *s == cur).unwrap_or(0);
+    let arrow = ed.session.pkg.recording_dir().join("cursors").join("arrow.png");
+    let mut pick = None;
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 8.0;
+        for (i, (id, label)) in sets.iter().enumerate() {
+            let preview = if *id == "touch" { CursorPreview::Touch } else if i == 0 && arrow.is_file() { CursorPreview::Image(&arrow) } else { CursorPreview::Arrow };
+            if cursor_tile(ui, preview, label, i == idx).clicked() {
+                pick = Some(id.to_string());
+            }
+        }
+    });
+    if let Some(id) = pick {
         ed.edit(move |p| p.config.cursor.set.id = id);
     }
     widgets::hint(ui, "The recorded cursor sprites are used; cursor sets need the assets folder.");
@@ -1097,6 +1109,46 @@ fn hsl_to_rgb(h: f64, s: f64, l: f64) -> (u8, u8, u8) {
     (((r + m) * 255.0) as u8, ((g + m) * 255.0) as u8, ((b + m) * 255.0) as u8)
 }
 
+
+enum CursorPreview<'a> {
+    /// The recorded pointer image.
+    Image(&'a std::path::Path),
+    /// A drawn arrow (bundled set not available).
+    Arrow,
+    /// A fingertip (touch set).
+    Touch,
+}
+
+/// A cursor-style tile: a preview of the pointer above its label.
+fn cursor_tile(ui: &mut egui::Ui, preview: CursorPreview<'_>, label: &str, selected: bool) -> egui::Response {
+    let size = egui::vec2(72.0, 66.0);
+    let (rect, resp) = ui.allocate_exact_size(size, egui::Sense::click());
+    let pal = theme::p();
+    let fill = if selected { pal.card_3 } else if resp.hovered() { pal.card_2 } else { pal.card };
+    let stroke = if selected { egui::Stroke::new(1.5, pal.accent) } else { egui::Stroke::new(1.0, pal.border) };
+    ui.painter().rect(rect, egui::CornerRadius::same(widgets::BUTTON_RADIUS), fill, stroke, egui::StrokeKind::Inside);
+    let icon = egui::Rect::from_center_size(egui::pos2(rect.center().x, rect.top() + 26.0), egui::vec2(28.0, 28.0));
+    match preview {
+        CursorPreview::Image(p) => {
+            let uri = crate::os::texture_uri(p);
+            if let Ok(egui::load::TexturePoll::Ready { texture }) = ui.ctx().try_load_texture(&uri, egui::TextureOptions::LINEAR, egui::load::SizeHint::Size { width: 64, height: 64, maintain_aspect_ratio: true }) {
+                let (w, h) = (texture.size.x.max(1.0), texture.size.y.max(1.0));
+                let s = (icon.width() / w).min(icon.height() / h);
+                let r = egui::Rect::from_center_size(icon.center(), egui::vec2(w * s, h * s));
+                ui.painter().image(texture.id, r, egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)), egui::Color32::WHITE);
+            } else {
+                widgets::paint_icon(ui.painter(), icon.shrink(4.0), widgets::Icon::Cursor, pal.text);
+            }
+        }
+        CursorPreview::Arrow => widgets::paint_icon(ui.painter(), icon.shrink(4.0), widgets::Icon::Cursor, pal.text),
+        CursorPreview::Touch => {
+            ui.painter().circle(icon.center(), 9.0, pal.text.gamma_multiply(0.25), egui::Stroke::new(2.0, pal.text));
+            ui.painter().circle_filled(icon.center(), 3.5, pal.text);
+        }
+    }
+    ui.painter().text(egui::pos2(rect.center().x, rect.bottom() - 11.0), egui::Align2::CENTER_CENTER, label, egui::FontId::proportional(11.0), if selected { pal.text } else { pal.text_dim });
+    resp
+}
 
 /// A square, centre-cropped wallpaper thumbnail.
 fn wallpaper_tile(ui: &mut egui::Ui, path: Option<&std::path::Path>, name: &str, size: f32, selected: bool) -> egui::Response {

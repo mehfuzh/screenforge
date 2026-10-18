@@ -233,7 +233,7 @@ impl App {
     fn update_window_shape(&mut self, ctx: &egui::Context) {
         let Some(shape) = self.window_shape.as_mut() else { return };
         let base = match &self.screen {
-            Screen::Picker(p) if self.window_mode == WindowMode::Picker => Some((p.bar_rect, p.recent_rect, crate::picker::PILL_RADIUS)),
+            Screen::Picker(p) if self.window_mode == WindowMode::Picker => Some((p.bar_rect, if p.show_recent { p.recent_rect } else { egui::Rect::NOTHING }, crate::picker::PILL_RADIUS)),
             Screen::Recording(r) if self.window_mode == WindowMode::Picker => Some((r.hud_rect, egui::Rect::NOTHING, crate::picker::PILL_RADIUS)),
             _ => None,
         };
