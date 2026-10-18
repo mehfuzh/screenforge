@@ -235,7 +235,7 @@
   .plans > * { display: flex; flex-direction: column; }
   .plans > * .foot { margin-top: auto; padding-top: 14px; }
   @media (max-width: 860px) { .plans { grid-template-columns: minmax(0, 1fr); gap: 36px; } }
-  .plan { border: 1px solid var(--jade-deep); background: var(--panel); padding: 28px 28px 30px; }
+  .plan { border: 1px solid var(--jade); background: var(--panel); padding: 28px 28px 30px; }
   .plan .name {
     font-family: var(--mono); font-size: 11.5px; letter-spacing: .14em;
     text-transform: uppercase; color: var(--jade); margin-bottom: 16px;
@@ -249,6 +249,8 @@
   .plan ul { list-style: none; margin: 0 0 24px; }
   .plan li { font-size: 14.5px; margin-bottom: 9px; padding-left: 20px; position: relative; }
   .plan li::before { content: "▪"; position: absolute; left: 0; color: var(--jade); }
+  .plan li a, .faq p a { color: var(--jade); border-bottom: 1px solid color-mix(in srgb, var(--jade) 35%, transparent); }
+  .plan li a:hover, .faq p a:hover { border-bottom-color: var(--jade); }
   .plan .foot { font-size: 13px; color: var(--dim); line-height: 1.5; margin-top: 14px; }
   .buy {
     display: block; text-align: center; color: var(--jade);
@@ -467,6 +469,7 @@ gtag('config', 'G-ZYRJDJ736V');
         <li>Verified offline; works without a network</li>
         <li>Every future update included</li>
         <li>One key per email; use it on all your own Macs</li>
+        <li>Email support: <a href="mailto:support@screenforge.studio">support@screenforge.studio</a></li>
       </ul>
       <p class="foot">Stripe takes the payment and asks for your email there. The key arrives by email within a minute; in ScreenForge open Export, enter the same email and press Activate.</p>
     </div>
@@ -531,7 +534,6 @@ gtag('config', 'G-ZYRJDJ736V');
     <span>© 2026 Smartloop Inc. All rights reserved.</span>
     <span>Made in San Francisco, CA</span>
     <div class="r">
-      <a href="mailto:support@screenforge.studio">support@screenforge.studio</a>
       <a href="privacy.html">privacy</a>
       <a href="terms.html">terms</a>
     </div>
