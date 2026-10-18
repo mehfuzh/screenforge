@@ -17,10 +17,13 @@ fn find(bin: &str, env: &str) -> Option<PathBuf> {
             return Some(p);
         }
     }
+    let file = format!("{bin}{}", std::env::consts::EXE_SUFFIX);
     if let Ok(exe) = std::env::current_exe() {
         if let Some(dir) = exe.parent() {
-            for rel in ["", "../Resources/bin/", "bin/"] {
-                let p = dir.join(rel).join(bin);
+            for rel in ["", "../Resources/bin/", "bin/",
+                // `cargo run` from the repo: the static build scripts/fetch-ffmpeg.sh downloads
+                "../ffmpeg-static/windows-x86_64/", "../ffmpeg-static/linux-x86_64/", "../ffmpeg-static/arm64/", "../ffmpeg-static/x86_64/"] {
+                let p = dir.join(rel).join(&file);
                 if p.is_file() {
                     return Some(p);
                 }
@@ -53,9 +56,29 @@ pub fn ffprobe_path() -> Result<&'static PathBuf> {
 
 /// `ffmpeg -hide_banner -nostdin -loglevel warning …`
 pub fn ffmpeg_cmd() -> Result<Command> {
-    let mut c = Command::new(ffmpeg_path()?);
-    c.arg("-hide_banner").arg("-nostdin").arg("-loglevel").arg("warning");
+    let mut c = ffmpeg_cmd_with_stdin()?;
+    c.arg("-nostdin");
     Ok(c)
+}
+
+/// [`ffmpeg_cmd`] without `-nostdin`: ffmpeg then reads commands (`q` to stop) from a piped
+/// stdin, which is how screen grabbers are stopped on Windows (no SIGINT there).
+fn ffmpeg_cmd_with_stdin() -> Result<Command> {
+    let mut c = Command::new(ffmpeg_path()?);
+    hide_console(&mut c);
+    c.arg("-hide_banner").arg("-loglevel").arg("warning");
+    Ok(c)
+}
+
+/// Windows: a GUI app would otherwise pop up a console window for every ffmpeg it spawns.
+pub fn hide_console(cmd: &mut Command) {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    let _ = cmd;
 }
 
 /// A running ffmpeg fed through stdin. stderr is forwarded to the recording log.
@@ -75,18 +98,24 @@ impl std::fmt::Debug for FfmpegProc {
 impl FfmpegProc {
     /// Spawn `ffmpeg <args>` in `cwd` with a piped stdin.
     pub fn spawn(args: &[String], cwd: &Path, log: RecLog, label: &str) -> Result<Self> {
-        Self::spawn_with(args, cwd, log, label, false).map(|(p, _)| p)
+        Self::spawn_with(args, cwd, log, label, false, false).map(|(p, _)| p)
     }
 
     /// Like [`spawn`](Self::spawn) but with stdout piped back (for captures that write frames to `pipe:1`).
     pub fn spawn_reading(args: &[String], cwd: &Path, log: RecLog, label: &str) -> Result<(Self, ChildStdout)> {
-        let (p, out) = Self::spawn_with(args, cwd, log, label, true)?;
+        let (p, out) = Self::spawn_with(args, cwd, log, label, true, false)?;
         let out = out.ok_or_else(|| Error::Capture(format!("{label}: no ffmpeg stdout")))?;
         Ok((p, out))
     }
 
-    fn spawn_with(args: &[String], cwd: &Path, log: RecLog, label: &str, read_stdout: bool) -> Result<(Self, Option<ChildStdout>)> {
-        let mut cmd = ffmpeg_cmd()?;
+    /// Spawn a capture that takes no input on stdin and is stopped with [`interrupt`](Self::interrupt)
+    /// (screen grabbers): on Windows ffmpeg keeps reading stdin so `q` can end it cleanly.
+    pub fn spawn_grab(args: &[String], cwd: &Path, log: RecLog, label: &str) -> Result<Self> {
+        Self::spawn_with(args, cwd, log, label, false, cfg!(windows)).map(|(p, _)| p)
+    }
+
+    fn spawn_with(args: &[String], cwd: &Path, log: RecLog, label: &str, read_stdout: bool, stdin_commands: bool) -> Result<(Self, Option<ChildStdout>)> {
+        let mut cmd = if stdin_commands { ffmpeg_cmd_with_stdin()? } else { ffmpeg_cmd()? };
         let stdout = if read_stdout { Stdio::piped() } else { Stdio::null() };
         cmd.args(args).current_dir(cwd).stdin(Stdio::piped()).stdout(stdout).stderr(Stdio::piped());
         log.debug(label, format!("Spawning ffmpeg {}", args.join(" ")));
@@ -145,6 +174,39 @@ impl FfmpegProc {
         }
     }
 
+    /// Ask ffmpeg to stop (`q` on its stdin, which it polls when running under a GUI) so it
+    /// finalizes the output, then wait. For captures spawned with [`spawn_grab`](Self::spawn_grab).
+    #[cfg(windows)]
+    pub fn interrupt(mut self) -> Result<()> {
+        if let Some(stdin) = self.stdin.as_mut() {
+            let _ = stdin.write_all(b"q
+").and_then(|_| stdin.flush());
+        }
+        // give it a moment to wind down on its own; otherwise end it the hard way
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(8);
+        let status = loop {
+            match self.child.try_wait() {
+                Ok(Some(s)) => break Ok(s),
+                Ok(None) if std::time::Instant::now() < deadline => std::thread::sleep(std::time::Duration::from_millis(20)),
+                Ok(None) => {
+                    let _ = self.child.kill();
+                    break self.child.wait();
+                }
+                Err(e) => break Err(e),
+            }
+        };
+        let status = status.map_err(|source| Error::Io { path: "ffmpeg".into(), source })?;
+        drop(self.stdin.take());
+        if let Some(t) = self.stderr_thread.take() {
+            let _ = t.join();
+        }
+        if status.success() {
+            Ok(())
+        } else {
+            Err(Error::Capture(format!("{}: ffmpeg exited with {status}", self.label)))
+        }
+    }
+
     /// Kill the process (used by cancel).
     pub fn kill(mut self) {
         drop(self.stdin.take());
@@ -159,9 +221,25 @@ impl FfmpegProc {
 /// Does this ffmpeg have the given encoder (e.g. `h264_videotoolbox`)?
 pub fn has_encoder(name: &str) -> bool {
     static CACHE: OnceLock<String> = OnceLock::new();
-    let list = CACHE.get_or_init(|| {
+    list_has(&CACHE, "-encoders", name)
+}
+
+/// Does this ffmpeg have the given filter (e.g. `ddagrab`)?
+pub fn has_filter(name: &str) -> bool {
+    static CACHE: OnceLock<String> = OnceLock::new();
+    list_has(&CACHE, "-filters", name)
+}
+
+/// Does this ffmpeg have the given input device (e.g. `gdigrab`)?
+pub fn has_device(name: &str) -> bool {
+    static CACHE: OnceLock<String> = OnceLock::new();
+    list_has(&CACHE, "-devices", name)
+}
+
+fn list_has(cache: &OnceLock<String>, flag: &str, name: &str) -> bool {
+    let list = cache.get_or_init(|| {
         ffmpeg_cmd()
-            .and_then(|mut c| c.arg("-encoders").output().map_err(|e| Error::Io { path: "ffmpeg".into(), source: e }))
+            .and_then(|mut c| c.arg(flag).output().map_err(|e| Error::Io { path: "ffmpeg".into(), source: e }))
             .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
             .unwrap_or_default()
     });

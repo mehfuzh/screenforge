@@ -233,12 +233,15 @@ pub fn interleave(planes: &[Vec<f32>]) -> Vec<f32> {
 
 #[cfg(target_os = "macos")]
 pub use imp::SystemAudioHandler;
-#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
 pub use mic::MicRecorder;
+#[cfg(target_os = "windows")]
+pub use loopback::SystemAudioRecorder;
 
 
-/// Microphone capture through `cpal` (CoreAudio on macOS, ALSA/PulseAudio/PipeWire on Linux).
-#[cfg(any(target_os = "macos", target_os = "linux"))]
+/// Microphone capture through `cpal` (CoreAudio on macOS, ALSA/PulseAudio/PipeWire on Linux,
+/// WASAPI on Windows).
+#[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
 mod mic {
     use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
     use std::sync::Arc;
@@ -279,7 +282,7 @@ mod mic {
             .collect()
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
     fn known_inputs() -> Vec<crate::discover::AudioDevice> {
         crate::discover::microphones()
     }
@@ -406,6 +409,112 @@ mod mic {
     }
 
     impl Drop for MicRecorder {
+        fn drop(&mut self) {
+            self.stop();
+        }
+    }
+}
+
+/// Windows system audio: WASAPI loopback. `cpal` opens an *output* device as an input stream
+/// in loopback mode, which delivers the mix of everything playing on it.
+#[cfg(target_os = "windows")]
+mod loopback {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+    use std::thread::JoinHandle;
+    use std::time::Duration;
+
+    use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+    use crossbeam_channel::bounded;
+
+    use super::{PcmSink, PcmSinkHandle};
+    use crate::clock;
+    use crate::log::RecLog;
+    use crate::{Error, Result};
+
+    const COMPONENT: &str = "SystemAudioRecorder";
+
+    pub struct SystemAudioRecorder {
+        stop: Arc<AtomicBool>,
+        thread: Option<JoinHandle<()>>,
+    }
+
+    impl SystemAudioRecorder {
+        /// Open the default output device in loopback mode; returns the sink the recorder
+        /// writes sessions through and the stream handle.
+        pub fn start(log: RecLog) -> Result<(PcmSinkHandle, Self)> {
+            let host = cpal::default_host();
+            let device = host.default_output_device().ok_or_else(|| Error::Audio("no output device for system audio".into()))?;
+            let supported = device.default_output_config().map_err(|e| Error::Audio(format!("system audio: {e}")))?;
+            let sample_rate = supported.sample_rate();
+            let in_channels = supported.channels() as usize;
+            let channels: u16 = in_channels.clamp(1, 2) as u16;
+            let config = cpal::StreamConfig { channels: supported.channels(), sample_rate, buffer_size: cpal::BufferSize::Default };
+            let sink_handle = PcmSink::spawn(sample_rate, channels, log.clone(), COMPONENT)?;
+            let sink = sink_handle.sink();
+            let stop = Arc::new(AtomicBool::new(false));
+            let thread_stop = stop.clone();
+            let (ready_tx, ready_rx) = bounded::<Result<()>>(1);
+            let err_log = log.clone();
+            let name = device.description().map(|d| d.name().to_string()).unwrap_or_default();
+            let thread = std::thread::Builder::new()
+                .name("sf-system-audio".into())
+                .spawn(move || {
+                    let stream = device.build_input_stream(
+                        config,
+                        move |data: &[f32], info: &cpal::InputCallbackInfo| {
+                            let now_ms = clock::process_time_ms();
+                            let ts = info.timestamp();
+                            let latency_ms = ts.callback.duration_since(ts.capture).as_secs_f64() * 1000.0;
+                            let chunk_ms = (data.len() / in_channels.max(1)) as f64 / sample_rate as f64 * 1000.0;
+                            let capture_start_ms = now_ms - latency_ms - chunk_ms;
+                            let samples = if in_channels > 2 {
+                                let mut v = Vec::with_capacity(data.len() / in_channels * 2);
+                                for frame in data.chunks_exact(in_channels) {
+                                    v.push(frame[0]);
+                                    v.push(frame[1]);
+                                }
+                                v
+                            } else {
+                                data.to_vec()
+                            };
+                            sink.push(samples, capture_start_ms);
+                        },
+                        move |e| err_log.error(COMPONENT, format!("System audio stream error: {e}")),
+                        None,
+                    );
+                    let stream = match stream.and_then(|s| s.play().map(|_| s)) {
+                        Ok(s) => s,
+                        Err(e) => {
+                            let _ = ready_tx.send(Err(Error::Audio(format!("system audio: {e}"))));
+                            return;
+                        }
+                    };
+                    let _ = ready_tx.send(Ok(()));
+                    while !thread_stop.load(Ordering::Relaxed) {
+                        std::thread::sleep(Duration::from_millis(50));
+                    }
+                    drop(stream);
+                })
+                .map_err(|source| Error::Io { path: "thread".into(), source })?;
+            match ready_rx.recv_timeout(Duration::from_secs(10)) {
+                Ok(Ok(())) => {}
+                Ok(Err(e)) => return Err(e),
+                Err(_) => return Err(Error::Audio("timeout opening system audio".into())),
+            }
+            log.notice(COMPONENT, format!("System audio loopback opened. device=\"{name}\" rate={sample_rate} channels={channels}"));
+            Ok((sink_handle, SystemAudioRecorder { stop, thread: Some(thread) }))
+        }
+
+        pub fn stop(&mut self) {
+            self.stop.store(true, Ordering::Relaxed);
+            if let Some(t) = self.thread.take() {
+                let _ = t.join();
+            }
+        }
+    }
+
+    impl Drop for SystemAudioRecorder {
         fn drop(&mut self) {
             self.stop();
         }

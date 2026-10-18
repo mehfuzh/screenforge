@@ -45,8 +45,8 @@ pub struct AudioDevice {
 /// A camera.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CameraInfo {
-    /// The device name on macOS (what ffmpeg's AVFoundation input knows it by), the device
-    /// node (`/dev/video0`) on Linux.
+    /// The device name on macOS (what ffmpeg's AVFoundation input knows it by) and Windows
+    /// (DirectShow), the device node (`/dev/video0`) on Linux.
     pub id: String,
     pub name: String,
     pub is_default: bool,
@@ -165,7 +165,7 @@ pub fn camera_input(id: &str) -> Option<String> {
     std::path::Path::new(id).exists().then(|| id.to_string())
 }
 
-#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+#[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
 pub fn cameras() -> Vec<CameraInfo> {
     Vec::new()
 }
@@ -379,19 +379,118 @@ mod linux {
     }
 }
 
-#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+#[cfg(target_os = "windows")]
+pub use windows_impl::{camera_input, cameras, displays, microphones, windows, windows_with};
+
+/// Windows: monitors from `EnumDisplayMonitors` (points = pixels / DPI scale), top-level
+/// windows from `EnumWindows`, microphones from cpal (WASAPI), cameras from ffmpeg's
+/// DirectShow device list.
+#[cfg(target_os = "windows")]
+mod windows_impl {
+    use super::{AudioDevice, CameraInfo, DisplayInfo, WindowInfo};
+    use crate::win;
+
+    pub fn displays() -> Vec<DisplayInfo> {
+        let mut out: Vec<DisplayInfo> = win::monitors()
+            .into_iter()
+            .map(|m| DisplayInfo {
+                id: m.id,
+                bounds_points: m.rect_points(),
+                scale: m.scale,
+                refresh_rate: m.refresh_rate,
+                is_main: m.is_primary,
+                // the built-in panel of a laptop has no better marker than being the first one
+                is_builtin: false,
+                name: if m.is_primary { format!("Display {} (primary)", m.id) } else { format!("Display {}", m.id) },
+            })
+            .collect();
+        if !out.iter().any(|d| d.is_main) {
+            if let Some(d) = out.first_mut() {
+                d.is_main = true;
+            }
+        }
+        out
+    }
+
+    pub fn windows_with(on_screen_only: bool) -> Vec<WindowInfo> {
+        let me = std::process::id();
+        win::windows()
+            .into_iter()
+            .filter(|w| w.pid != me && (!on_screen_only || !w.minimized))
+            .map(|w| WindowInfo {
+                id: win::id_from_hwnd(windows::Win32::Foundation::HWND(w.hwnd as *mut std::ffi::c_void)),
+                bounds: w.rect_points(),
+                is_on_screen: !w.minimized,
+                pid: w.pid as i32,
+                bundle_id: w.app.to_lowercase(),
+                title: w.title,
+                app_name: w.app,
+            })
+            .collect()
+    }
+
+    pub fn windows() -> Vec<WindowInfo> {
+        windows_with(true)
+    }
+
+    pub fn microphones() -> Vec<AudioDevice> {
+        use cpal::traits::{DeviceTrait, HostTrait};
+        let host = cpal::default_host();
+        let default = host.default_input_device().and_then(|d| d.description().ok().map(|d| d.name().to_string()));
+        let Ok(devices) = host.input_devices() else { return Vec::new() };
+        devices
+            .filter_map(|d| d.description().ok().map(|d| d.name().to_string()))
+            .map(|name| AudioDevice { is_default: Some(&name) == default.as_ref(), id: name.clone(), name })
+            .collect()
+    }
+
+    /// Cameras as ffmpeg's DirectShow input lists them.
+    pub fn cameras() -> Vec<CameraInfo> {
+        let Ok(mut cmd) = crate::ffmpeg::ffmpeg_cmd() else { return Vec::new() };
+        let Ok(out) = cmd.args(["-loglevel", "info", "-f", "dshow", "-list_devices", "true", "-i", "dummy"]).output() else { return Vec::new() };
+        super::parse_dshow_devices(&String::from_utf8_lossy(&out.stderr))
+            .into_iter()
+            .enumerate()
+            .map(|(i, name)| CameraInfo { id: name.clone(), name, is_default: i == 0 })
+            .collect()
+    }
+
+    /// The DirectShow input for camera `id`.
+    pub fn camera_input(id: &str) -> Option<String> {
+        Some(format!("video={id}"))
+    }
+}
+
+/// Parse `ffmpeg -f dshow -list_devices true` output: the names of the video devices.
+pub fn parse_dshow_devices(text: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    for line in text.lines() {
+        // `[dshow @ 000001] "Integrated Camera" (video)`; older builds list sections instead
+        let Some(rest) = line.split_once("] ").map(|(_, r)| r.trim()) else { continue };
+        if !rest.starts_with('"') {
+            continue;
+        }
+        let Some((name, kind)) = rest[1..].split_once('"') else { continue };
+        if kind.trim() == "(video)" && !name.is_empty() && !out.contains(&name.to_string()) {
+            out.push(name.to_string());
+        }
+    }
+    out
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
 pub fn displays() -> Vec<DisplayInfo> {
     Vec::new()
 }
-#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+#[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
 pub fn windows_with(_on_screen_only: bool) -> Vec<WindowInfo> {
     Vec::new()
 }
-#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+#[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
 pub fn windows() -> Vec<WindowInfo> {
     Vec::new()
 }
-#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+#[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
 pub fn microphones() -> Vec<AudioDevice> {
     Vec::new()
 }
@@ -410,5 +509,16 @@ mod tests {
 [AVFoundation indev @ 0x1] [0] MacBook Pro Microphone
 ";
         assert_eq!(parse_avfoundation_devices(text), vec![(0, "FaceTime HD Camera".to_string()), (1, "Studio Display Camera".to_string())]);
+    }
+
+    #[test]
+    fn parses_dshow_device_list() {
+        let text = "[dshow @ 0000020] \"Integrated Camera\" (video)
+[dshow @ 0000020]   Alternative name \"@device_pnp_\\\\?\\usb#vid_04f2\"
+[dshow @ 0000020] \"OBS Virtual Camera\" (video)
+[dshow @ 0000020] \"Microphone Array (Realtek)\" (audio)
+dummy: Immediate exit requested
+";
+        assert_eq!(parse_dshow_devices(text), vec!["Integrated Camera".to_string(), "OBS Virtual Camera".to_string()]);
     }
 }

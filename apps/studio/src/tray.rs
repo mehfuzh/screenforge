@@ -1,8 +1,9 @@
 //! Menu bar (status bar) icon shown while ScreenForge runs, like Screen Studio's.
 //! Shows the elapsed time while recording; the menu opens the picker, a project, or quits.
 //!
-//! The icon is built from raw RGBA through `NSBitmapImageRep` (no PNG decoding through ImageIO,
-//! which crashed with SIGBUS on some machines). The menu comes from `muda`.
+//! macOS: the icon is built from raw RGBA through `NSBitmapImageRep` (no PNG decoding through
+//! ImageIO, which crashed with SIGBUS on some machines). Windows: a notification-area icon
+//! (`tray-icon`) whose tooltip carries the timer. The menu comes from `muda` on both.
 
 use muda::{Menu, MenuEvent, MenuId, MenuItem, PredefinedMenuItem};
 
@@ -18,6 +19,8 @@ pub struct Tray {
     last_title: Option<String>,
     #[cfg(target_os = "macos")]
     item: objc2::rc::Retained<objc2_app_kit::NSStatusItem>,
+    #[cfg(target_os = "windows")]
+    item: tray_icon::TrayIcon,
 }
 
 impl Tray {
@@ -30,13 +33,12 @@ impl Tray {
         menu.append_items(&[&record, &open, &PredefinedMenuItem::separator(), &quit]).ok()?;
         #[cfg(target_os = "macos")]
         let item = macos::create_status_item(&menu)?;
-        Some(Tray {
-            _menu: menu,
-            ids,
-            last_title: None,
-            #[cfg(target_os = "macos")]
-            item,
-        })
+        #[cfg(target_os = "windows")]
+        let item = windows_tray::create(&menu)?;
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+        return None;
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
+        Some(Tray { _menu: menu, ids, last_title: None, item })
     }
 
     /// Text next to the icon (recording timer); `None` clears it.
@@ -44,6 +46,14 @@ impl Tray {
         if self.last_title != title {
             #[cfg(target_os = "macos")]
             macos::set_title(&self.item, title.as_deref());
+            #[cfg(target_os = "windows")]
+            {
+                let tip = match title.as_deref() {
+                    Some(t) => format!("ScreenForge {t}"),
+                    None => "ScreenForge".to_string(),
+                };
+                let _ = self.item.set_tooltip(Some(tip));
+            }
             self.last_title = title;
         }
     }
@@ -61,6 +71,18 @@ impl Tray {
             }
         }
         out
+    }
+}
+
+#[cfg(target_os = "windows")]
+mod windows_tray {
+    use tray_icon::{Icon, TrayIcon, TrayIconBuilder};
+
+    pub fn create(menu: &muda::Menu) -> Option<TrayIcon> {
+        let img = image::load_from_memory(include_bytes!("../assets/icon-256.png")).ok()?.resize_exact(32, 32, image::imageops::FilterType::Lanczos3).to_rgba8();
+        let (w, h) = img.dimensions();
+        let icon = Icon::from_rgba(img.into_raw(), w, h).ok()?;
+        TrayIconBuilder::new().with_menu(Box::new(menu.clone())).with_tooltip("ScreenForge").with_icon(icon).build().ok()
     }
 }
 

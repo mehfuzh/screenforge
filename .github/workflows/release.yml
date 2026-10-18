@@ -1,4 +1,4 @@
-name: Release (macOS + Linux)
+name: Release (macOS + Linux + Windows)
 # Tag `vX.Y.Z` (or run manually / via "Cut release") → release build, Developer ID signing, DMG,
 # notarization, stapling, GitHub Release with the downloadable app. Secrets, set by
 # scripts/setup-release.sh --ci:
@@ -144,10 +144,35 @@ jobs:
             target/screenforge_*.deb
             target/ScreenForge-*linux*.tar.gz
 
+  windows:
+    name: Build Windows package
+    runs-on: windows-2022
+    defaults:
+      run:
+        shell: bash
+    env:
+      LIBCLANG_PATH: C:\Program Files\LLVM\bin
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build .zip
+        run: ./scripts/bundle-windows.sh
+        env:
+          GH_TOKEN: ${{ github.token }}   # fetch-ffmpeg.sh looks up the newest static ffmpeg
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: |
+            target/ScreenForge-*-windows-*.zip
+            target/ScreenForge-windows-x86_64.zip
+            target/ScreenForge-*-windows-*-setup.exe
+            target/ScreenForge-windows-x86_64-setup.exe
+
   linux-publish:
-    # after the macOS job has created the release, attach the Linux files to it
-    name: Attach Linux packages to the release
-    needs: [build, linux]
+    # after the macOS job has created the release, attach the Linux and Windows files to it
+    name: Attach Linux and Windows packages to the release
+    needs: [build, linux, windows]
     if: ${{ startsWith(github.ref, 'refs/tags/v') || inputs.publish }}
     runs-on: ubuntu-24.04
     steps:
@@ -155,7 +180,13 @@ jobs:
         with:
           name: linux
           path: linux
+      - uses: actions/download-artifact@v4
+        with:
+          name: windows
+          path: windows
       - uses: softprops/action-gh-release@v2
         with:
-          files: linux/*
+          files: |
+            linux/*
+            windows/*
           draft: ${{ inputs.draft == true }}

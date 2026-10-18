@@ -24,7 +24,7 @@ pub struct CreateOptions {
 
 /// Default projects folder: `~/ScreenForge Projects`.
 pub fn default_projects_folder() -> PathBuf {
-    let home = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_else(|| PathBuf::from("."));
+    let home = directories::UserDirs::new().map(|u| u.home_dir().to_path_buf()).or_else(|| std::env::var_os("HOME").map(PathBuf::from)).unwrap_or_else(|| PathBuf::from("."));
     home.join("ScreenForge Projects")
 }
 

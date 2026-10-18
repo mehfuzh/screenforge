@@ -14,9 +14,12 @@ fn find(bin: &str, env: &str) -> Option<PathBuf> {
         }
     }
     // Next to our own executable (bundled), then PATH, then Homebrew.
+    let file = format!("{bin}{}", std::env::consts::EXE_SUFFIX);
     if let Ok(exe) = std::env::current_exe() {
-        for rel in ["", "../Resources/bin/", "bin/"] {
-            let p = exe.parent().unwrap().join(rel).join(bin);
+        for rel in ["", "../Resources/bin/", "bin/",
+                // `cargo run` from the repo: the static build scripts/fetch-ffmpeg.sh downloads
+                "../ffmpeg-static/windows-x86_64/", "../ffmpeg-static/linux-x86_64/", "../ffmpeg-static/arm64/", "../ffmpeg-static/x86_64/"] {
+            let p = exe.parent().unwrap().join(rel).join(&file);
             if p.is_file() {
                 return Some(p);
             }
@@ -46,8 +49,27 @@ pub fn ffprobe_path() -> Result<&'static PathBuf> {
 
 pub fn ffmpeg_cmd() -> Result<Command> {
     let mut c = Command::new(ffmpeg_path()?);
+    hide_console(&mut c);
     c.arg("-hide_banner").arg("-nostdin").arg("-loglevel").arg("error");
     Ok(c)
+}
+
+/// `ffprobe` with the same console handling as [`ffmpeg_cmd`].
+pub fn ffprobe_cmd() -> Result<Command> {
+    let mut c = Command::new(ffprobe_path()?);
+    hide_console(&mut c);
+    Ok(c)
+}
+
+/// Windows: a GUI app would otherwise pop up a console window for every process it spawns.
+pub fn hide_console(cmd: &mut Command) {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    let _ = cmd;
 }
 
 /// Does this ffmpeg have the given encoder?

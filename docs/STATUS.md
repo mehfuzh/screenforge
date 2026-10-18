@@ -26,7 +26,7 @@
   countdown), ScreenCaptureKit recorder writing the package's `recording/` layout
   (HLS fMP4, cursors, input logs, metadata), project creation with automatic zooms.
 - Webcam recording: the camera picker records `channel-N-camera-S.m3u8` (H.264 HLS, 30 fps, up to
-  1280 px wide) through ffmpeg's AVFoundation (macOS) or V4L2 (Linux) input, in step with the
+  1280 px wide) through ffmpeg's AVFoundation (macOS), V4L2 (Linux) or DirectShow (Windows) input, in step with the
   display sessions; new projects show it with the camera-overlay layout.
 
 ## Not yet

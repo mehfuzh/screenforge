@@ -32,8 +32,9 @@
 //! println!("recorded {} ms", metadata.duration_ms());
 //! ```
 //!
-//! Everything compiles on other platforms but [`Recorder::start`] returns
-//! [`Error::Unsupported`] there.
+//! Linux records through ffmpeg's X11 grabber or the ScreenCast portal (Wayland), Windows
+//! through Desktop Duplication (`ddagrab`) or GDI. Everything compiles on other platforms but
+//! [`Recorder::start`] returns [`Error::Unsupported`] there.
 
 pub mod audio;
 pub mod camera;
@@ -51,7 +52,9 @@ pub mod permissions;
 pub mod window_frame;
 #[cfg(target_os = "linux")]
 pub mod portal;
-#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[cfg(target_os = "windows")]
+pub mod win;
+#[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
 mod repeater;
 
 use std::path::PathBuf;
@@ -64,13 +67,13 @@ pub use sf_project::recording::RecordingMetadata;
 /// Errors from the recorder.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-    #[error("recording is only supported on macOS")]
+    #[error("recording is not supported on this platform")]
     Unsupported,
     /// `"screenRecording"`, `"inputMonitoring"`, `"microphone"` or `"camera"` (same names Screen Studio
     /// reports in its `missingPermission` message).
     #[error("missing permission: {0}")]
     PermissionDenied(&'static str),
-    #[error("ffmpeg not found. Install it (brew install ffmpeg) or set SF_FFMPEG=/path/to/ffmpeg")]
+    #[error("ffmpeg not found. Install it (brew install ffmpeg / winget install ffmpeg) or set SF_FFMPEG=/path/to/ffmpeg")]
     FfmpegNotFound,
     #[error("invalid configuration: {0}")]
     InvalidConfig(String),
@@ -107,7 +110,7 @@ pub enum RecorderState {
 /// [`Recorder::cancel`]. Dropping a recorder without finishing stops all capture and leaves
 /// the files as they are (metadata stays `"partial"`).
 pub struct Recorder {
-    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
     inner: imp::Inner,
 }
 
@@ -117,7 +120,7 @@ impl std::fmt::Debug for Recorder {
     }
 }
 
-#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
 impl Recorder {
     /// Create the output directory, start every recorder and begin session 0.
     pub fn start(cfg: RecordingConfig) -> Result<Recorder> {
@@ -174,7 +177,7 @@ impl Recorder {
     }
 }
 
-#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+#[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
 impl Recorder {
     pub fn start(_cfg: RecordingConfig) -> Result<Recorder> {
         Err(Error::Unsupported)
@@ -204,7 +207,7 @@ impl Recorder {
     }
 }
 
-#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
 mod imp {
     use std::path::Path;
     use std::sync::Arc;
@@ -213,6 +216,8 @@ mod imp {
     use crate::audio::{MicRecorder, PcmSink, PcmSinkHandle};
     #[cfg(target_os = "macos")]
     use crate::audio::SystemAudioHandler;
+    #[cfg(target_os = "windows")]
+    use crate::audio::SystemAudioRecorder;
     use crate::camera::{CameraCapture, CameraRecorder};
     use crate::config::RecordingConfig;
     use crate::cursor::CursorRecorder;
@@ -240,6 +245,9 @@ mod imp {
         cursor: Option<CursorRecorder>,
         pub mic: Option<MicRecorder>,
         system_audio: Option<PcmSinkHandle>,
+        /// Windows: the WASAPI loopback stream feeding `system_audio`.
+        #[cfg(target_os = "windows")]
+        system_audio_stream: Option<SystemAudioRecorder>,
         camera: Option<CameraRecorder>,
         current: Option<Open>,
         state: RecorderState,
@@ -344,6 +352,17 @@ mod imp {
                 let _ = PcmSink::spawn;
                 (None, None)
             };
+            // Windows: WASAPI loopback of the default output device
+            #[cfg(target_os = "windows")]
+            let (system_audio, sys_handler, system_audio_stream): (Option<PcmSinkHandle>, Option<()>, Option<SystemAudioRecorder>) = if cfg.capture_system_audio {
+                let (h, stream) = SystemAudioRecorder::start(log.clone())?;
+                audio_channels.push(AudioChannel { kind: "systemAudio", channel_index: next_channel, device_id: None });
+                next_channel += 1;
+                (Some(h), None, Some(stream))
+            } else {
+                let _ = PcmSink::spawn;
+                (None, None, None)
+            };
 
             // Camera (opened before the display so its warm-up does not delay the first session)
             let camera = match &cfg.camera {
@@ -405,6 +424,8 @@ mod imp {
                 cursor,
                 mic,
                 system_audio,
+                #[cfg(target_os = "windows")]
+                system_audio_stream,
                 camera,
                 current: None,
                 state: RecorderState::Paused,
@@ -545,6 +566,10 @@ mod imp {
             }
             if let Some(m) = self.mic.as_mut() {
                 m.stop();
+            }
+            #[cfg(target_os = "windows")]
+            if let Some(s) = self.system_audio_stream.as_mut() {
+                s.stop();
             }
             if let Some(s) = self.system_audio.as_mut() {
                 s.stop();

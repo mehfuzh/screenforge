@@ -46,6 +46,16 @@ eframe = { workspace = true, features = ["x11", "wayland"] }
 raw-window-handle = "0.6"
 x11rb = { version = "0.13", features = ["shape"] }
 
+[target.'cfg(target_os = "windows")'.dependencies]
+# notification-area icon (the menu comes from muda)
+tray-icon = "0.26"
+# the toolbar window's shape (DX12 surfaces have no alpha: the window is clipped to the pill)
+raw-window-handle = "0.6"
+windows = { version = "0.62", features = ["Win32_Foundation", "Win32_Graphics_Gdi", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
+
+[target.'cfg(target_os = "windows")'.build-dependencies]
+winresource = "0.1"
+
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"
 objc2-foundation = { version = "0.3", features = ["NSArray", "NSGeometry", "NSString", "NSFileManager", "NSURL", "NSError", "NSAppleEventDescriptor", "NSAppleEventManager", "NSNotification"] }

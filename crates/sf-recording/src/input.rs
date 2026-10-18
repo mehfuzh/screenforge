@@ -77,12 +77,13 @@ impl EventFile {
     }
 }
 
-#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
 pub use imp::InputRecorder;
 
-/// Event capture: a listen-only `CGEventTap` on macOS, the X11 RECORD extension (`rdev`) on
-/// Linux. Both feed the same writer, so the event files are identical.
-#[cfg(any(target_os = "macos", target_os = "linux"))]
+/// Event capture: a listen-only `CGEventTap` on macOS, the X11 RECORD extension on Linux and
+/// low-level hooks on Windows (both through `rdev`). All feed the same writer, so the event
+/// files are identical.
+#[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
 mod imp {
     use std::path::{Path, PathBuf};
     use std::sync::atomic::{AtomicBool, Ordering};
@@ -225,6 +226,11 @@ mod imp {
         None
     }
 
+    #[cfg(target_os = "windows")]
+    fn mouse_location() -> Option<(f64, f64)> {
+        crate::win::mouse_position()
+    }
+
     /// Current mouse location in global points (top-left origin), for synthesized moves.
     #[cfg(target_os = "macos")]
     fn mouse_location() -> Option<(f64, f64)> {
@@ -280,6 +286,27 @@ mod imp {
                 clicks: EventFile::create(&dir.join(c))?,
                 moves: EventFile::create(&dir.join(m))?,
             });
+            // where the pointer is as the session starts, so zooms have a position to follow
+            // before the first real move (typing-only recordings)
+            if let Some((x, y)) = self.last_pos.or_else(mouse_location) {
+                self.last_pos = Some((x, y));
+                let (process_time_ms, unix_time_ms) = clock::now_pair();
+                self.write(EventLine {
+                    active_modifiers: Vec::new(),
+                    button: None,
+                    caret_x: None,
+                    caret_y: None,
+                    character: None,
+                    cursor_id: Some(self.cursor_id.clone()),
+                    is_a_repeat: None,
+                    key_code: None,
+                    process_time_ms,
+                    kind: "mouseMoved",
+                    unix_time_ms,
+                    x: Some(x),
+                    y: Some(y),
+                });
+            }
             Ok(())
         }
 
@@ -494,16 +521,29 @@ mod imp {
         }
     }
 
-    /// X11 input through the RECORD extension. `rdev::listen` cannot be stopped, so the
-    /// listener thread outlives the recording and simply drops events once `stop` is set.
+    /// Pixels → points for `rdev` positions: X11 reports points already; Windows reports
+    /// physical pixels of the virtual screen.
     #[cfg(target_os = "linux")]
+    fn rdev_point(x: f64, y: f64) -> (f64, f64) {
+        (x, y)
+    }
+    #[cfg(target_os = "windows")]
+    fn rdev_point(x: f64, y: f64) -> (f64, f64) {
+        crate::win::to_points(x, y)
+    }
+
+    /// X11 input through the RECORD extension, Windows through low-level hooks (both `rdev`).
+    /// `rdev::listen` cannot be stopped, so the listener thread outlives the recording and
+    /// simply drops events once `stop` is set.
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
     fn tap_loop(tx: Sender<Cmd>, stop: Arc<AtomicBool>, keys: bool, ready: Sender<std::result::Result<(), ()>>) {
         use rdev::{Button, EventType, Key};
         let (err_tx, err_rx) = bounded::<()>(1);
-        let listener = std::thread::Builder::new().name("sf-input-x11".into()).spawn(move || {
+        let listener = std::thread::Builder::new().name("sf-input-hook".into()).spawn(move || {
             let mut pos: Option<(f64, f64)> = None;
             let mut held: Option<&'static str> = None;
             let (mut shift, mut ctrl, mut alt, mut meta) = (false, false, false, false);
+            let mut down: Vec<Key> = Vec::new();
             let r = rdev::listen(move |ev| {
                 if stop.load(Ordering::Relaxed) {
                     return;
@@ -523,7 +563,7 @@ mod imp {
                 };
                 let (kind, button, xy, character, repeat) = match &ev.event_type {
                     EventType::MouseMove { x, y } => {
-                        pos = Some((*x, *y));
+                        pos = Some(rdev_point(*x, *y));
                         (if held.is_some() { "mouseDragged" } else { "mouseMoved" }, held, pos, None, None)
                     }
                     EventType::ButtonPress(b) => {
@@ -535,18 +575,25 @@ mod imp {
                         ("mouseUp", Some(button_name(b)), pos, None, None)
                     }
                     EventType::KeyPress(k) | EventType::KeyRelease(k) => {
-                        let down = matches!(ev.event_type, EventType::KeyPress(_));
+                        let pressed = matches!(ev.event_type, EventType::KeyPress(_));
                         match k {
-                            Key::ShiftLeft | Key::ShiftRight => shift = down,
-                            Key::ControlLeft | Key::ControlRight => ctrl = down,
-                            Key::Alt | Key::AltGr => alt = down,
-                            Key::MetaLeft | Key::MetaRight => meta = down,
+                            Key::ShiftLeft | Key::ShiftRight => shift = pressed,
+                            Key::ControlLeft | Key::ControlRight => ctrl = pressed,
+                            Key::Alt | Key::AltGr => alt = pressed,
+                            Key::MetaLeft | Key::MetaRight => meta = pressed,
                             _ => {}
+                        }
+                        // the hooks report auto-repeat as more key-down events
+                        let repeat = pressed && down.contains(k);
+                        if pressed && !repeat {
+                            down.push(*k);
+                        } else if !pressed {
+                            down.retain(|d| d != k);
                         }
                         if !keys {
                             return;
                         }
-                        (if down { "keyDown" } else { "keyUp" }, None, None, Some(ev.name.clone().unwrap_or_default()), Some(false))
+                        (if pressed { "keyDown" } else { "keyUp" }, None, None, Some(ev.name.clone().unwrap_or_default()), Some(repeat))
                     }
                     EventType::Wheel { .. } => return,
                 };
@@ -575,7 +622,8 @@ mod imp {
             let _ = ready.send(Err(()));
             return;
         }
-        // listen() returns straight away when X11/RECORD is unavailable; otherwise it blocks
+        // listen() returns straight away when X11/RECORD (or the hooks) cannot be set up;
+        // otherwise it blocks
         match err_rx.recv_timeout(Duration::from_millis(400)) {
             Ok(()) => {
                 let _ = ready.send(Err(()));

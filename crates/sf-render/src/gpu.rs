@@ -16,7 +16,9 @@ impl Gpu {
     pub fn headless() -> anyhow::Result<Self> {
         pollster::block_on(async {
             let mut desc = wgpu::InstanceDescriptor::new_without_display_handle();
-            desc.backends = wgpu::Backends::PRIMARY;
+            // WGPU_BACKEND=vulkan|dx12|metal|gl narrows the choice (a broken driver or Vulkan
+            // layer can crash the whole process before an adapter is even listed)
+            desc.backends = wgpu::Backends::from_env().unwrap_or(Self::default_backends());
             let instance = wgpu::Instance::new(desc);
             let adapter = instance
                 .request_adapter(&wgpu::RequestAdapterOptions { power_preference: wgpu::PowerPreference::HighPerformance, ..Default::default() })
@@ -31,6 +33,13 @@ impl Gpu {
                 .await?;
             Ok(Gpu { device: Arc::new(device), queue: Arc::new(queue) })
         })
+    }
+
+    /// Backends tried when `WGPU_BACKEND` is not set: Direct3D 12 on Windows (the Vulkan path
+    /// crashes inside some drivers/layers before an adapter is listed), the platform's primary
+    /// ones elsewhere.
+    pub fn default_backends() -> wgpu::Backends {
+        if cfg!(windows) { wgpu::Backends::DX12 } else { wgpu::Backends::PRIMARY }
     }
 
     pub fn from_parts(device: Arc<wgpu::Device>, queue: Arc<wgpu::Queue>) -> Self {

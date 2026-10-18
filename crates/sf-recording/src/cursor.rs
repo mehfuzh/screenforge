@@ -40,6 +40,211 @@ pub fn write_cursors_json(dir: &Path, cursors: &[CursorInfo]) -> std::io::Result
 pub use imp::CursorRecorder;
 #[cfg(target_os = "linux")]
 pub use linux::CursorRecorder;
+#[cfg(target_os = "windows")]
+pub use windows_impl::CursorRecorder;
+
+/// Windows: the standard cursors are preloaded (same ids as the macOS catalogue where the
+/// shapes correspond) and the shown cursor is polled at ~60 Hz through `GetCursorInfo`; a
+/// cursor image not seen before gets a `custom-<hash>` id.
+#[cfg(target_os = "windows")]
+mod windows_impl {
+    use std::collections::HashMap;
+    use std::path::{Path, PathBuf};
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+    use std::thread::JoinHandle;
+    use std::time::{Duration, Instant};
+
+    use parking_lot::Mutex;
+    use sf_project::recording::CursorInfo;
+    use sf_project::schema::common::{Point, Size};
+
+    use super::{fnv1a64, write_cursors_json};
+    use crate::log::RecLog;
+    use crate::win::cursor as wc;
+    use crate::{Error, Result};
+
+    const COMPONENT: &str = "CursorRecorder";
+
+    struct Shared {
+        dir: PathBuf,
+        log: RecLog,
+        /// Pixels per point of the primary monitor (cursor bitmaps follow its DPI).
+        scale: f64,
+        /// image hash → id
+        by_hash: Mutex<HashMap<u64, Arc<str>>>,
+        /// cursor handle → id (handles of standard cursors are stable; others are re-hashed)
+        by_handle: Mutex<HashMap<isize, Arc<str>>>,
+        infos: Mutex<Vec<CursorInfo>>,
+        current: Mutex<Arc<str>>,
+        stop: AtomicBool,
+    }
+
+    fn encode_png(img: &wc::Image) -> Option<Vec<u8>> {
+        use image::ImageEncoder;
+        let mut out = Vec::new();
+        image::codecs::png::PngEncoder::new(&mut out).write_image(&img.rgba, img.width as u32, img.height as u32, image::ExtendedColorType::Rgba8).ok()?;
+        Some(out)
+    }
+
+    impl Shared {
+        /// Save `img` as `id` unless the image (or id) is known. Returns the id now standing
+        /// for this image.
+        fn register(&self, id: &str, system: bool, img: &wc::Image, hash: u64) -> Result<Arc<str>> {
+            {
+                let mut by_hash = self.by_hash.lock();
+                if let Some(existing) = by_hash.get(&hash) {
+                    return Ok(existing.clone());
+                }
+                if self.infos.lock().iter().any(|c| c.id == id) {
+                    return Ok(Arc::from(id));
+                }
+                by_hash.insert(hash, Arc::from(id));
+            }
+            let png = encode_png(img).ok_or_else(|| Error::Capture(format!("cursor {id}: png encode failed")))?;
+            let path = self.dir.join("cursors").join(format!("{id}.png"));
+            std::fs::write(&path, png).map_err(|source| Error::Io { path, source })?;
+            let mut infos = self.infos.lock();
+            infos.push(CursorInfo {
+                id: id.to_string(),
+                hot_spot: Point::new(img.hot_x / self.scale, img.hot_y / self.scale),
+                standard_size: Size { width: img.width as f64 / self.scale, height: img.height as f64 / self.scale },
+                system_cursor: system,
+                extra: Default::default(),
+            });
+            write_cursors_json(&self.dir, &infos).map_err(|source| Error::Io { path: self.dir.join("cursors.json"), source })?;
+            Ok(Arc::from(id))
+        }
+    }
+
+    pub struct CursorRecorder {
+        shared: Arc<Shared>,
+        thread: Option<JoinHandle<()>>,
+    }
+
+    impl CursorRecorder {
+        pub fn start(dir: &Path, log: RecLog, on_change: Box<dyn Fn(&str) + Send>) -> Result<Self> {
+            let cursors_dir = dir.join("cursors");
+            std::fs::create_dir_all(&cursors_dir).map_err(|source| Error::Io { path: cursors_dir.clone(), source })?;
+            let scale = crate::win::monitors().into_iter().find(|m| m.is_primary).map(|m| m.scale).unwrap_or(1.0);
+            let shared = Arc::new(Shared {
+                dir: dir.to_path_buf(),
+                log: log.clone(),
+                scale,
+                by_hash: Mutex::new(HashMap::new()),
+                by_handle: Mutex::new(HashMap::new()),
+                infos: Mutex::new(Vec::new()),
+                current: Mutex::new(Arc::from("arrow")),
+                stop: AtomicBool::new(false),
+            });
+            let mut loaded = 0usize;
+            for (id, res) in wc::KNOWN {
+                let Some(handle) = wc::load(*res) else { continue };
+                let Some(img) = wc::image(handle) else { continue };
+                loaded += 1;
+                match shared.register(id, true, &img, fnv1a64(&img.rgba)) {
+                    Ok(stored) => {
+                        shared.by_handle.lock().insert(handle, stored);
+                    }
+                    Err(e) => log.warning(COMPONENT, format!("Could not save cursor {id}: {e}")),
+                }
+            }
+            if shared.infos.lock().is_empty() {
+                return Err(Error::Capture("could not render any system cursor".into()));
+            }
+            log.notice(COMPONENT, format!("Preloaded system cursors. loaded={loaded} saved={} scale={scale}", shared.infos.lock().len()));
+            let thread_shared = shared.clone();
+            let thread = std::thread::Builder::new()
+                .name("sf-cursor-poll".into())
+                .spawn(move || poll_loop(thread_shared, on_change))
+                .map_err(|source| Error::Io { path: "thread".into(), source })?;
+            Ok(CursorRecorder { shared, thread: Some(thread) })
+        }
+
+        pub fn current_id(&self) -> Arc<str> {
+            self.shared.current.lock().clone()
+        }
+
+        pub fn cursors(&self) -> Vec<CursorInfo> {
+            self.shared.infos.lock().clone()
+        }
+
+        pub fn stop(&mut self) {
+            self.shared.stop.store(true, Ordering::Relaxed);
+            if let Some(t) = self.thread.take() {
+                let _ = t.join();
+            }
+        }
+    }
+
+    impl Drop for CursorRecorder {
+        fn drop(&mut self) {
+            self.stop();
+        }
+    }
+
+    fn poll_loop(shared: Arc<Shared>, on_change: Box<dyn Fn(&str) + Send>) {
+        let interval = Duration::from_micros(16_667);
+        let mut last_handle: Option<isize> = None;
+        let mut next = Instant::now();
+        while !shared.stop.load(Ordering::Relaxed) {
+            next += interval;
+            if let Some((handle, visible)) = wc::current() {
+                // a hidden cursor (typing) keeps its last id, like macOS
+                if visible && handle != 0 && last_handle != Some(handle) {
+                    last_handle = Some(handle);
+                    let known = shared.by_handle.lock().get(&handle).cloned();
+                    let id: Option<Arc<str>> = match known {
+                        Some(id) => Some(id),
+                        None => wc::image(handle).map(|img| {
+                            let hash = fnv1a64(&img.rgba);
+                            let custom = format!("custom-{hash:016x}");
+                            let id = match shared.register(&custom, false, &img, hash) {
+                                Ok(id) => {
+                                    if *id == *custom {
+                                        shared.log.notice(COMPONENT, format!("Saved new cursor image. id={id}"));
+                                    }
+                                    id
+                                }
+                                Err(e) => {
+                                    shared.log.warning(COMPONENT, format!("Could not save cursor {custom}: {e}"));
+                                    Arc::from(custom.as_str())
+                                }
+                            };
+                            // app cursors are often re-created with new handles: remember by handle too
+                            let mut by_handle = shared.by_handle.lock();
+                            if by_handle.len() > 256 {
+                                by_handle.clear();
+                            }
+                            by_handle.insert(handle, id.clone());
+                            id
+                        }),
+                    };
+                    if let Some(id) = id {
+                        let changed = {
+                            let mut cur = shared.current.lock();
+                            if *cur != id {
+                                *cur = id.clone();
+                                true
+                            } else {
+                                false
+                            }
+                        };
+                        if changed {
+                            on_change(&id);
+                        }
+                    }
+                }
+            }
+            let now = Instant::now();
+            if next > now {
+                std::thread::sleep(next - now);
+            } else {
+                next = now;
+            }
+        }
+    }
+}
 
 /// Linux: X11 does not expose the theme's cursor images portably, so the recording gets one
 /// drawn arrow (`arrow`, like the macOS id) and the editor renders it smoothly over the video.

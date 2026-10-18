@@ -1,11 +1,10 @@
 //! `ffprobe -print_format json` wrapper.
 
 use std::path::Path;
-use std::process::Command;
 
 use serde::Deserialize;
 
-use crate::{ffmpeg::ffprobe_path, Error, Result};
+use crate::{Error, Result};
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct StreamInfo {
@@ -64,7 +63,7 @@ impl MediaInfo {
 }
 
 pub fn probe(path: &Path) -> Result<MediaInfo> {
-    let out = Command::new(ffprobe_path()?)
+    let out = crate::ffmpeg::ffprobe_cmd()?
         .args(["-v", "error", "-print_format", "json", "-show_streams", "-show_format"])
         .arg(path)
         .output()?;

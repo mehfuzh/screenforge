@@ -170,6 +170,10 @@ pub fn keygen() -> (String, String) {
 
 /// Where the app stores the entered key.
 pub fn key_file() -> Option<std::path::PathBuf> {
+    if cfg!(target_os = "windows") {
+        let appdata = std::env::var_os("APPDATA")?;
+        return Some(std::path::PathBuf::from(appdata).join("ScreenForge").join("license.key"));
+    }
     let home = std::env::var_os("HOME")?;
     Some(std::path::PathBuf::from(home).join("Library/Application Support/ScreenForge/license.key"))
 }

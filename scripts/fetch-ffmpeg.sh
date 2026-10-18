@@ -6,11 +6,38 @@
 #   Linux: https://github.com/BtbN/FFmpeg-Builds (GPL builds, newest release series, x86_64; these
 #          include x11grab, which many static builds leave out)
 #          → target/ffmpeg-static/linux-<arch>/{ffmpeg,ffprobe,LICENSE.txt}
+#   Windows: the same BtbN builds (win64-gpl: ddagrab, gdigrab, dshow, NVENC/AMF/QSV encoders)
+#          → target/ffmpeg-static/windows-x86_64/{ffmpeg.exe,ffprobe.exe,LICENSE.txt}
 # Idempotent; reruns only if missing. Prints the directory on stdout.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 ARCH=${FFMPEG_ARCH:-$(uname -m)}            # arm64 | x86_64
 TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT
+
+case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*|Windows_NT) IS_WINDOWS=1 ;; *) IS_WINDOWS=${OS:+$([ "$OS" = Windows_NT ] && echo 1)} ;; esac
+if [ -n "${IS_WINDOWS:-}" ]; then
+  DEST="target/ffmpeg-static/windows-x86_64"
+  if [ -f "$DEST/ffmpeg.exe" ] && [ -f "$DEST/ffprobe.exe" ]; then echo "$DEST"; exit 0; fi
+  # override with FFMPEG_WINDOWS_ASSET=ffmpeg-n9.0-latest-win64-gpl-9.0.zip
+  ASSET=${FFMPEG_WINDOWS_ASSET:-$(curl -fsSL ${GH_TOKEN:+-H "Authorization: Bearer $GH_TOKEN"} \
+      https://api.github.com/repos/BtbN/FFmpeg-Builds/releases/latest \
+    | grep -oE '"name": *"ffmpeg-n[0-9.]+-latest-win64-gpl-[0-9.]+\.zip"' \
+    | sed -E 's/.*"(ffmpeg-[^"]+)"/\1/' | sort -V | tail -1)}
+  [ -n "$ASSET" ] || { echo "no win64-gpl release asset found" >&2; exit 1; }
+  url="https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/$ASSET"
+  echo "→ ffmpeg + ffprobe (windows x86_64) from $url" >&2
+  curl -fsSL "$url" -o "$TMP/ff.zip"
+  unzip -q "$TMP/ff.zip" -d "$TMP"
+  SRC=$(dirname "$(find "$TMP" -type f -name ffmpeg.exe | head -1)")
+  [ -f "$SRC/ffmpeg.exe" ] && [ -f "$SRC/ffprobe.exe" ] || { echo "no ffmpeg/ffprobe in the archive" >&2; exit 1; }
+  "$SRC/ffmpeg.exe" -hide_banner -devices 2>/dev/null | grep -q gdigrab || { echo "ffmpeg build has no gdigrab" >&2; exit 1; }
+  mkdir -p "$DEST"
+  cp "$SRC/ffmpeg.exe" "$SRC/ffprobe.exe" "$DEST/"
+  cp "$SRC/../LICENSE.txt" "$DEST/LICENSE.txt"
+  "$DEST/ffmpeg.exe" -version | head -1 >&2
+  echo "$DEST"
+  exit 0
+fi
 
 if [ "$(uname -s)" = Linux ]; then
   [ "$ARCH" = x86_64 ] || { echo "unsupported arch $ARCH"; exit 1; }
