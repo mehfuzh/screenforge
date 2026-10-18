@@ -62,7 +62,7 @@ builds it, and ongoing maintenance. See `backend/README.md` for how keys are iss
 
 > Status: early alpha. Records the screen with ScreenCaptureKit (plus an optional webcam), edits on a GPU-rendered
 > timeline (cuts, speed, zooms that follow the cursor, smoothed cursor, backgrounds, padding,
-> shadow, camera layouts, captions transcribed on device with Whisper) and exports MP4/HEVC/ProRes/GIF/WebM with mixed audio, background
+> shadow, camera layouts, face tracking and DaVinci Resolve style colour grading for the camera, captions transcribed on device with Whisper) and exports MP4/HEVC/ProRes/GIF/WebM with mixed audio, background
 > music and an independent audio track. See `docs/STATUS.md` for what is missing.
 
 ## Product roadmap
@@ -74,7 +74,6 @@ Controls for these show up greyed out in the app (hover: "on the product roadmap
 - **Keyboard shortcut overlay** — key-cap rendering of recorded keystrokes
 - **Device frames** — iPhone/iPad recording and mockup frames
 - **Unsplash backgrounds** — online wallpaper search
-- **Face tracking and color grading** — camera centring, looks and LUTs
 
 ## Layout
 
@@ -83,8 +82,9 @@ Controls for these show up greyed out in the app (hover: "on the product roadmap
 | `crates/sf-project`  | `.screenforge` package model (and `.screenstudio` import): superjson envelope, v4 schema, v3→v4 migration, recording metadata, input event logs |
 | `crates/sf-engine`   | timeline (output↔source time), react-spring compatible springs, cursor smoothing, zoom camera, layout, auto zoom |
 | `crates/sf-media`    | ffmpeg-driven decode (HLS fMP4 → RGBA) and encode (rawvideo → H.264/HEVC/ProRes/GIF/WebM + audio mix) |
-| `crates/sf-render`   | wgpu compositor (WGSL): background, shadow, rounded screen, camera, cursor sprites |
-| `crates/sf-session`  | an opened project: sources, caches, per-frame `FrameDesc` |
+| `crates/sf-render`   | wgpu compositor (WGSL): background, shadow, rounded screen, camera (Resolve style grade, 3D LUTs), cursor sprites |
+| `crates/sf-session`  | an opened project: sources, caches, face tracking, per-frame `FrameDesc` |
+| `crates/sf-vision`   | on-device face detection for the camera feed (SeetaFace cascade, model compiled in) |
 | `crates/sf-export`   | headless export loop |
 | `crates/sf-recording`| recorder (ScreenCaptureKit, webcam, input events, cursor capture) writing the polyrecorder layout |
 | `apps/studio`        | egui desktop app (launcher, editor, export) |

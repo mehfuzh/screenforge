@@ -234,6 +234,14 @@ pub struct CameraConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub crop01: Option<Rect>,
     pub background: CameraBackground,
+    /// ScreenForge extension: how tightly face tracking frames the face (1 = default framing,
+    /// smaller = wider shot, larger = closer). `None` = 1.
+    #[serde(default, rename = "sfFaceTrackingZoom", skip_serializing_if = "Option::is_none")]
+    pub face_tracking_zoom: Option<f64>,
+    /// ScreenForge extension: DaVinci Resolve style primaries for the camera picture.
+    /// `None` = no grade (neutral).
+    #[serde(default, rename = "sfColorGrade", skip_serializing_if = "Option::is_none")]
+    pub color_grade: Option<ColorGrade>,
     #[serde(flatten)]
     pub extra: Extra,
 }
@@ -252,6 +260,112 @@ impl Default for CameraConfig {
             sharpen01: 0.0,
             crop01: None,
             background: CameraBackground::default(),
+            face_tracking_zoom: None,
+            color_grade: None,
+            extra: Extra::new(),
+        }
+    }
+}
+
+impl CameraConfig {
+    pub fn face_tracking_zoom(&self) -> f64 {
+        self.face_tracking_zoom.filter(|z| z.is_finite() && *z > 0.0).unwrap_or(1.0)
+    }
+
+    /// The grade in effect (`sfColorGrade`, or the neutral defaults).
+    pub fn grade(&self) -> ColorGrade {
+        self.color_grade.clone().unwrap_or_default()
+    }
+}
+
+/// DaVinci Resolve style primaries (`sfColorGrade`, a ScreenForge extension).
+///
+/// Values are kept in the units Resolve shows in its Primaries palette so a grade reads like a
+/// Resolve node: master wheels `Lift 0.00 · Gamma 0.00 · Gain 1.00 · Offset 25.00`, adjustment
+/// controls `Temp 0 · Tint 0 · Contrast 1.000 · Pivot 0.435 · Color Boost 0 · Shadows 0 ·
+/// Highlights 0 · Saturation 50 · Hue 50` (50 = unity for saturation and hue).
+///
+/// Each wheel is `[r, g, b, master]`: the puck sets the zero-sum `r, g, b` chroma offset
+/// (±0.5 at the wheel's rim), the ring under it the `master`. The effective per-channel value
+/// is `master + channel` (offset: `(master − 25) / 50 + channel`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ColorGrade {
+    pub lift: [f64; 4],
+    pub gamma: [f64; 4],
+    pub gain: [f64; 4],
+    pub offset: [f64; 4],
+    /// −100 (cooler) … 100 (warmer).
+    pub temperature: f64,
+    /// −100 (green) … 100 (magenta).
+    pub tint: f64,
+    /// 0 … 2, unity 1.
+    pub contrast: f64,
+    /// Contrast pivot, 0 … 1.
+    pub pivot: f64,
+    /// −100 … 100, saturates the least saturated colours first (vibrance).
+    pub color_boost: f64,
+    /// −100 … 100.
+    pub shadows: f64,
+    /// −100 … 100.
+    pub highlights: f64,
+    /// 0 … 100, unity 50.
+    pub saturation: f64,
+    /// 0 … 100, unity 50; the full range is one turn of the hue circle.
+    pub hue: f64,
+    #[serde(flatten)]
+    pub extra: Extra,
+}
+
+impl ColorGrade {
+    pub const LIFT_DEFAULT: f64 = 0.0;
+    pub const GAMMA_DEFAULT: f64 = 0.0;
+    pub const GAIN_DEFAULT: f64 = 1.0;
+    pub const OFFSET_DEFAULT: f64 = 25.0;
+    pub const PIVOT_DEFAULT: f64 = 0.435;
+
+    /// `true` when every control sits at its unity value (the grade changes nothing).
+    pub fn is_neutral(&self) -> bool {
+        *self == ColorGrade { extra: self.extra.clone(), ..Default::default() }
+    }
+
+    /// Effective per-channel values (math units): lift and gamma offsets, gain multipliers,
+    /// offset added to the signal.
+    pub fn lift_rgb(&self) -> [f64; 3] {
+        wheel_rgb(&self.lift)
+    }
+    pub fn gamma_rgb(&self) -> [f64; 3] {
+        wheel_rgb(&self.gamma)
+    }
+    pub fn gain_rgb(&self) -> [f64; 3] {
+        wheel_rgb(&self.gain)
+    }
+    pub fn offset_rgb(&self) -> [f64; 3] {
+        let m = (self.offset[3] - Self::OFFSET_DEFAULT) / 50.0;
+        [m + self.offset[0], m + self.offset[1], m + self.offset[2]]
+    }
+}
+
+fn wheel_rgb(w: &[f64; 4]) -> [f64; 3] {
+    [w[3] + w[0], w[3] + w[1], w[3] + w[2]]
+}
+
+impl Default for ColorGrade {
+    fn default() -> Self {
+        ColorGrade {
+            lift: [0.0, 0.0, 0.0, Self::LIFT_DEFAULT],
+            gamma: [0.0, 0.0, 0.0, Self::GAMMA_DEFAULT],
+            gain: [0.0, 0.0, 0.0, Self::GAIN_DEFAULT],
+            offset: [0.0, 0.0, 0.0, Self::OFFSET_DEFAULT],
+            temperature: 0.0,
+            tint: 0.0,
+            contrast: 1.0,
+            pivot: Self::PIVOT_DEFAULT,
+            color_boost: 0.0,
+            shadows: 0.0,
+            highlights: 0.0,
+            saturation: 50.0,
+            hue: 50.0,
             extra: Extra::new(),
         }
     }

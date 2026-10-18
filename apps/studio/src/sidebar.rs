@@ -572,9 +572,151 @@ fn camera_style_ui(ed: &mut Editor, ui: &mut egui::Ui) {
     }
     cfg_slider(ed, ui, "Sharpen", |p| p.config.camera.sharpen01, |p, v| p.config.camera.sharpen01 = v, 0.0..=1.0, Some(0.0), "");
     cfg_slider(ed, ui, "Grain", |p| p.config.camera.grain, |p, v| p.config.camera.grain = v, 0.0..=1.0, Some(0.0), "");
+
+    // ── face tracking ──
+    widgets::title(ui, "Face tracking");
     let mut face = ed.session.pkg.project.config.camera.enable_face_tracking;
-    widgets::roadmap(ui, |ui| widgets::toggle_row(ui, "Face tracking", "Center the camera on your face.", &mut face));
-    widgets::hint(ui, "Color grading looks and LUTs are on the roadmap.");
+    if ed.session.face_tracker.is_available() {
+        if widgets::toggle_row(ui, "Follow my face", "Keep your face centred in the camera. Detected on this computer, nothing leaves it.", &mut face) {
+            ed.edit(move |p| p.config.camera.enable_face_tracking = face);
+        }
+        if face {
+            cfg_slider(ed, ui, "Framing", |p| p.config.camera.face_tracking_zoom(), |p, v| p.config.camera.face_tracking_zoom = if (v - 1.0).abs() < 1e-9 { None } else { Some(v) }, 0.5..=2.0, Some(1.0), "×");
+            widgets::hint(ui, "Lower is a wider shot, higher is closer. The window glides after you and holds still for small movements.");
+        }
+    } else {
+        widgets::roadmap(ui, |ui| widgets::toggle_row(ui, "Follow my face", "The face detector failed to load.", &mut face));
+    }
+
+    // ── look (LUT) ──
+    widgets::title(ui, "Look");
+    let bundled = ed.session.assets.list_luts();
+    let current = ed.session.pkg.project.config.camera.lut.clone();
+    let mut names: Vec<String> = bundled.clone();
+    if let Some(c) = &current {
+        if !names.contains(c) {
+            names.push(c.clone());
+        }
+    }
+    let mut labels: Vec<String> = vec!["None".into()];
+    labels.extend(names.iter().map(|n| n.strip_suffix(".cube").unwrap_or(n).to_string()));
+    let label_refs: Vec<&str> = labels.iter().map(String::as_str).collect();
+    let idx = current.as_ref().and_then(|c| names.iter().position(|n| n == c)).map(|i| i + 1).unwrap_or(0);
+    if let Some(i) = widgets::pills(ui, idx, &label_refs) {
+        let name = (i > 0).then(|| names[i - 1].clone());
+        ed.edit(move |p| p.config.camera.lut = name);
+    }
+    if ui.button("Import .cube…").clicked() {
+        if let Some(path) = rfd::FileDialog::new().add_filter("3D LUT", &["cube", "CUBE"]).pick_file() {
+            let name = path.file_name().unwrap().to_string_lossy().into_owned();
+            let dest = ed.session.pkg.path.join("assets").join(&name);
+            let _ = std::fs::create_dir_all(dest.parent().unwrap());
+            if std::fs::copy(&path, &dest).is_ok() {
+                ed.edit(move |p| p.config.camera.lut = Some(name));
+            }
+        }
+    }
+    widgets::hint(ui, "3D LUTs in DaVinci Resolve's .cube format; the file is copied into the project.");
+    if current.is_some() {
+        cfg_slider(ed, ui, "Look intensity", |p| p.config.camera.lut_intensity, |p, v| p.config.camera.lut_intensity = v, 0.0..=1.0, Some(1.0), "");
+    }
+
+    // ── primaries: colour wheels ──
+    widgets::title(ui, "Color Wheels");
+    widgets::hint(ui, "DaVinci Resolve primaries: the puck shifts colour, the number under it is the master.");
+    ui.add_space(6.0);
+    let grade = ed.session.pkg.project.config.camera.grade();
+    let wheels: [(&str, fn(&sf_project::v4::ColorGrade) -> [f64; 4], fn(&mut sf_project::v4::ColorGrade) -> &mut [f64; 4], f64, std::ops::RangeInclusive<f64>, f64); 4] = [
+        ("Lift", |g| g.lift, |g| &mut g.lift, sf_project::v4::ColorGrade::LIFT_DEFAULT, -1.0..=1.0, 0.0025),
+        ("Gamma", |g| g.gamma, |g| &mut g.gamma, sf_project::v4::ColorGrade::GAMMA_DEFAULT, -1.0..=1.0, 0.0025),
+        ("Gain", |g| g.gain, |g| &mut g.gain, sf_project::v4::ColorGrade::GAIN_DEFAULT, 0.0..=4.0, 0.0025),
+        ("Offset", |g| g.offset, |g| &mut g.offset, sf_project::v4::ColorGrade::OFFSET_DEFAULT, -25.0..=75.0, 0.05),
+    ];
+    // four square tiles in one aligned row: name, wheel, master value
+    let gap = 6.0;
+    // leave room for the scroll bar so the last tile is not clipped
+    let tile_w = ((ui.available_width() - gap * 3.0 - 12.0) / 4.0).clamp(56.0, 112.0);
+    let tile_h = tile_w + 34.0;
+    let diameter = (tile_w - 18.0).min(72.0);
+    egui::Grid::new("camera-color-wheels").num_columns(4).spacing(egui::vec2(gap, 0.0)).show(ui, |ui| {
+        for (name, get, get_mut, default, range, speed) in wheels.iter() {
+            let mut w = get(&grade);
+            let (tile, _) = ui.allocate_exact_size(egui::vec2(tile_w, tile_h), egui::Sense::hover());
+            ui.painter().rect_filled(tile, egui::CornerRadius::same(2), theme::p().card_2);
+            let mut cell = ui.new_child(egui::UiBuilder::new().max_rect(tile.shrink(4.0)).layout(egui::Layout::top_down(egui::Align::Center)));
+            cell.spacing_mut().item_spacing.y = 4.0;
+            cell.label(RichText::new(*name).size(13.0).color(theme::p().text));
+            let mut rgb = [w[0], w[1], w[2]];
+            let disc = widgets::color_wheel(&mut cell, &mut rgb, diameter);
+            let mut master = w[3];
+            let drag = cell.add(egui::DragValue::new(&mut master).speed(*speed).range(range.clone()).fixed_decimals(2));
+            if drag.double_clicked() {
+                master = *default;
+            }
+            let changed = disc.changed() || drag.changed() || (drag.double_clicked() && (master - w[3]).abs() > 1e-12);
+            if changed {
+                w = [rgb[0], rgb[1], rgb[2], master];
+                let get_mut = *get_mut;
+                set_grade(ed, move |g| *get_mut(g) = w);
+            }
+            let commit = disc.drag_stopped() || drag.drag_stopped() || ((disc.changed() || drag.changed()) && !disc.dragged() && !drag.dragged());
+            if commit {
+                push_undo(ed);
+            }
+        }
+        ui.end_row();
+    });
+    ui.add_space(4.0);
+
+    // ── adjustment controls ──
+    widgets::title(ui, "Adjustments");
+    grade_slider(ed, ui, "Temperature", |g| g.temperature, |g, v| g.temperature = v, -100.0..=100.0, 0.0, "");
+    grade_slider(ed, ui, "Tint", |g| g.tint, |g, v| g.tint = v, -100.0..=100.0, 0.0, "");
+    grade_slider(ed, ui, "Contrast", |g| g.contrast, |g, v| g.contrast = v, 0.0..=2.0, 1.0, "");
+    grade_slider(ed, ui, "Pivot", |g| g.pivot, |g, v| g.pivot = v, 0.0..=1.0, sf_project::v4::ColorGrade::PIVOT_DEFAULT, "");
+    grade_slider(ed, ui, "Color Boost", |g| g.color_boost, |g, v| g.color_boost = v, -100.0..=100.0, 0.0, "");
+    grade_slider(ed, ui, "Shadows", |g| g.shadows, |g, v| g.shadows = v, -100.0..=100.0, 0.0, "");
+    grade_slider(ed, ui, "Highlights", |g| g.highlights, |g, v| g.highlights = v, -100.0..=100.0, 0.0, "");
+    grade_slider(ed, ui, "Saturation", |g| g.saturation, |g, v| g.saturation = v, 0.0..=100.0, 50.0, "");
+    grade_slider(ed, ui, "Hue", |g| g.hue, |g, v| g.hue = v, 0.0..=100.0, 50.0, "");
+    ui.add_space(6.0);
+    let neutral = ed.session.pkg.project.config.camera.color_grade.as_ref().map(|g| g.is_neutral()).unwrap_or(true);
+    ui.add_enabled_ui(!neutral, |ui| {
+        if widgets::secondary_button(ui, "Reset grade").clicked() {
+            ed.edit(|p| p.config.camera.color_grade = None);
+        }
+    });
+}
+
+/// Apply a live change to the camera grade (no undo entry; see [`push_undo`]). A grade left at
+/// its defaults is removed from the project again.
+fn set_grade(ed: &mut Editor, f: impl FnOnce(&mut sf_project::v4::ColorGrade)) {
+    let cam = &mut ed.session.pkg.project.config.camera;
+    let g = cam.color_grade.get_or_insert_with(Default::default);
+    f(g);
+    if g.is_neutral() {
+        cam.color_grade = None;
+    }
+    ed.session.rebuild();
+    ed.invalidate_preview();
+}
+
+fn push_undo(ed: &mut Editor) {
+    let p = ed.session.pkg.project.clone();
+    ed.undo.push(p);
+    ed.redo.clear();
+}
+
+/// `cfg_slider` for one of the grade's adjustment controls (Resolve display units).
+fn grade_slider(ed: &mut Editor, ui: &mut egui::Ui, label: &str, get: impl Fn(&sf_project::v4::ColorGrade) -> f64, set: impl Fn(&mut sf_project::v4::ColorGrade, f64) + Copy, range: std::ops::RangeInclusive<f64>, default: f64, suffix: &str) {
+    let mut v = get(&ed.session.pkg.project.config.camera.grade());
+    let r = widgets::labeled_slider(ui, label, &mut v, range, Some(default), suffix);
+    if r.response.changed() || r.reset {
+        set_grade(ed, move |g| set(g, v));
+    }
+    if r.response.drag_stopped() || r.reset || (r.response.changed() && !r.response.dragged()) {
+        push_undo(ed);
+    }
 }
 
 fn captions_ui(ed: &mut Editor, ui: &mut egui::Ui) {
