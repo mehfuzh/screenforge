@@ -4,12 +4,12 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Pricing — ScreenForge</title>
-<meta name="description" content="ScreenForge is free to record and edit. The Creator license is US$29 once, never expires, is verified offline and has a 24-hour refund.">
+<meta name="description" content="ScreenForge is free to record and edit. The Creator license is US$49 once, never expires, is verified offline and has a 24-hour refund.">
 <link rel="canonical" href="https://screenforge.studio/pricing">
 <meta name="color-scheme" content="light dark">
 <meta property="og:type" content="website">
 <meta property="og:title" content="Pricing — ScreenForge">
-<meta property="og:description" content="ScreenForge is free to record and edit. The Creator license is US$29 once, never expires, is verified offline and has a 24-hour refund.">
+<meta property="og:description" content="ScreenForge is free to record and edit. The Creator license is US$49 once, never expires, is verified offline and has a 24-hour refund.">
 <meta property="og:image" content="https://screenforge.studio/og.png?v=3">
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
@@ -24,8 +24,8 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;700;900&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
 <style>
-  /* Light is the default; the dark set below applies once the visitor
-     picks it with the toggle (stored in localStorage, set as data-theme). */
+  /* Follows the system appearance by default (the boot script sets data-theme from
+     prefers-color-scheme); a toggle choice stored in localStorage overrides it. */
   :root {
     --ground: #15161e;
     --ink: #1e1f29;
@@ -45,7 +45,7 @@
     --body: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
     color-scheme: dark;
   }
-  :root:not([data-theme="dark"]) {
+  :root[data-theme="light"] {
     --ground: #ececf1;
     --ink: #f6f6fa;
     --panel: #ffffff;
@@ -399,10 +399,10 @@
 </style>
 <script>
   (function () {
-    try {
-      var t = localStorage.getItem('theme');
-      if (t === 'light' || t === 'dark') document.documentElement.dataset.theme = t;
-    } catch (e) {}
+    var t = null;
+    try { t = localStorage.getItem('theme'); } catch (e) {}
+    if (t !== 'light' && t !== 'dark') t = matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+    document.documentElement.dataset.theme = t;
   })();
 </script>
 <!-- Google tag (gtag.js) -->
@@ -425,8 +425,8 @@ gtag('config', 'G-ZYRJDJ736V');
       <a href="pricing.html">Pricing</a>
       <a class="nav-cta" href="download.html">Download</a>
       <div class="mode-toggle" role="group" aria-label="Color scheme">
-        <button type="button" data-set="light" aria-pressed="true" aria-label="Light theme" title="Light"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg></button>
-        <button type="button" data-set="dark" aria-pressed="false" aria-label="Dark theme" title="Dark"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg></button>
+        <button type="button" data-set="light" aria-pressed="false" aria-label="Light theme" title="Light"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg></button>
+        <button type="button" data-set="dark" aria-pressed="true" aria-label="Dark theme" title="Dark"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg></button>
       </div>
     </div>
   </div>
@@ -435,7 +435,7 @@ gtag('config', 'G-ZYRJDJ736V');
 <main class="doc wide">
   <div class="eyebrow">Pricing</div>
   <h1>Pricing that fits <em>how you work.</em></h1>
-  <p class="stamp">US$29 once · no subscription · verified offline · 24-hour refund</p>
+  <p class="stamp">US$49 once · no subscription · verified offline · 24-hour refund</p>
 
   <div class="plans" style="margin-top:0">
     <div class="plan lite">
@@ -455,7 +455,7 @@ gtag('config', 'G-ZYRJDJ736V');
     <div class="plan">
       <div class="name">Creator</div>
       <div class="opt">
-        <div class="fig">US$29<small>once</small><span class="tag">lifetime</span></div>
+        <div class="fig">US$49<small>once</small><span class="tag">lifetime</span></div>
         <div class="per">one payment · the key never expires</div>
         <form class="form" data-plan="lifetime" novalidate>
           <button class="buy" type="submit">Buy lifetime</button>
@@ -480,7 +480,7 @@ gtag('config', 'G-ZYRJDJ736V');
     </div>
     <div class="perks">
       <ul>
-        <li>Volume pricing for 5 seats and up</li>
+        <li>Volume pricing for 5 seats and up: from US$39 a seat</li>
         <li>One invoice, card or bank transfer</li>
         <li>Keys for every teammate, re-issued when people change</li>
         <li>Shared presets so every video matches the brand</li>
@@ -501,7 +501,7 @@ gtag('config', 'G-ZYRJDJ736V');
     </div>
     <div>
       <h3>Is there a subscription?</h3>
-      <p>No. You pay US$29 once and the key never expires. If you set up a new computer, enter the same email and press Activate; it re-activates without a new purchase.</p>
+      <p>No. You pay US$49 once and the key never expires. If you set up a new computer, enter the same email and press Activate; it re-activates without a new purchase.</p>
     </div>
     <div>
       <h3>Can I get a refund?</h3>
@@ -544,7 +544,7 @@ gtag('config', 'G-ZYRJDJ736V');
     var btns = document.querySelectorAll('.mode-toggle button');
     function current() {
       if (root.dataset.theme) return root.dataset.theme;
-      return 'light';
+      return 'dark';
     }
     function paint() {
       var c = current();
@@ -558,6 +558,14 @@ gtag('config', 'G-ZYRJDJ736V');
       });
     });
     paint();
+    // No saved choice: keep following the system when it switches.
+    try {
+      matchMedia('(prefers-color-scheme: light)').addEventListener('change', function (e) {
+        try { if (localStorage.getItem('theme')) return; } catch (err) {}
+        root.dataset.theme = e.matches ? 'light' : 'dark';
+        paint();
+      });
+    } catch (e) {}
   })();
 </script>
 <script>

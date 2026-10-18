@@ -49,7 +49,7 @@
 
 ## Appearance
 
-- Dark and light palettes (`apps/studio/src/theme.rs`); follows the system appearance by default, with a Match system / Light / Dark choice in the picker's settings menu (stored in prefs as `appearance`).
+- Dark and light palettes (`apps/studio/src/theme.rs`); ScreenForge Dark by default, with ScreenForge Light / Match system / Catppuccin Mocha / Solarized Light / Osaka Jade in the picker's settings menu (stored in prefs as `appearance`). The website (`site/*.html`) follows the system appearance, with a light/dark toggle stored in localStorage.
 - Editor window uses a transparent full-size title bar so the traffic lights sit inside the toolbar.
 - A project can be opened from the command line: `screenforge My.screenforge`.
 - Projects open from Finder (double-click, Open With, drop on the Dock icon), at launch or while the app runs: `apps/studio/src/open_docs.rs` handles the `odoc` Apple Event. The Open project dialog starts in `~/ScreenForge Projects`.

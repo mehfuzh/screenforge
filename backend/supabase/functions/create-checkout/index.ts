@@ -11,7 +11,7 @@ serve(async (req) => {
   // they fall back to opening the pricing page. Existing subscriptions keep renewing through
   // stripe-webhook.
   if (plan !== "lifetime") {
-    return new Response(JSON.stringify({ error: "The monthly plan is no longer offered; the license is US$29 once." }), { status: 410, headers: { ...cors, "Content-Type": "application/json" } });
+    return new Response(JSON.stringify({ error: "The monthly plan is no longer offered; the license is US$49 once." }), { status: 410, headers: { ...cors, "Content-Type": "application/json" } });
   }
   const price = Deno.env.get("STRIPE_PRICE_LIFETIME");
   const session = await stripe.checkout.sessions.create({

@@ -37,24 +37,10 @@ else
   echo "  exists $PROD"
 fi
 
-price_by_key() { stripe prices list --live --limit 100 -d "lookup_keys[]=$1" | jq -r '.data[0].id // empty'; }
-echo "→ Stripe (live): prices"
-PM=$(price_by_key screenforge_monthly)
-if [ -z "$PM" ]; then
-  PM=$(stripe prices create --live --product "$PROD" --currency usd --unit-amount 1000 \
-    -d "recurring[interval]=month" -d lookup_key=screenforge_monthly --nickname "ScreenForge monthly" | jq -r .id)
-  echo "  created monthly $PM (US\$10 / month)"
-else
-  echo "  monthly $PM"
-fi
-PL=$(price_by_key screenforge_lifetime)
-if [ -z "$PL" ]; then
-  PL=$(stripe prices create --live --product "$PROD" --currency usd --unit-amount 2900 \
-    -d lookup_key=screenforge_lifetime --nickname "ScreenForge lifetime" | jq -r .id)
-  echo "  created lifetime $PL (US\$29 once)"
-else
-  echo "  lifetime $PL"
-fi
+# Prices: the one-time lifetime key (US$49) and archiving the retired US$10 monthly plan live in
+# update-price.sh, which is also what to run on its own when the price changes.
+LIFETIME_CENTS=${LIFETIME_CENTS:-4900}
+PL=$(./update-price.sh --stripe-only "$LIFETIME_CENTS")
 
 echo "→ Stripe (live): webhook → Supabase"
 WH_URL="https://$REF.supabase.co/functions/v1/stripe-webhook"
@@ -87,7 +73,6 @@ supabase secrets set --project-ref "$REF" \
   SF_LICENSE_SIGNING_KEY="$SIGNING_KEY" \
   STRIPE_SECRET_KEY="$STRIPE_SECRET_KEY" \
   STRIPE_WEBHOOK_SECRET="$WHSEC" \
-  STRIPE_PRICE_MONTHLY="$PM" \
   STRIPE_PRICE_LIFETIME="$PL" \
   RESEND_API_KEY="$RESEND_API_KEY" \
   LICENSE_FROM_EMAIL="ScreenForge <license@screenforge.studio>" \
