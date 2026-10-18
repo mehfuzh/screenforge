@@ -278,8 +278,6 @@
   }
   .card p { font-size: 14px; color: var(--dim); }
   .card code { font-family: var(--mono); font-size: 12.5px; color: var(--fg); }
-  /* three columns: a lone card on the last row spans the row */
-  @media (min-width: 921px) { .grid .card:last-child:nth-child(3n + 1) { grid-column: 1 / -1; } }
   @media (max-width: 920px) { .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
   @media (max-width: 560px) { .grid { grid-template-columns: minmax(0, 1fr); } }
 
@@ -481,11 +479,6 @@ gtag('config', 'G-ZYRJDJ736V');
         <div class="k">Keyboard <span class="tag">new</span></div>
         <h3>Shortcuts on screen</h3>
         <p>The shortcuts you press while recording show up as key caps, like <code>⇧ ⌘ S</code>, so viewers can follow along. Plain key presses too, if you want them.</p>
-      </div>
-      <div class="card">
-        <div class="k">Auto timeline <span class="tag">soon</span></div>
-        <h3>A first cut, built by local AI</h3>
-        <p>Open a recording and the timeline is already laid out: zooms on the moments that matter, pauses and retakes trimmed, captions in place. Models run on your computer, so nothing is uploaded. Every edit stays yours to change.</p>
       </div>
     </div>
   </div>
