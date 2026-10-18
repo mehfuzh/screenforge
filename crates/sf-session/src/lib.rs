@@ -11,6 +11,7 @@
 pub mod assets;
 pub mod captions;
 pub mod create;
+pub mod cursor_sets;
 pub mod preview;
 pub mod face;
 pub mod layout;
@@ -66,6 +67,8 @@ pub struct Session {
     screen: SourceStream,
     camera_stream: Option<SourceStream>,
     cursor_sprites: HashMap<String, Arc<CursorSprite>>,
+    /// Sprites of the drawn cursor sets, uploaded once per `(set, cursor id)`.
+    set_sprites: HashMap<(String, String), Option<Arc<CursorSprite>>>,
     background_tex: Option<(String, Arc<Texture>)>,
     camera: CameraSolver,
     cursor_smoother: CursorSmoother,
@@ -113,6 +116,7 @@ impl Session {
             screen,
             camera_stream,
             cursor_sprites: HashMap::new(),
+            set_sprites: HashMap::new(),
             background_tex: None,
             camera,
             cursor_smoother,
@@ -242,6 +246,40 @@ impl Session {
                 );
             }
         }
+    }
+
+    /// The sprite to draw for a cursor id under `config.cursor.set`: the set's own drawing when
+    /// it has one, else the recorded sprite for that id, else the set's arrow, else the
+    /// recorded arrow. Drawn sprites are rasterised and uploaded on first use.
+    fn cursor_sprite(&mut self, set: &str, id: &str) -> Option<Arc<CursorSprite>> {
+        if set != cursor_sets::RECORDED {
+            if let Some(sp) = self.set_sprite(set, id) {
+                return Some(sp);
+            }
+        }
+        if let Some(sp) = self.cursor_sprites.get(id) {
+            return Some(sp.clone());
+        }
+        if set != cursor_sets::RECORDED {
+            if let Some(sp) = self.set_sprite(set, "arrow") {
+                return Some(sp);
+            }
+        }
+        self.cursor_sprites.get("arrow").cloned()
+    }
+
+    fn set_sprite(&mut self, set: &str, id: &str) -> Option<Arc<CursorSprite>> {
+        let key = (set.to_string(), id.to_string());
+        if let Some(sp) = self.set_sprites.get(&key) {
+            return sp.clone();
+        }
+        let sp = cursor_sets::draw(set, id).map(|mut s| {
+            sf_render::texture::premultiply(&mut s.rgba);
+            let tex = Texture::from_rgba(&self.gpu.device, &self.gpu.queue, s.width, s.height, &s.rgba, &format!("cursor {set}/{id}"));
+            Arc::new(CursorSprite { texture: tex, hotspot: s.hotspot, size: s.size })
+        });
+        self.set_sprites.insert(key, sp.clone());
+        sp
     }
 
     /// Output canvas size for the project at a given height.
@@ -421,8 +459,9 @@ impl Session {
         let idle_hidden = cfg.cursor.hide_not_moving_after_ms.map(|ms| !self.cursor_track.moved_within(source_ms, ms)).unwrap_or(false);
         let typing_hidden = self.cursor_track.is_typing(source_ms, TYPING_HIDE_MS);
         if let (false, Some(c01), Some((_, pressed_scale, tilt_deg)), Some(raw)) = (hide_cursor || idle_hidden || typing_hidden, cursor01, cursor, self.cursor_track.raw_at(source_ms)) {
-            let id = self.cursor_track.cursor_ids.get(raw.cursor_id_index).cloned().unwrap_or_else(|| "arrow".into());
-            let sprite = self.cursor_sprites.get(&id).or_else(|| self.cursor_sprites.get("arrow")).cloned();
+            let id = if cfg.cursor.always_use_default { "arrow".to_string() } else { self.cursor_track.cursor_ids.get(raw.cursor_id_index).cloned().unwrap_or_else(|| "arrow".into()) };
+            let set = cfg.cursor.set.id.clone();
+            let sprite = self.cursor_sprite(&set, &id);
             if let Some(sp) = sprite {
                 let px = screen_px.x + c01[0] * screen_px.width;
                 let py = screen_px.y + c01[1] * screen_px.height;
