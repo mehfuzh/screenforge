@@ -613,7 +613,9 @@ impl Editor {
                 }
             }
             ui.horizontal_centered(|ui| {
-                ui.add_space(72.0); // traffic lights
+                if cfg!(target_os = "macos") {
+                    ui.add_space(72.0); // traffic lights float over the toolbar
+                }
                 if widgets::icon_button(ui, widgets::Icon::Folder, 18.0, "Projects").clicked() {
                     go_home = true;
                 }
