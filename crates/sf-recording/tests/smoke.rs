@@ -219,3 +219,11 @@ fn hook_positions_are_in_points() {
     let (ex, ey) = (physical.x as f64 / scale, physical.y as f64 / scale);
     assert!((last.x.unwrap() - ex).abs() < 3.0 && (last.y.unwrap() - ey).abs() < 3.0, "got {:?} {:?}, expected ({ex},{ey}) at scale {scale}", last.x, last.y);
 }
+
+#[cfg(target_os = "windows")]
+#[test]
+fn screenshot_has_pixels() {
+    let (w, h, rgba) = sf_recording::win::screenshot_px(0, 0, 64, 48).expect("a screenshot");
+    assert_eq!((w, h, rgba.len()), (64, 48, 64 * 48 * 4));
+    assert!(rgba.chunks_exact(4).all(|p| p[3] == 255));
+}

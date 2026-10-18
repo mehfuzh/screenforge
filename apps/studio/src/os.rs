@@ -114,6 +114,30 @@ pub fn reveal(path: &Path) {
     }
 }
 
+/// Windows: a screenshot of the display at `screen` (points) as a texture, for the area and
+/// window overlays, which cannot be transparent on a Direct3D surface. `None` elsewhere.
+pub fn screen_backdrop(ctx: &egui::Context, screen: egui::Rect) -> Option<egui::TextureHandle> {
+    #[cfg(target_os = "windows")]
+    {
+        let m = sf_recording::win::monitors().into_iter().min_by(|a, b| {
+            let d = |m: &sf_recording::win::Monitor| {
+                let r = m.rect_points();
+                (r.x as f32 - screen.min.x).abs() + (r.y as f32 - screen.min.y).abs()
+            };
+            d(a).partial_cmp(&d(b)).unwrap_or(std::cmp::Ordering::Equal)
+        })?;
+        let r = m.rect_px;
+        let (w, h, rgba) = sf_recording::win::screenshot_px(r.x as i32, r.y as i32, r.width as i32, r.height as i32)?;
+        let image = egui::ColorImage::from_rgba_unmultiplied([w as usize, h as usize], &rgba);
+        return Some(ctx.load_texture("screen-backdrop", image, egui::TextureOptions::LINEAR));
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = (ctx, screen);
+        None
+    }
+}
+
 /// `file://` URI for egui's image loader. Windows paths need the `file:///C:/…` form: with
 /// `file://C:\…` the loader takes `C:` for a network host.
 pub fn texture_uri(path: &Path) -> String {

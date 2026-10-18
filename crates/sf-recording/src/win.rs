@@ -345,6 +345,33 @@ pub fn caret_position() -> Option<(f64, f64)> {
     Some(to_points(p.x as f64 + (r.right - r.left) as f64 / 2.0, p.y as f64 + h / 2.0))
 }
 
+/// A screenshot of a physical-pixel rectangle of the virtual screen, as opaque RGBA (what the
+/// area/window overlays show behind themselves, since their windows cannot be transparent on
+/// Direct3D surfaces).
+pub fn screenshot_px(x: i32, y: i32, w: i32, h: i32) -> Option<(u32, u32, Vec<u8>)> {
+    use windows::Win32::Graphics::Gdi::{BitBlt, GetDC, ReleaseDC, CAPTUREBLT, SRCCOPY};
+    if w <= 0 || h <= 0 {
+        return None;
+    }
+    ensure_dpi_aware();
+    let screen = unsafe { GetDC(None) };
+    if screen.0.is_null() {
+        return None;
+    }
+    let result = (|| {
+        let dib = cursor::Dib::new(screen, w, h)?;
+        unsafe { BitBlt(dib.dc, 0, 0, w, h, Some(screen), x, y, SRCCOPY | CAPTUREBLT) }.ok()?;
+        let src = dib.pixels();
+        let mut rgba = Vec::with_capacity(src.len());
+        for px in src.chunks_exact(4) {
+            rgba.extend_from_slice(&[px[2], px[1], px[0], 255]);
+        }
+        Some(rgba)
+    })();
+    let _ = unsafe { ReleaseDC(None::<HWND>, screen) };
+    result.map(|rgba| (w as u32, h as u32, rgba))
+}
+
 /// The system cursor: its image rendered to straight-alpha RGBA, hot spot and the handle that
 /// identifies it cheaply between polls.
 pub mod cursor {
@@ -403,8 +430,8 @@ pub mod cursor {
         unsafe { LoadCursorW(None, id) }.ok().map(|h| h.0 as isize)
     }
 
-    struct Dib {
-        dc: HDC,
+    pub(super) struct Dib {
+        pub(super) dc: HDC,
         bmp: HBITMAP,
         old: HGDIOBJ,
         bits: *mut u8,
@@ -412,7 +439,7 @@ pub mod cursor {
     }
 
     impl Dib {
-        fn new(screen: HDC, w: i32, h: i32) -> Option<Dib> {
+        pub(super) fn new(screen: HDC, w: i32, h: i32) -> Option<Dib> {
             let dc = unsafe { CreateCompatibleDC(Some(screen)) };
             if dc.0.is_null() {
                 return None;
@@ -445,7 +472,7 @@ pub mod cursor {
             unsafe { std::ptr::write_bytes(self.bits, v, self.len) };
         }
 
-        fn pixels(&self) -> &[u8] {
+        pub(super) fn pixels(&self) -> &[u8] {
             unsafe { std::slice::from_raw_parts(self.bits, self.len) }
         }
     }

@@ -17,6 +17,8 @@ pub struct WindowSelect {
     original: Option<sf_project::schema::common::Rect>,
     aspect: usize,
     note: Option<&'static str>,
+    /// Windows: the desktop behind the overlay (see `os::screen_backdrop`).
+    backdrop: Option<egui::TextureHandle>,
 }
 
 /// Aspect ratios offered on the window bar (width / height); `None` keeps the window's own.
@@ -31,7 +33,7 @@ pub enum WindowOutcome {
 impl WindowSelect {
     pub fn new(screen: Rect) -> Self {
         let windows = crate::recorder::discover_windows().into_iter().filter(|w| w.on_screen).collect();
-        WindowSelect { screen, windows, locked: None, original: None, aspect: 0, note: None }
+        WindowSelect { screen, windows, locked: None, original: None, aspect: 0, note: None, backdrop: None }
     }
 
     fn hit(&self, global: egui::Pos2) -> Option<&WindowEntry> {
@@ -65,6 +67,9 @@ impl WindowSelect {
 
     pub fn show(&mut self, ctx: &egui::Context) -> WindowOutcome {
         let mut outcome = WindowOutcome::Pending;
+        if cfg!(target_os = "windows") && self.backdrop.is_none() {
+            self.backdrop = crate::os::screen_backdrop(ctx, self.screen);
+        }
         let builder = egui::ViewportBuilder::default()
             .with_title("Select window")
             .with_decorations(false)
@@ -82,6 +87,9 @@ impl WindowSelect {
                 let pointer = ui.input(|i| i.pointer.hover_pos());
                 let hover = self.locked.clone().or_else(|| pointer.and_then(|p| self.hit(p + origin.to_vec2()).cloned()));
                 let p = ui.painter();
+                if let Some(t) = &self.backdrop {
+                    p.image(t.id(), full, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+                }
                 let dim = Color32::from_rgba_unmultiplied(0, 0, 0, 90);
                 let mut chips: Vec<Rect> = Vec::new();
                 let mut record_btn = Rect::NOTHING;

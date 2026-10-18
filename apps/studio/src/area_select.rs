@@ -10,6 +10,8 @@ pub struct AreaSelect {
     pub screen: Rect,
     drag_from: Option<egui::Pos2>,
     current: Option<Rect>,
+    /// Windows: the desktop behind the overlay (see `os::screen_backdrop`).
+    backdrop: Option<egui::TextureHandle>,
 }
 
 pub enum AreaOutcome {
@@ -20,11 +22,15 @@ pub enum AreaOutcome {
 
 impl AreaSelect {
     pub fn new(display_id: u32, screen: Rect) -> Self {
-        AreaSelect { display_id, screen, drag_from: None, current: None }
+        AreaSelect { display_id, screen, drag_from: None, current: None, backdrop: None }
     }
 
     pub fn show(&mut self, ctx: &egui::Context) -> AreaOutcome {
         let mut outcome = AreaOutcome::Pending;
+        if cfg!(target_os = "windows") && self.backdrop.is_none() {
+            // before the overlay exists, so it is not in the picture
+            self.backdrop = crate::os::screen_backdrop(ctx, self.screen);
+        }
         let builder = egui::ViewportBuilder::default()
             .with_title("Select area")
             .with_decorations(false)
@@ -39,6 +45,9 @@ impl AreaSelect {
                 let full = ui.max_rect();
                 let resp = ui.allocate_rect(full, Sense::click_and_drag());
                 let p = ui.painter();
+                if let Some(t) = &self.backdrop {
+                    p.image(t.id(), full, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+                }
                 let dim = Color32::from_rgba_unmultiplied(0, 0, 0, 90);
                 match self.current {
                     Some(sel) => {
