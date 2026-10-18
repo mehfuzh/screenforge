@@ -3,6 +3,7 @@
 use egui::RichText;
 
 use sf_project::schema::common::Point;
+use sf_session::cursor_sets;
 
 use crate::editor::{fmt_ms, Editor};
 use crate::theme;
@@ -461,17 +462,20 @@ fn cursor_ui(ed: &mut Editor, ui: &mut egui::Ui) {
     }
     cfg_slider(ed, ui, "Cursor size", |p| p.config.cursor.size, |p, v| p.config.cursor.size = v, 16.0..=128.0, Some(48.0), "");
     widgets::title(ui, "Cursor style");
-    // tiles: the recorded pointer (what is drawn today) and the bundled sets. Generic names, as
-    // other recorders use, rather than the OS the sprites come from.
-    let sets: [(&str, &str); 3] = [("macos-tahoe", "Regular"), ("macos", "Classic"), ("touch", "Hand")];
+    // tiles: the recorded pointer (what the OS showed) and the drawn sets, previewed from the
+    // same sprites the renderer uses
     let cur = ed.session.pkg.project.config.cursor.set.id.clone();
-    let idx = sets.iter().position(|(s, _)| *s == cur).unwrap_or(0);
+    let idx = cursor_sets::SETS.iter().position(|(s, _)| *s == cur).unwrap_or(0);
     let arrow = ed.session.pkg.recording_dir().join("cursors").join("arrow.png");
     let mut pick = None;
-    ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing.x = 8.0;
-        for (i, (id, label)) in sets.iter().enumerate() {
-            let preview = if *id == "touch" { CursorPreview::Touch } else if i == 0 && arrow.is_file() { CursorPreview::Image(&arrow) } else { CursorPreview::Arrow };
+    ui.horizontal_wrapped(|ui| {
+        ui.spacing_mut().item_spacing = egui::vec2(8.0, 8.0);
+        for (i, (id, label)) in cursor_sets::SETS.iter().enumerate() {
+            let preview = if *id == cursor_sets::RECORDED {
+                if arrow.is_file() { CursorPreview::Image(crate::os::texture_uri(&arrow)) } else { CursorPreview::Arrow }
+            } else {
+                cursor_set_preview(ui.ctx(), id)
+            };
             if cursor_tile(ui, preview, label, i == idx).clicked() {
                 pick = Some(id.to_string());
             }
@@ -480,7 +484,6 @@ fn cursor_ui(ed: &mut Editor, ui: &mut egui::Ui) {
     if let Some(id) = pick {
         ed.edit(move |p| p.config.cursor.set.id = id);
     }
-    widgets::hint(ui, "The recorded cursor sprites are used; cursor sets need the assets folder.");
     let mut always = ed.session.pkg.project.config.cursor.always_use_default;
     if widgets::toggle_row(ui, "Always use pointer cursor", "Don't change cursor, even if selecting text, etc.", &mut always) {
         ed.edit(move |p| p.config.cursor.always_use_default = always);
@@ -1110,17 +1113,31 @@ fn hsl_to_rgb(h: f64, s: f64, l: f64) -> (u8, u8, u8) {
 }
 
 
-enum CursorPreview<'a> {
-    /// The recorded pointer image.
-    Image(&'a std::path::Path),
-    /// A drawn arrow (bundled set not available).
+enum CursorPreview {
+    /// A texture uri: the recorded pointer image or a drawn set's arrow.
+    Image(String),
+    /// A drawn arrow icon (no image available).
     Arrow,
-    /// A fingertip (touch set).
-    Touch,
+}
+
+/// The arrow of a drawn cursor set, encoded once as a PNG under a `bytes://` uri.
+fn cursor_set_preview(ctx: &egui::Context, set: &str) -> CursorPreview {
+    let uri = format!("bytes://cursor-set-{set}.png");
+    if ctx.try_load_bytes(&uri).is_ok() {
+        return CursorPreview::Image(uri);
+    }
+    let Some(s) = cursor_sets::draw(set, "arrow") else { return CursorPreview::Arrow };
+    let Some(img) = image::RgbaImage::from_raw(s.width, s.height, s.rgba) else { return CursorPreview::Arrow };
+    let mut png = std::io::Cursor::new(Vec::new());
+    if img.write_to(&mut png, image::ImageFormat::Png).is_err() {
+        return CursorPreview::Arrow;
+    }
+    ctx.include_bytes(uri.clone(), png.into_inner());
+    CursorPreview::Image(uri)
 }
 
 /// A cursor-style tile: a preview of the pointer above its label.
-fn cursor_tile(ui: &mut egui::Ui, preview: CursorPreview<'_>, label: &str, selected: bool) -> egui::Response {
+fn cursor_tile(ui: &mut egui::Ui, preview: CursorPreview, label: &str, selected: bool) -> egui::Response {
     let size = egui::vec2(72.0, 66.0);
     let (rect, resp) = ui.allocate_exact_size(size, egui::Sense::click());
     let pal = theme::p();
@@ -1129,8 +1146,7 @@ fn cursor_tile(ui: &mut egui::Ui, preview: CursorPreview<'_>, label: &str, selec
     ui.painter().rect(rect, egui::CornerRadius::same(widgets::BUTTON_RADIUS), fill, stroke, egui::StrokeKind::Inside);
     let icon = egui::Rect::from_center_size(egui::pos2(rect.center().x, rect.top() + 26.0), egui::vec2(28.0, 28.0));
     match preview {
-        CursorPreview::Image(p) => {
-            let uri = crate::os::texture_uri(p);
+        CursorPreview::Image(uri) => {
             if let Ok(egui::load::TexturePoll::Ready { texture }) = ui.ctx().try_load_texture(&uri, egui::TextureOptions::LINEAR, egui::load::SizeHint::Size { width: 64, height: 64, maintain_aspect_ratio: true }) {
                 let (w, h) = (texture.size.x.max(1.0), texture.size.y.max(1.0));
                 let s = (icon.width() / w).min(icon.height() / h);
@@ -1141,10 +1157,6 @@ fn cursor_tile(ui: &mut egui::Ui, preview: CursorPreview<'_>, label: &str, selec
             }
         }
         CursorPreview::Arrow => widgets::paint_icon(ui.painter(), icon.shrink(4.0), widgets::Icon::Cursor, pal.text),
-        CursorPreview::Touch => {
-            ui.painter().circle(icon.center(), 9.0, pal.text.gamma_multiply(0.25), egui::Stroke::new(2.0, pal.text));
-            ui.painter().circle_filled(icon.center(), 3.5, pal.text);
-        }
     }
     ui.painter().text(egui::pos2(rect.center().x, rect.bottom() - 11.0), egui::Align2::CENTER_CENTER, label, egui::FontId::proportional(11.0), if selected { pal.text } else { pal.text_dim });
     resp

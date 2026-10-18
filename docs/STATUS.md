@@ -45,7 +45,7 @@
 - Editing the transcript text, Apple Speech transcription, device frame compositing, cutout matting, motion blur.
 - Colour grading for the screen recording itself (the grade applies to the camera picture), Resolve's log wheels / curves / qualifiers, `.cube` LUTs with a non-unit `DOMAIN_MIN/MAX` (parsed, but the domain is not remapped yet).
 - Crop aspect presets, Unsplash, background audio library playback, click sounds in preview/export.
-- More bundled assets: cursor sets and device frames.
+- Device frames as bundled assets. (Cursor sets are drawn in `sf-session::cursor_sets`: Classic, Light, Pixel, Dot and Hand besides the recorded pointer.)
 
 ## Appearance
 
