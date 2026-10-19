@@ -220,7 +220,9 @@ pub struct Picker {
     bar_w: f32,
     pub system_audio: bool,
     pub countdown_ms: u64,
-    pub status: Option<String>,
+    /// Short notice above the bar ("Moved … to the Trash") and when it was shown; it fades
+    /// out after [`STATUS_FOR`] or when the recent panel closes, whichever comes first.
+    status: Option<(String, std::time::Instant)>,
     pub show_recent: bool,
     /// When the recent panel last closed: the window stays tall for a moment so a quick
     /// re-open does not resize it (and lose the click) again.
@@ -249,6 +251,12 @@ pub const PILL_SIZE: egui::Vec2 = vec2(950.0, 62.0);
 pub const PILL_MARGIN: f32 = 10.0;
 /// Window height when only the bar is shown (no transparent dead zone that would eat clicks).
 pub const BAR_WINDOW_H: f32 = PILL_SIZE.y + PILL_MARGIN * 2.0;
+/// Height of the status notice above the bar, plus its gap.
+const STATUS_H: f32 = 28.0 + 8.0;
+/// Window height that fits the bar and a status notice.
+const STATUS_WINDOW_H: f32 = BAR_WINDOW_H + STATUS_H;
+/// How long a status notice stays up.
+const STATUS_FOR: std::time::Duration = std::time::Duration::from_secs(4);
 pub const MENU_WINDOW_H: f32 = 440.0;
 /// Project card in the recent panel (thumbnail, name, age).
 const CARD_SIZE: egui::Vec2 = vec2(176.0, 150.0);
@@ -303,6 +311,7 @@ impl Picker {
 
     pub fn ui(&mut self, ui: &mut Ui, prefs: &Prefs) -> Option<PickerAction> {
         let mut action = None;
+        let was_recent = self.show_recent;
         if let Some(rx) = &self.devices_rx {
             match rx.try_recv() {
                 Ok(d) => {
@@ -530,15 +539,21 @@ impl Picker {
         } else {
             self.recent_closed_at = None;
         }
-        let wanted = if self.show_recent || lingering { PILL_MARGIN + PILL_SIZE.y + RECENT_WINDOW_H } else if any_menu { MENU_WINDOW_H } else { BAR_WINDOW_H };
+        // the status notice expires on its own
+        if self.status.as_ref().is_some_and(|(_, at)| at.elapsed() >= STATUS_FOR) {
+            self.status = None;
+        }
+        let status_h = if self.status.is_some() { STATUS_WINDOW_H } else { 0.0 };
+        let wanted = if self.show_recent || lingering { PILL_MARGIN + PILL_SIZE.y + RECENT_WINDOW_H } else if any_menu { MENU_WINDOW_H } else { BAR_WINDOW_H.max(status_h) };
         // never shrink mid-click: resizing moves the bar in window coordinates, and the release
         // would land somewhere else and lose the click
         self.wanted_height = if ui.input(|i| i.pointer.any_down()) { wanted.max(self.wanted_height) } else { wanted };
-        if let Some(s) = &self.status {
+        if let Some((s, at)) = &self.status {
             let w = 520.0;
-            let r = egui::Rect::from_center_size(pos2(pill.center().x, pill.top() - 22.0), vec2(w, 28.0));
+            let r = egui::Rect::from_center_size(pos2(pill.center().x, pill.top() - 8.0 - 14.0), vec2(w, 28.0));
             ui.painter().rect_filled(r, CornerRadius::same(8), theme::p().glass_solid);
             ui.painter().text(r.center(), Align2::CENTER_CENTER, s, FontId::proportional(13.0), theme::p().text_dim);
+            ui.ctx().request_repaint_after(STATUS_FOR.saturating_sub(at.elapsed()));
         }
         // Esc, clicking anything else on the bar (mode buttons, input menus, settings) or
         // picking a project hides the recent panel; moving one to the Trash keeps it open
@@ -555,7 +570,16 @@ impl Picker {
                 self.recent_closed_at = Some(std::time::Instant::now());
             }
         }
+        // the notice belongs to the panel it was shown over: closing the panel takes it along
+        if was_recent && !self.show_recent {
+            self.status = None;
+        }
         action
+    }
+
+    /// Show a short notice above the bar; it goes away on its own.
+    pub fn set_status(&mut self, msg: impl Into<String>) {
+        self.status = Some((msg.into(), std::time::Instant::now()));
     }
 
     fn pointer_in_recent(&self, ui: &Ui) -> bool {
