@@ -287,11 +287,12 @@ mod mic {
         crate::discover::microphones()
     }
 
-    fn resolve_device(selector: &str) -> Result<(cpal::Device, String, String)> {
+    /// `open_as` is the PCM/device to open for `selector` (see `discover::alsa_selector`).
+    fn resolve_device(selector: &str, open_as: &str) -> Result<(cpal::Device, String, String)> {
         let host = cpal::default_host();
         let known = known_inputs();
-        let (want_name, uid): (Option<String>, Option<String>) = if selector == "default" || selector.is_empty() {
-            (None, known.iter().find(|d| d.is_default).map(|d| d.id.clone()))
+        let (want_name, uid): (Option<String>, Option<String>) = if open_as == "default" || open_as.is_empty() {
+            (None, known.iter().find(|d| d.id == selector).or_else(|| known.iter().find(|d| d.is_default)).map(|d| d.id.clone()))
         } else if let Some(k) = known.iter().find(|d| d.id == selector) {
             (Some(k.name.clone()), Some(k.id.clone()))
         } else {
@@ -299,13 +300,17 @@ mod mic {
         };
         let device = match &want_name {
             None => host.default_input_device(),
+            // the id first (on Linux it is the ALSA PCM name; display names repeat per card)
             Some(name) => host
                 .input_devices()
                 .map_err(|e| Error::Audio(e.to_string()))?
-                .find(|d| d.description().map(|d| d.name() == name).unwrap_or(false)),
+                .find(|d| uid.as_deref().is_some_and(|u| d.id().map(|i| i.id() == u).unwrap_or(false)) || d.description().map(|d| d.name() == name).unwrap_or(false)),
         }
         .ok_or_else(|| Error::Audio(format!("microphone not found: {selector}")))?;
-        let name = device.description().map_err(|e| Error::Audio(e.to_string()))?.name().to_string();
+        let name = match known.iter().find(|d| d.id == selector) {
+            Some(k) => k.name.clone(),
+            None => device.description().map_err(|e| Error::Audio(e.to_string()))?.name().to_string(),
+        };
         let id = uid.or_else(|| device.id().ok().map(|i| i.id().to_string())).unwrap_or_else(|| name.clone());
         Ok((device, name, id))
     }
@@ -314,7 +319,10 @@ mod mic {
         /// Open the microphone and start streaming into the sink (nothing is written until
         /// [`begin_session`](Self::begin_session)).
         pub fn start(selector: &str, log: RecLog) -> Result<Self> {
-            let (device, device_name, device_id) = resolve_device(selector)?;
+            // Linux: a `pw:` id opens the default PCM pointed at that PipeWire source; the
+            // guard holds the target only until the stream below is open
+            let (open_as, pipewire_target) = crate::discover::alsa_selector(selector);
+            let (device, device_name, device_id) = resolve_device(selector, open_as)?;
             let supported = device.default_input_config().map_err(|e| Error::Audio(e.to_string()))?;
             let sample_rate = supported.sample_rate();
             let channels = supported.channels().clamp(1, 2);
@@ -376,7 +384,9 @@ mod mic {
                     drop(stream);
                 })
                 .map_err(|source| Error::Io { path: "thread".into(), source })?;
-            match ready_rx.recv_timeout(Duration::from_secs(10)) {
+            let ready = ready_rx.recv_timeout(Duration::from_secs(10));
+            drop(pipewire_target);
+            match ready {
                 Ok(Ok(())) => {}
                 Ok(Err(e)) => return Err(e),
                 Err(_) => return Err(Error::Audio("timeout opening microphone".into())),

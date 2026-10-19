@@ -367,16 +367,222 @@ mod linux {
         windows_with(true)
     }
 
+    /// Microphones from cpal's ALSA host, reduced to what a person can choose between: ALSA
+    /// lists every alias of a card (`hw:`, `plughw:`, `dsnoop:`, `sysdefault:` for each of
+    /// its capture devices), all under the card's name, so one laptop card shows up ten times.
+    /// See [`pick_alsa_inputs`].
     pub fn microphones() -> Vec<AudioDevice> {
         use cpal::traits::{DeviceTrait, HostTrait};
+        if let Some(list) = pipewire_sources() {
+            return list;
+        }
         let host = cpal::default_host();
-        let default = host.default_input_device().and_then(|d| d.description().ok().map(|d| d.name().to_string()));
         let Ok(devices) = host.input_devices() else { return Vec::new() };
-        devices
-            .filter_map(|d| d.description().ok().map(|d| d.name().to_string()))
-            .map(|name| AudioDevice { is_default: Some(&name) == default.as_ref(), id: name.clone(), name })
-            .collect()
+        let entries: Vec<(String, String)> = devices
+            .filter_map(|d| {
+                let pcm = d.id().ok()?.id().to_string();
+                let desc = d.description().ok().map(|d| d.name().to_string()).unwrap_or_default();
+                Some((pcm, desc))
+            })
+            .collect();
+        super::pick_alsa_inputs(&entries)
     }
+
+    /// PipeWire's capture sources (`pw-dump`), or `None` when PipeWire is not running.
+    fn pipewire_sources() -> Option<Vec<AudioDevice>> {
+        let out = std::process::Command::new("pw-dump").output().ok()?;
+        if !out.status.success() {
+            return None;
+        }
+        let mut jacks = std::collections::HashMap::new();
+        let mut mic_jack_unplugged = |card: i64| {
+            *jacks.entry(card).or_insert_with(|| {
+                std::process::Command::new("amixer")
+                    .args(["-c", &card.to_string(), "contents"])
+                    .output()
+                    .ok()
+                    .filter(|o| o.status.success())
+                    .and_then(|o| super::parse_amixer_mic_jack(&String::from_utf8_lossy(&o.stdout)))
+                    == Some(false)
+            })
+        };
+        let list = super::parse_pw_dump(&String::from_utf8_lossy(&out.stdout), &mut mic_jack_unplugged);
+        (list.len() > 1).then_some(list)
+    }
+}
+
+/// Whether a microphone jack on the card has something plugged in, from `amixer -c N contents`:
+/// the CARD-level boolean controls named like `Headset Mic Jack` or `Mic Jack` are the
+/// codec's jack detection. `None` when the card has no such control (internal mics only).
+#[cfg(any(target_os = "linux", test))]
+pub fn parse_amixer_mic_jack(text: &str) -> Option<bool> {
+    let mut lines = text.lines().peekable();
+    let mut found = None;
+    while let Some(line) = lines.next() {
+        let Some(name) = line.split("name='").nth(1).and_then(|r| r.split('\'').next()) else { continue };
+        if !line.contains("iface=CARD") || !name.ends_with("Mic Jack") && name != "Mic Jack" || name.contains("Phantom") {
+            continue;
+        }
+        // `  ; type=BOOLEAN,...` then `  : values=on|off`
+        let value = lines.by_ref().take(2).find_map(|l| l.trim().strip_prefix(": values=")).map(|v| v.trim() == "on");
+        if let Some(v) = value {
+            found = Some(found.unwrap_or(false) || v);
+        }
+    }
+    found
+}
+
+/// Microphone ids that name a PipeWire source: `pw:<node.name>`.
+pub const PIPEWIRE_ID_PREFIX: &str = "pw:";
+
+/// Keeps `PIPEWIRE_NODE` set while a microphone PCM is opened and clears it on drop.
+///
+/// The PipeWire ALSA plugin reads the variable when a PCM opens, which is how a `pw:` id
+/// selects its source. libpipewire reads the same variable for every stream it creates,
+/// including the screen capture, which would be sent to the microphone node and fail with
+/// "no more input formats" if the variable stayed set. So it lives only as long as this
+/// guard, and the recorder opens the microphone before it connects the display stream.
+pub struct PipewireTarget {
+    set: bool,
+}
+
+impl Drop for PipewireTarget {
+    fn drop(&mut self) {
+        if self.set {
+            std::env::remove_var("PIPEWIRE_NODE");
+        }
+    }
+}
+
+/// The ALSA PCM to open for a microphone id, plus the guard that points the PipeWire ALSA
+/// plugin at the chosen source until the PCM is open. A `pw:` id opens `default` with the
+/// variable set; any other id opens as is with the variable cleared, so "System default"
+/// follows the system setting.
+#[cfg(target_os = "linux")]
+pub fn alsa_selector(selector: &str) -> (&str, PipewireTarget) {
+    match selector.strip_prefix(PIPEWIRE_ID_PREFIX) {
+        Some(node) => {
+            std::env::set_var("PIPEWIRE_NODE", node);
+            ("default", PipewireTarget { set: true })
+        }
+        None => {
+            std::env::remove_var("PIPEWIRE_NODE");
+            (selector, PipewireTarget { set: false })
+        }
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn alsa_selector(selector: &str) -> (&str, PipewireTarget) {
+    (selector, PipewireTarget { set: false })
+}
+
+/// Microphones from `pw-dump` output: "System default" first, named after the source PipeWire
+/// routes it to, then every `Audio/Source` node by its nickname. A jack with nothing plugged in
+/// is marked "(unplugged)": from the route's `available` when PipeWire knows it, otherwise
+/// (UCM cards such as SOF report "unknown") from the card's mic jack control for the
+/// external-mic profile (`mic_jack_unplugged(card index)`, see [`parse_amixer_mic_jack`]).
+#[cfg(any(target_os = "linux", test))]
+pub fn parse_pw_dump(json: &str, mic_jack_unplugged: &mut dyn FnMut(i64) -> bool) -> Vec<AudioDevice> {
+    let objs: Vec<serde_json::Value> = serde_json::from_str(json).unwrap_or_default();
+    let default_source = objs
+        .iter()
+        .find(|o| o["type"] == "PipeWire:Interface:Metadata" && o["props"]["metadata.name"] == "default")
+        .and_then(|o| o["metadata"].as_array())
+        .and_then(|m| m.iter().find(|e| e["key"] == "default.audio.source"))
+        .and_then(|e| e["value"]["name"].as_str())
+        .map(str::to_string);
+    // (device object id, route device index) -> "yes" | "no" | "unknown"
+    let route_available = |device_id: i64, route_device: i64| -> Option<String> {
+        let dev = objs.iter().find(|o| o["type"] == "PipeWire:Interface:Device" && o["id"] == device_id)?;
+        dev["info"]["params"]["Route"]
+            .as_array()?
+            .iter()
+            .find(|r| r["direction"] == "Input" && r["device"] == route_device)
+            .and_then(|r| r["available"].as_str())
+            .map(str::to_string)
+    };
+    let mut sources = Vec::new();
+    for o in &objs {
+        let p = &o["info"]["props"];
+        if p["media.class"] != "Audio/Source" {
+            continue;
+        }
+        let Some(node) = p["node.name"].as_str() else { continue };
+        let label = p["node.nick"].as_str().or_else(|| p["node.description"].as_str()).unwrap_or(node);
+        let available = match (p["device.id"].as_i64(), p["card.profile.device"].as_i64()) {
+            (Some(d), Some(r)) => route_available(d, r),
+            _ => None,
+        };
+        let profile = format!("{} {}", p["device.profile.name"].as_str().unwrap_or(""), p["device.profile.description"].as_str().unwrap_or("")).to_ascii_lowercase();
+        let jack_mic = profile.contains("mic2") || profile.contains("headset") || profile.contains("headphone");
+        let unplugged = match available.as_deref() {
+            Some("no") => true,
+            Some("yes") => false,
+            _ => jack_mic && p["alsa.card"].as_i64().is_some_and(|c| mic_jack_unplugged(c)),
+        };
+        let name = if unplugged { format!("{label} (unplugged)") } else { label.to_string() };
+        sources.push((node.to_string(), name));
+    }
+    let default_name = match default_source.as_deref().and_then(|d| sources.iter().find(|(n, _)| n == d)) {
+        Some((_, name)) => format!("System default: {name}"),
+        None => "System default (PipeWire)".to_string(),
+    };
+    let mut out = vec![AudioDevice { id: "default".into(), name: default_name, is_default: true }];
+    out.extend(sources.into_iter().map(|(node, name)| AudioDevice { id: format!("{PIPEWIRE_ID_PREFIX}{node}"), name, is_default: false }));
+    out
+}
+
+/// Choose the ALSA PCMs worth offering as microphones. `entries` are `(pcm name, first line of
+/// the ALSA description)` as cpal lists them.
+///
+/// With a sound server (`default` routing to PipeWire or PulseAudio, or a `pipewire`/`pulse`
+/// PCM), that one entry is the whole list: the server owns the hardware and the person picks
+/// the microphone in the system sound settings, while raw card PCMs would mostly fail to open
+/// with "device busy". Without a server, one `plughw:` PCM per capture device is offered
+/// (software conversions, so any rate works) and every other alias is dropped.
+#[cfg(any(target_os = "linux", test))]
+pub fn pick_alsa_inputs(entries: &[(String, String)]) -> Vec<AudioDevice> {
+    let find = |pcm: &str| entries.iter().find(|(p, _)| p == pcm);
+    let server_name = |desc: &str| {
+        let d = desc.to_ascii_lowercase();
+        if d.contains("pipewire") {
+            Some("PipeWire")
+        } else if d.contains("pulse") {
+            Some("PulseAudio")
+        } else {
+            None
+        }
+    };
+    let server = find("default")
+        .and_then(|(_, desc)| server_name(desc).map(|s| ("default", s)))
+        .or_else(|| find("pipewire").map(|_| ("pipewire", "PipeWire")))
+        .or_else(|| find("pulse").map(|_| ("pulse", "PulseAudio")));
+    if let Some((pcm, server)) = server {
+        return vec![AudioDevice { id: pcm.to_string(), name: format!("System default ({server})"), is_default: true }];
+    }
+    let cards: Vec<(&str, &str, &str)> = entries
+        .iter()
+        .filter_map(|(pcm, desc)| {
+            let rest = pcm.strip_prefix("plughw:CARD=")?;
+            let (card, dev) = rest.split_once(",DEV=")?;
+            Some((card, dev, desc.as_str()))
+        })
+        .collect();
+    let mut out: Vec<AudioDevice> = cards
+        .iter()
+        .map(|(card, dev, desc)| {
+            let base = desc.trim().trim_end_matches(',').trim();
+            let base = if base.is_empty() { *card } else { base };
+            let siblings = cards.iter().filter(|(c, _, _)| c == card).count();
+            let name = if siblings > 1 { format!("{base} (device {dev})") } else { base.to_string() };
+            AudioDevice { id: format!("plughw:CARD={card},DEV={dev}"), name, is_default: false }
+        })
+        .collect();
+    if let Some(first) = out.first_mut() {
+        first.is_default = true;
+    }
+    out
 }
 
 #[cfg(target_os = "windows")]
@@ -498,6 +704,114 @@ pub fn microphones() -> Vec<AudioDevice> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn pipewire_target_is_cleared_when_the_guard_drops() {
+        let (pcm, guard) = alsa_selector("pw:alsa_input.card.HiFi__Mic1__source");
+        assert_eq!(pcm, "default");
+        assert_eq!(std::env::var("PIPEWIRE_NODE").as_deref(), Ok("alsa_input.card.HiFi__Mic1__source"));
+        drop(guard);
+        assert!(std::env::var_os("PIPEWIRE_NODE").is_none());
+        let (pcm, _guard) = alsa_selector("plughw:CARD=x,DEV=0");
+        assert_eq!(pcm, "plughw:CARD=x,DEV=0");
+        assert!(std::env::var_os("PIPEWIRE_NODE").is_none());
+    }
+
+    const PW_DUMP: &str = r#"[
+      {"id": 1, "type": "PipeWire:Interface:Metadata", "props": {"metadata.name": "default"},
+       "metadata": [{"subject": 0, "key": "default.audio.sink", "value": {"name": "alsa_output.x"}},
+                    {"subject": 0, "key": "default.audio.source", "value": {"name": "alsa_input.card.HiFi__Mic2__source"}}]},
+      {"id": 51, "type": "PipeWire:Interface:Device", "info": {"params": {"Route": [
+         {"direction": "Input", "device": 4, "available": "AVAIL_MIC2"},
+         {"direction": "Input", "device": 5, "available": "unknown"},
+         {"direction": "Output", "device": 0, "available": "no"}]}}},
+      {"id": 61, "type": "PipeWire:Interface:Node", "info": {"props": {"media.class": "Audio/Source", "node.name": "alsa_input.card.HiFi__Mic2__source", "node.nick": "Stereo Microphone", "node.description": "Tiger Lake Stereo Microphone", "device.id": 51, "card.profile.device": 4, "device.profile.name": "HiFi: Mic2: source", "alsa.card": 0}}},
+      {"id": 62, "type": "PipeWire:Interface:Node", "info": {"props": {"media.class": "Audio/Source", "node.name": "alsa_input.card.HiFi__Mic1__source", "node.description": "Tiger Lake Digital Microphone", "device.id": 51, "card.profile.device": 5, "device.profile.name": "HiFi: Mic1: source", "alsa.card": 0}}},
+      {"id": 63, "type": "PipeWire:Interface:Node", "info": {"props": {"media.class": "Audio/Sink", "node.name": "alsa_output.x", "node.nick": "Speakers"}}},
+      {"id": 79, "type": "PipeWire:Interface:Node", "info": {"props": {"media.class": "Video/Source", "node.name": "v4l2_input.cam"}}}
+    ]"#;
+
+    fn rows(json: &str, jack_unplugged: bool) -> Vec<(String, String, bool)> {
+        parse_pw_dump(json, &mut |_| jack_unplugged).into_iter().map(|d| (d.id, d.name, d.is_default)).collect()
+    }
+
+    #[test]
+    fn pw_dump_lists_sources_and_names_what_the_default_resolves_to() {
+        let json = PW_DUMP.replace("AVAIL_MIC2", "yes");
+        let got = rows(&json, true);
+        let want = [
+            ("default", "System default: Stereo Microphone", true),
+            ("pw:alsa_input.card.HiFi__Mic2__source", "Stereo Microphone", false),
+            ("pw:alsa_input.card.HiFi__Mic1__source", "Tiger Lake Digital Microphone", false),
+        ];
+        assert_eq!(got, want.map(|(a, b, c)| (a.to_string(), b.to_string(), c)));
+        assert_eq!(parse_pw_dump("not json", &mut |_| false).len(), 1);
+    }
+
+    #[test]
+    fn pw_dump_marks_an_unplugged_jack_from_the_route_or_the_mixer() {
+        // PipeWire knows the jack is empty
+        let got = rows(&PW_DUMP.replace("AVAIL_MIC2", "no"), false);
+        assert_eq!(got[0].1, "System default: Stereo Microphone (unplugged)");
+        assert_eq!(got[1].1, "Stereo Microphone (unplugged)");
+        assert_eq!(got[2].1, "Tiger Lake Digital Microphone");
+        // UCM card: route says unknown, the mixer's Headset Mic Jack says off; only Mic2 is a jack
+        let got = rows(&PW_DUMP.replace("AVAIL_MIC2", "unknown"), true);
+        assert_eq!(got[1].1, "Stereo Microphone (unplugged)");
+        assert_eq!(got[2].1, "Tiger Lake Digital Microphone");
+        // ...and plugged in
+        let got = rows(&PW_DUMP.replace("AVAIL_MIC2", "unknown"), false);
+        assert_eq!(got[1].1, "Stereo Microphone");
+    }
+
+    #[test]
+    fn amixer_mic_jack_state() {
+        let text = "numid=12,iface=CARD,name='Headphone Jack'\n  ; type=BOOLEAN,access=r-------,values=1\n  : values=on\nnumid=11,iface=CARD,name='Headset Mic Jack'\n  ; type=BOOLEAN,access=r-------,values=1\n  : values=off\nnumid=13,iface=CARD,name='Speaker Phantom Jack'\n  ; type=BOOLEAN,access=r-------,values=1\n  : values=on\nnumid=3,iface=MIXER,name='Mic Jack Mode'\n  ; type=ENUMERATED\n  : values=0\n";
+        assert_eq!(parse_amixer_mic_jack(text), Some(false));
+        assert_eq!(parse_amixer_mic_jack(&text.replace("Headset Mic Jack'\n  ; type=BOOLEAN,access=r-------,values=1\n  : values=off", "Headset Mic Jack'\n  ; type=BOOLEAN,access=r-------,values=1\n  : values=on")), Some(true));
+        assert_eq!(parse_amixer_mic_jack("numid=12,iface=CARD,name='Headphone Jack'\n  ; type=BOOLEAN\n  : values=on\n"), None);
+    }
+
+    #[test]
+    fn alsa_inputs_collapse_to_the_sound_server() {
+        let e = |p: &str, d: &str| (p.to_string(), d.to_string());
+        let entries = vec![
+            e("null", "Discard all samples (playback) or generate zero samples (capture)"),
+            e("pipewire", "PipeWire Sound Server"),
+            e("default", "Default ALSA Output (currently PipeWire Media Server)"),
+            e("hw:CARD=sofhdadsp,DEV=0", "sof-hda-dsp, "),
+            e("hw:CARD=sofhdadsp,DEV=6", "sof-hda-dsp, "),
+            e("plughw:CARD=sofhdadsp,DEV=0", "sof-hda-dsp, "),
+            e("plughw:CARD=sofhdadsp,DEV=6", "sof-hda-dsp, "),
+            e("sysdefault:CARD=sofhdadsp", "sof-hda-dsp, "),
+            e("dsnoop:CARD=sofhdadsp,DEV=0", "sof-hda-dsp, "),
+        ];
+        let got = pick_alsa_inputs(&entries);
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].id, "default");
+        assert_eq!(got[0].name, "System default (PipeWire)");
+        assert!(got[0].is_default);
+    }
+
+    #[test]
+    fn alsa_inputs_without_a_server_list_one_plughw_per_capture_device() {
+        let e = |p: &str, d: &str| (p.to_string(), d.to_string());
+        let entries = vec![
+            e("null", "Discard all samples"),
+            e("hw:CARD=sofhdadsp,DEV=0", "sof-hda-dsp, "),
+            e("plughw:CARD=sofhdadsp,DEV=0", "sof-hda-dsp, "),
+            e("plughw:CARD=sofhdadsp,DEV=6", "sof-hda-dsp, "),
+            e("dsnoop:CARD=sofhdadsp,DEV=0", "sof-hda-dsp, "),
+            e("plughw:CARD=Yeti,DEV=0", "Blue Yeti, USB Audio"),
+        ];
+        let got = pick_alsa_inputs(&entries);
+        let ids: Vec<&str> = got.iter().map(|d| d.id.as_str()).collect();
+        assert_eq!(ids, ["plughw:CARD=sofhdadsp,DEV=0", "plughw:CARD=sofhdadsp,DEV=6", "plughw:CARD=Yeti,DEV=0"]);
+        let names: Vec<&str> = got.iter().map(|d| d.name.as_str()).collect();
+        assert_eq!(names, ["sof-hda-dsp (device 0)", "sof-hda-dsp (device 6)", "Blue Yeti, USB Audio"]);
+        assert!(got[0].is_default && !got[1].is_default);
+    }
 
     #[test]
     fn parses_avfoundation_device_list() {

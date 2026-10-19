@@ -36,7 +36,11 @@ impl Tray {
         #[cfg(target_os = "windows")]
         let item = windows_tray::create(&menu)?;
         #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-        return None;
+        {
+            // no tray on this platform; the menu is still built so the ids stay used
+            let _ = ids;
+            return None;
+        }
         #[cfg(any(target_os = "macos", target_os = "windows"))]
         Some(Tray { _menu: menu, ids, last_title: None, item })
     }

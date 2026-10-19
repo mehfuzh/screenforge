@@ -12,6 +12,7 @@ serde_json.workspace = true
 chrono.workspace = true
 ed25519-dalek = { version = "2", features = ["rand_core"] }
 base64 = "0.22"
+sha2 = "0.10"
 rand = "0.8"
 thiserror.workspace = true
 ureq = { version = "2", features = ["json"] }
