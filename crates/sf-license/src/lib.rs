@@ -13,6 +13,9 @@ use base64::{engine::general_purpose::URL_SAFE_NO_PAD as B64, Engine};
 use chrono::{NaiveDate, Utc};
 use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::OnceLock;
 
 /// Public key of the ScreenForge license issuer (replace with yours before shipping;
 /// `sf license keygen` prints a matching pair).
@@ -178,16 +181,35 @@ pub fn key_file() -> Option<std::path::PathBuf> {
     Some(std::path::PathBuf::from(home).join("Library/Application Support/ScreenForge/license.key"))
 }
 
-/// Exports allowed without a license (an honour-system counter kept next to the key file).
+/// Exports allowed without a license.
+///
+/// The count is kept in two places: a file next to the key (works offline) and a row on the
+/// backend keyed by a hash of the machine's hardware UUID ([`device_id`]). Deleting the app or
+/// its support folder resets the file but not the backend row, so the next sync restores the
+/// count. The higher of the two wins.
 pub const FREE_EXPORTS: u32 = 3;
+
+/// Count the backend reports for this device (0 until [`sync_free_exports`] has run).
+static SERVER_FREE_EXPORTS: AtomicU32 = AtomicU32::new(0);
 
 fn free_exports_file() -> Option<std::path::PathBuf> {
     key_file().map(|p| p.with_file_name("free-exports"))
 }
 
-/// How many free exports have been used on this machine.
-pub fn free_exports_used() -> u32 {
+fn local_free_exports_used() -> u32 {
     free_exports_file().and_then(|p| std::fs::read_to_string(p).ok()).and_then(|s| s.trim().parse().ok()).unwrap_or(0)
+}
+
+fn write_local_free_exports(n: u32) -> std::io::Result<()> {
+    let p = free_exports_file().ok_or_else(|| std::io::Error::other("no home dir"))?;
+    std::fs::create_dir_all(p.parent().unwrap())?;
+    std::fs::write(p, n.to_string())
+}
+
+/// How many free exports have been used on this machine: the local file or the backend's
+/// count for this device, whichever is higher.
+pub fn free_exports_used() -> u32 {
+    local_free_exports_used().max(SERVER_FREE_EXPORTS.load(Ordering::Relaxed))
 }
 
 /// Free exports still available.
@@ -195,11 +217,72 @@ pub fn free_exports_left() -> u32 {
     FREE_EXPORTS.saturating_sub(free_exports_used())
 }
 
-/// Count one more free export.
+/// Stable, anonymous identifier for this machine: SHA-256 of the platform UUID
+/// (`IOPlatformUUID` on macOS, `/etc/machine-id` on Linux, `MachineGuid` on Windows), hex.
+/// The raw UUID never leaves the machine. `None` when the platform offers none.
+pub fn device_id() -> Option<String> {
+    static ID: OnceLock<Option<String>> = OnceLock::new();
+    ID.get_or_init(|| platform_uuid().map(|u| hex(&Sha256::digest(u.trim().to_lowercase().as_bytes())))).clone()
+}
+
+fn platform_uuid() -> Option<String> {
+    let raw = if cfg!(target_os = "macos") {
+        let out = std::process::Command::new("ioreg").args(["-rd1", "-c", "IOPlatformExpertDevice"]).output().ok()?;
+        parse_ioreg_uuid(&String::from_utf8_lossy(&out.stdout))?
+    } else if cfg!(target_os = "windows") {
+        let out = std::process::Command::new("reg").args(["query", r"HKLM\SOFTWARE\Microsoft\Cryptography", "/v", "MachineGuid"]).output().ok()?;
+        let text = String::from_utf8_lossy(&out.stdout);
+        text.lines().find(|l| l.contains("MachineGuid"))?.split_whitespace().last()?.to_string()
+    } else {
+        std::fs::read_to_string("/etc/machine-id").or_else(|_| std::fs::read_to_string("/var/lib/dbus/machine-id")).ok()?
+    };
+    let raw = raw.trim().to_string();
+    (!raw.is_empty()).then_some(raw)
+}
+
+fn parse_ioreg_uuid(text: &str) -> Option<String> {
+    let line = text.lines().find(|l| l.contains("\"IOPlatformUUID\""))?;
+    let value = line.split('=').nth(1)?.trim().trim_matches('"');
+    (!value.is_empty()).then(|| value.to_string())
+}
+
+fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// Ask the backend how many free exports this device has used and reconcile with the local
+/// file. Blocking (network); call from a background thread. Silently a no-op offline or when
+/// the device has no identifier, in which case the local file alone counts.
+pub fn sync_free_exports() {
+    let Some(device) = device_id() else { return };
+    let Ok(v) = call_function("free-export", serde_json::json!({ "device": device })) else { return };
+    if let Some(used) = v.get("used").and_then(|u| u.as_u64()) {
+        reconcile_server_count(used as u32);
+    }
+}
+
+fn reconcile_server_count(server: u32) {
+    SERVER_FREE_EXPORTS.fetch_max(server, Ordering::Relaxed);
+    if server > local_free_exports_used() {
+        let _ = write_local_free_exports(server);
+    }
+}
+
+/// Count one more free export: the local file right away, the backend row for this device in
+/// the background. Fails only when the local file cannot be written.
 pub fn record_free_export() -> std::io::Result<()> {
-    let p = free_exports_file().ok_or_else(|| std::io::Error::other("no home dir"))?;
-    std::fs::create_dir_all(p.parent().unwrap())?;
-    std::fs::write(p, (free_exports_used() + 1).to_string())
+    let n = free_exports_used() + 1;
+    write_local_free_exports(n)?;
+    if let Some(device) = device_id() {
+        std::thread::spawn(move || {
+            if let Ok(v) = call_function("free-export", serde_json::json!({ "device": device, "record": true })) {
+                if let Some(used) = v.get("used").and_then(|u| u.as_u64()) {
+                    reconcile_server_count(used as u32);
+                }
+            }
+        });
+    }
+    Ok(())
 }
 
 pub fn load_saved() -> Option<String> {
@@ -227,5 +310,28 @@ mod tests {
         assert!(matches!(verify_with("SF1.xx.yy", &pk), Status::Invalid(_)));
         let (_, other) = keygen();
         assert!(matches!(verify_with(&key, &other), Status::Invalid(_)));
+    }
+
+    #[test]
+    fn ioreg_uuid_parses() {
+        let text = "+-o MacBookPro18,3  <class IOPlatformExpertDevice>\n  {\n    \"IOPlatformUUID\" = \"5A3C1F2E-0B6D-4E8A-9C7B-1234567890AB\"\n    \"model\" = <\"x\">\n  }\n";
+        assert_eq!(parse_ioreg_uuid(text).as_deref(), Some("5A3C1F2E-0B6D-4E8A-9C7B-1234567890AB"));
+        assert_eq!(parse_ioreg_uuid("nothing here"), None);
+    }
+
+    #[test]
+    fn device_hash_is_stable_and_opaque() {
+        let a = hex(&Sha256::digest("abc".as_bytes()));
+        assert_eq!(a.len(), 64);
+        assert_eq!(a, hex(&Sha256::digest("abc".as_bytes())));
+        assert_ne!(a, hex(&Sha256::digest("abd".as_bytes())));
+    }
+
+    #[test]
+    fn server_count_wins_when_higher() {
+        SERVER_FREE_EXPORTS.store(0, Ordering::Relaxed);
+        SERVER_FREE_EXPORTS.fetch_max(2, Ordering::Relaxed);
+        assert!(free_exports_used() >= 2);
+        assert_eq!(free_exports_left(), FREE_EXPORTS.saturating_sub(free_exports_used()));
     }
 }

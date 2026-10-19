@@ -46,6 +46,8 @@ pub struct ExportDialog {
     activation_msg: Option<(bool, String)>,
     /// User opened the license section while free exports remain.
     show_license: bool,
+    /// The free-export count was reconciled with the backend since the dialog last opened.
+    free_exports_synced: bool,
     progress: Option<sf_export::Progress>,
     result: Option<Result<PathBuf, String>>,
     started: Option<std::time::Instant>,
@@ -67,7 +69,10 @@ impl Default for ExportDialog {
         } else {
             None
         };
-        ExportDialog { open: false, license, email, activation, activation_msg: None, show_license: false, format: Format::Mp4, fps: 60.0, height: 1080, quality: QualityPreset::SocialMedia, codec: VideoCodec::H264, audio: true, job: None, progress: None, result: None, started: None }
+        if !license.is_valid() {
+            std::thread::spawn(sf_license::sync_free_exports);
+        }
+        ExportDialog { open: false, license, email, activation, activation_msg: None, show_license: false, free_exports_synced: false, format: Format::Mp4, fps: 60.0, height: 1080, quality: QualityPreset::SocialMedia, codec: VideoCodec::H264, audio: true, job: None, progress: None, result: None, started: None }
     }
 }
 
@@ -84,6 +89,20 @@ impl ExportDialog {
 
     /// Drain background messages (export progress, activation) and handle Escape.
     pub fn poll(&mut self, ctx: &egui::Context) {
+        // each time the dialog opens, pick up free exports used on this device from elsewhere
+        // (a previous install, a wiped support folder) before the count is shown
+        if self.open && !self.free_exports_synced {
+            self.free_exports_synced = true;
+            if !self.license.is_valid() {
+                let ctx = ctx.clone();
+                std::thread::spawn(move || {
+                    sf_license::sync_free_exports();
+                    ctx.request_repaint();
+                });
+            }
+        } else if !self.open {
+            self.free_exports_synced = false;
+        }
         if let Some(rx) = &self.activation {
             if let Ok(r) = rx.try_recv() {
                 match r {
