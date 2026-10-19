@@ -134,7 +134,8 @@ impl AudioPlayer {
             .map(|p| (p.clone(), AudioTrack::Microphone))
             .chain(session.source.system_audio.iter().map(|p| (p.clone(), AudioTrack::SystemAudio)))
             .collect();
-        let mic_filter = sf_media::microphone_filter(&session.pkg.project.config.audio.microphone_audio_preset);
+        let audio_cfg = &session.pkg.project.config.audio;
+        let mic_filter = sf_media::microphone_filter(&audio_cfg.microphone_audio_preset, audio_cfg.microphone_boost_db());
         let background_path = session.background_audio_path();
         let (shared, generation, pending) = (self.shared.clone(), self.generation.clone(), self.pending.clone());
         self.update_timeline(session);
@@ -149,7 +150,7 @@ impl AudioPlayer {
             let _done = Done(pending);
             let mut tracks = vec![];
             for (path, kind) in sources {
-                let filter = if kind == AudioTrack::Microphone { mic_filter } else { None };
+                let filter = if kind == AudioTrack::Microphone { mic_filter.as_deref() } else { None };
                 match sf_media::decode_audio_filtered(&path, RATE, 2, filter) {
                     Ok(clip) => tracks.push(Track { kind, clip: Arc::new(clip) }),
                     Err(e) => tracing::warn!("audio decode failed for {}: {e}", path.display()),

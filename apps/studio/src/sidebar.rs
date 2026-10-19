@@ -961,6 +961,16 @@ fn audio_ui(ed: &mut Editor, ui: &mut egui::Ui) {
         ed.reload_audio();
     }
     widgets::hint(ui, "Noise reduction removes steady background hiss and hum. Podcast also evens out and boosts your voice. Applied in preview and export.");
+    widgets::title(ui, "Microphone boost");
+    const BOOSTS_DB: [f64; 4] = [0.0, 6.0, 12.0, 18.0];
+    let boost = ed.session.pkg.project.config.audio.microphone_boost_db();
+    let idx = BOOSTS_DB.iter().position(|b| (b - boost).abs() < 0.5).unwrap_or(usize::MAX);
+    if let Some(i) = widgets::pills(ui, idx, &["Off", "+6 dB", "+12 dB", "+18 dB"]) {
+        let db = BOOSTS_DB[i];
+        ed.edit(move |p| p.config.audio.microphone_boost_db = (db > 0.0).then_some(db));
+        ed.reload_audio();
+    }
+    widgets::hint(ui, "Raises a quiet microphone after the audio mode, with a limiter so loud moments do not clip. Try +6 dB first; the volume slider above is for fine tuning.");
     widgets::title(ui, "System audio");
     if ed.session.source.system_audio.is_empty() {
         widgets::hint(ui, "No system audio recorded");

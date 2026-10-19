@@ -196,8 +196,21 @@ pub struct AudioConfig {
     /// `"apple-magic-mouse"` | `"logitech-mx-master"` | null
     pub click_sound_effect: Option<String>,
     pub click_sound_effect_volume: f64,
+    /// ScreenForge extension: extra microphone gain in dB (0..24), applied after the audio
+    /// mode and followed by a limiter. `None` = 0 (off).
+    #[serde(default, rename = "sfMicrophoneBoostDb", skip_serializing_if = "Option::is_none")]
+    pub microphone_boost_db: Option<f64>,
     #[serde(flatten)]
     pub extra: Extra,
+}
+
+impl AudioConfig {
+    pub const MAX_MICROPHONE_BOOST_DB: f64 = 24.0;
+
+    /// Microphone boost in dB, 0 when unset.
+    pub fn microphone_boost_db(&self) -> f64 {
+        self.microphone_boost_db.filter(|b| b.is_finite()).unwrap_or(0.0).clamp(0.0, Self::MAX_MICROPHONE_BOOST_DB)
+    }
 }
 
 impl Default for AudioConfig {
@@ -213,6 +226,7 @@ impl Default for AudioConfig {
             mute_external_device_audio: false,
             click_sound_effect: None,
             click_sound_effect_volume: 0.25,
+            microphone_boost_db: None,
             extra: Extra::new(),
         }
     }
@@ -1020,6 +1034,22 @@ impl Zoom {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn microphone_boost_round_trips_and_stays_off_by_default() {
+        let a = super::AudioConfig::default();
+        assert_eq!(a.microphone_boost_db(), 0.0);
+        let json = serde_json::to_string(&a).unwrap();
+        assert!(!json.contains("sfMicrophoneBoostDb"), "unset boost is not written: {json}");
+        let mut b = a.clone();
+        b.microphone_boost_db = Some(12.0);
+        let back: super::AudioConfig = serde_json::from_str(&serde_json::to_string(&b).unwrap()).unwrap();
+        assert_eq!(back.microphone_boost_db(), 12.0);
+        b.microphone_boost_db = Some(99.0);
+        assert_eq!(b.microphone_boost_db(), super::AudioConfig::MAX_MICROPHONE_BOOST_DB);
+        b.microphone_boost_db = Some(f64::NAN);
+        assert_eq!(b.microphone_boost_db(), 0.0);
+    }
+
     use super::*;
 
     #[test]

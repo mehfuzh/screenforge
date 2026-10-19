@@ -66,7 +66,7 @@ pub fn audio_inputs(session: &Session) -> Vec<AudioMixInput> {
                 tempo: span.speed,
                 loop_input: false,
                 filter: match span.track {
-                    AudioTrack::Microphone => sf_media::microphone_filter(&cfg.audio.microphone_audio_preset).map(str::to_string),
+                    AudioTrack::Microphone => sf_media::microphone_filter(&cfg.audio.microphone_audio_preset, cfg.audio.microphone_boost_db()),
                     AudioTrack::SystemAudio => None,
                 },
             });
