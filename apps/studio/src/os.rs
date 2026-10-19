@@ -448,7 +448,8 @@ impl InputRegion {
         use x11rb::connection::Connection as _;
         use x11rb::protocol::shape::{ConnectionExt as _, SK, SO};
         use x11rb::protocol::xproto::{ClipOrdering, Rectangle};
-        let px = rect.map(|r| {
+        // before the first layout the bar rect is egui's NOTHING (infinite bounds): no mask yet
+        let px = rect.filter(|r| r.is_finite() && r.is_positive()).map(|r| {
             let (x0, y0) = ((r.left() * pixels_per_point).floor() as i32, (r.top() * pixels_per_point).floor() as i32);
             let (x1, y1) = ((r.right() * pixels_per_point).ceil() as i32, (r.bottom() * pixels_per_point).ceil() as i32);
             [x0, y0, (x1 - x0).max(1), (y1 - y0).max(1)]

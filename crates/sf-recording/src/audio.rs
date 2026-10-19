@@ -290,8 +290,10 @@ mod mic {
     fn resolve_device(selector: &str) -> Result<(cpal::Device, String, String)> {
         let host = cpal::default_host();
         let known = known_inputs();
-        let (want_name, uid): (Option<String>, Option<String>) = if selector == "default" || selector.is_empty() {
-            (None, known.iter().find(|d| d.is_default).map(|d| d.id.clone()))
+        // Linux: a `pw:` id opens the default PCM pointed at that PipeWire source
+        let open_as = crate::discover::alsa_selector(selector);
+        let (want_name, uid): (Option<String>, Option<String>) = if open_as == "default" || open_as.is_empty() {
+            (None, known.iter().find(|d| d.id == selector).or_else(|| known.iter().find(|d| d.is_default)).map(|d| d.id.clone()))
         } else if let Some(k) = known.iter().find(|d| d.id == selector) {
             (Some(k.name.clone()), Some(k.id.clone()))
         } else {
@@ -306,7 +308,10 @@ mod mic {
                 .find(|d| uid.as_deref().is_some_and(|u| d.id().map(|i| i.id() == u).unwrap_or(false)) || d.description().map(|d| d.name() == name).unwrap_or(false)),
         }
         .ok_or_else(|| Error::Audio(format!("microphone not found: {selector}")))?;
-        let name = device.description().map_err(|e| Error::Audio(e.to_string()))?.name().to_string();
+        let name = match known.iter().find(|d| d.id == selector) {
+            Some(k) => k.name.clone(),
+            None => device.description().map_err(|e| Error::Audio(e.to_string()))?.name().to_string(),
+        };
         let id = uid.or_else(|| device.id().ok().map(|i| i.id().to_string())).unwrap_or_else(|| name.clone());
         Ok((device, name, id))
     }

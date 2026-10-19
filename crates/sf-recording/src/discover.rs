@@ -373,6 +373,9 @@ mod linux {
     /// See [`pick_alsa_inputs`].
     pub fn microphones() -> Vec<AudioDevice> {
         use cpal::traits::{DeviceTrait, HostTrait};
+        if let Some(list) = pipewire_sources() {
+            return list;
+        }
         let host = cpal::default_host();
         let Ok(devices) = host.input_devices() else { return Vec::new() };
         let entries: Vec<(String, String)> = devices
@@ -384,6 +387,69 @@ mod linux {
             .collect();
         super::pick_alsa_inputs(&entries)
     }
+
+    /// PipeWire's capture sources (`pw-dump`), or `None` when PipeWire is not running.
+    fn pipewire_sources() -> Option<Vec<AudioDevice>> {
+        let out = std::process::Command::new("pw-dump").output().ok()?;
+        if !out.status.success() {
+            return None;
+        }
+        let list = super::parse_pw_dump(&String::from_utf8_lossy(&out.stdout));
+        (list.len() > 1).then_some(list)
+    }
+}
+
+/// Microphone ids that name a PipeWire source: `pw:<node.name>`.
+pub const PIPEWIRE_ID_PREFIX: &str = "pw:";
+
+/// The ALSA PCM to open for a microphone id, pointing the PipeWire ALSA plugin at the
+/// chosen source first. The plugin reads `PIPEWIRE_NODE` when a PCM opens, so a `pw:` id
+/// sets it and opens `default`; any other id clears it so "System default" follows the
+/// system setting again. The recorder and the level meter are the only audio streams the
+/// app opens on Linux, so a process-wide variable is safe here.
+#[cfg(target_os = "linux")]
+pub fn alsa_selector(selector: &str) -> &str {
+    match selector.strip_prefix(PIPEWIRE_ID_PREFIX) {
+        Some(node) => {
+            std::env::set_var("PIPEWIRE_NODE", node);
+            "default"
+        }
+        None => {
+            std::env::remove_var("PIPEWIRE_NODE");
+            selector
+        }
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn alsa_selector(selector: &str) -> &str {
+    selector
+}
+
+/// Microphones from `pw-dump` output: "System default" first, then every `Audio/Source`
+/// node by its nickname, the one PipeWire currently routes `default` to marked as such.
+#[cfg(any(target_os = "linux", test))]
+pub fn parse_pw_dump(json: &str) -> Vec<AudioDevice> {
+    let objs: Vec<serde_json::Value> = serde_json::from_str(json).unwrap_or_default();
+    let default_source = objs
+        .iter()
+        .find(|o| o["type"] == "PipeWire:Interface:Metadata" && o["props"]["metadata.name"] == "default")
+        .and_then(|o| o["metadata"].as_array())
+        .and_then(|m| m.iter().find(|e| e["key"] == "default.audio.source"))
+        .and_then(|e| e["value"]["name"].as_str())
+        .map(str::to_string);
+    let mut out = vec![AudioDevice { id: "default".into(), name: "System default (PipeWire)".into(), is_default: true }];
+    for o in &objs {
+        let p = &o["info"]["props"];
+        if p["media.class"] != "Audio/Source" {
+            continue;
+        }
+        let Some(node) = p["node.name"].as_str() else { continue };
+        let label = p["node.nick"].as_str().or_else(|| p["node.description"].as_str()).unwrap_or(node);
+        let name = if default_source.as_deref() == Some(node) { format!("{label} (system default)") } else { label.to_string() };
+        out.push(AudioDevice { id: format!("{PIPEWIRE_ID_PREFIX}{node}"), name, is_default: false });
+    }
+    out
 }
 
 /// Choose the ALSA PCMs worth offering as microphones. `entries` are `(pcm name, first line of
@@ -557,6 +623,30 @@ pub fn microphones() -> Vec<AudioDevice> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pw_dump_lists_sources_with_the_system_default_marked() {
+        let json = r#"[
+          {"id": 1, "type": "PipeWire:Interface:Metadata", "props": {"metadata.name": "default"},
+           "metadata": [{"subject": 0, "key": "default.audio.sink", "value": {"name": "alsa_output.x"}},
+                        {"subject": 0, "key": "default.audio.source", "value": {"name": "alsa_input.card.HiFi__Mic2__source"}}]},
+          {"id": 61, "type": "PipeWire:Interface:Node", "info": {"props": {"media.class": "Audio/Source", "node.name": "alsa_input.card.HiFi__Mic2__source", "node.nick": "Stereo Microphone", "node.description": "Tiger Lake Stereo Microphone"}}},
+          {"id": 62, "type": "PipeWire:Interface:Node", "info": {"props": {"media.class": "Audio/Source", "node.name": "alsa_input.card.HiFi__Mic1__source", "node.description": "Tiger Lake Digital Microphone"}}},
+          {"id": 63, "type": "PipeWire:Interface:Node", "info": {"props": {"media.class": "Audio/Sink", "node.name": "alsa_output.x", "node.nick": "Speakers"}}},
+          {"id": 79, "type": "PipeWire:Interface:Node", "info": {"props": {"media.class": "Video/Source", "node.name": "v4l2_input.cam"}}}
+        ]"#;
+        let got = parse_pw_dump(json);
+        let rows: Vec<(&str, &str, bool)> = got.iter().map(|d| (d.id.as_str(), d.name.as_str(), d.is_default)).collect();
+        assert_eq!(
+            rows,
+            [
+                ("default", "System default (PipeWire)", true),
+                ("pw:alsa_input.card.HiFi__Mic2__source", "Stereo Microphone (system default)", false),
+                ("pw:alsa_input.card.HiFi__Mic1__source", "Tiger Lake Digital Microphone", false),
+            ]
+        );
+        assert_eq!(parse_pw_dump("not json").len(), 1);
+    }
 
     #[test]
     fn alsa_inputs_collapse_to_the_sound_server() {
