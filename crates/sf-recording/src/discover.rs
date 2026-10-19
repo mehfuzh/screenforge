@@ -367,16 +367,75 @@ mod linux {
         windows_with(true)
     }
 
+    /// Microphones from cpal's ALSA host, reduced to what a person can choose between: ALSA
+    /// lists every alias of a card (`hw:`, `plughw:`, `dsnoop:`, `sysdefault:` for each of
+    /// its capture devices), all under the card's name, so one laptop card shows up ten times.
+    /// See [`pick_alsa_inputs`].
     pub fn microphones() -> Vec<AudioDevice> {
         use cpal::traits::{DeviceTrait, HostTrait};
         let host = cpal::default_host();
-        let default = host.default_input_device().and_then(|d| d.description().ok().map(|d| d.name().to_string()));
         let Ok(devices) = host.input_devices() else { return Vec::new() };
-        devices
-            .filter_map(|d| d.description().ok().map(|d| d.name().to_string()))
-            .map(|name| AudioDevice { is_default: Some(&name) == default.as_ref(), id: name.clone(), name })
-            .collect()
+        let entries: Vec<(String, String)> = devices
+            .filter_map(|d| {
+                let pcm = d.id().ok()?.id().to_string();
+                let desc = d.description().ok().map(|d| d.name().to_string()).unwrap_or_default();
+                Some((pcm, desc))
+            })
+            .collect();
+        super::pick_alsa_inputs(&entries)
     }
+}
+
+/// Choose the ALSA PCMs worth offering as microphones. `entries` are `(pcm name, first line of
+/// the ALSA description)` as cpal lists them.
+///
+/// With a sound server (`default` routing to PipeWire or PulseAudio, or a `pipewire`/`pulse`
+/// PCM), that one entry is the whole list: the server owns the hardware and the person picks
+/// the microphone in the system sound settings, while raw card PCMs would mostly fail to open
+/// with "device busy". Without a server, one `plughw:` PCM per capture device is offered
+/// (software conversions, so any rate works) and every other alias is dropped.
+#[cfg(any(target_os = "linux", test))]
+pub fn pick_alsa_inputs(entries: &[(String, String)]) -> Vec<AudioDevice> {
+    let find = |pcm: &str| entries.iter().find(|(p, _)| p == pcm);
+    let server_name = |desc: &str| {
+        let d = desc.to_ascii_lowercase();
+        if d.contains("pipewire") {
+            Some("PipeWire")
+        } else if d.contains("pulse") {
+            Some("PulseAudio")
+        } else {
+            None
+        }
+    };
+    let server = find("default")
+        .and_then(|(_, desc)| server_name(desc).map(|s| ("default", s)))
+        .or_else(|| find("pipewire").map(|_| ("pipewire", "PipeWire")))
+        .or_else(|| find("pulse").map(|_| ("pulse", "PulseAudio")));
+    if let Some((pcm, server)) = server {
+        return vec![AudioDevice { id: pcm.to_string(), name: format!("System default ({server})"), is_default: true }];
+    }
+    let cards: Vec<(&str, &str, &str)> = entries
+        .iter()
+        .filter_map(|(pcm, desc)| {
+            let rest = pcm.strip_prefix("plughw:CARD=")?;
+            let (card, dev) = rest.split_once(",DEV=")?;
+            Some((card, dev, desc.as_str()))
+        })
+        .collect();
+    let mut out: Vec<AudioDevice> = cards
+        .iter()
+        .map(|(card, dev, desc)| {
+            let base = desc.trim().trim_end_matches(',').trim();
+            let base = if base.is_empty() { *card } else { base };
+            let siblings = cards.iter().filter(|(c, _, _)| c == card).count();
+            let name = if siblings > 1 { format!("{base} (device {dev})") } else { base.to_string() };
+            AudioDevice { id: format!("plughw:CARD={card},DEV={dev}"), name, is_default: false }
+        })
+        .collect();
+    if let Some(first) = out.first_mut() {
+        first.is_default = true;
+    }
+    out
 }
 
 #[cfg(target_os = "windows")]
@@ -498,6 +557,46 @@ pub fn microphones() -> Vec<AudioDevice> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn alsa_inputs_collapse_to_the_sound_server() {
+        let e = |p: &str, d: &str| (p.to_string(), d.to_string());
+        let entries = vec![
+            e("null", "Discard all samples (playback) or generate zero samples (capture)"),
+            e("pipewire", "PipeWire Sound Server"),
+            e("default", "Default ALSA Output (currently PipeWire Media Server)"),
+            e("hw:CARD=sofhdadsp,DEV=0", "sof-hda-dsp, "),
+            e("hw:CARD=sofhdadsp,DEV=6", "sof-hda-dsp, "),
+            e("plughw:CARD=sofhdadsp,DEV=0", "sof-hda-dsp, "),
+            e("plughw:CARD=sofhdadsp,DEV=6", "sof-hda-dsp, "),
+            e("sysdefault:CARD=sofhdadsp", "sof-hda-dsp, "),
+            e("dsnoop:CARD=sofhdadsp,DEV=0", "sof-hda-dsp, "),
+        ];
+        let got = pick_alsa_inputs(&entries);
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].id, "default");
+        assert_eq!(got[0].name, "System default (PipeWire)");
+        assert!(got[0].is_default);
+    }
+
+    #[test]
+    fn alsa_inputs_without_a_server_list_one_plughw_per_capture_device() {
+        let e = |p: &str, d: &str| (p.to_string(), d.to_string());
+        let entries = vec![
+            e("null", "Discard all samples"),
+            e("hw:CARD=sofhdadsp,DEV=0", "sof-hda-dsp, "),
+            e("plughw:CARD=sofhdadsp,DEV=0", "sof-hda-dsp, "),
+            e("plughw:CARD=sofhdadsp,DEV=6", "sof-hda-dsp, "),
+            e("dsnoop:CARD=sofhdadsp,DEV=0", "sof-hda-dsp, "),
+            e("plughw:CARD=Yeti,DEV=0", "Blue Yeti, USB Audio"),
+        ];
+        let got = pick_alsa_inputs(&entries);
+        let ids: Vec<&str> = got.iter().map(|d| d.id.as_str()).collect();
+        assert_eq!(ids, ["plughw:CARD=sofhdadsp,DEV=0", "plughw:CARD=sofhdadsp,DEV=6", "plughw:CARD=Yeti,DEV=0"]);
+        let names: Vec<&str> = got.iter().map(|d| d.name.as_str()).collect();
+        assert_eq!(names, ["sof-hda-dsp (device 0)", "sof-hda-dsp (device 6)", "Blue Yeti, USB Audio"]);
+        assert!(got[0].is_default && !got[1].is_default);
+    }
 
     #[test]
     fn parses_avfoundation_device_list() {

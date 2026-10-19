@@ -394,7 +394,8 @@ impl Picker {
                 self.microphone = self.inputs.microphones.iter().find(|c| c.name.contains(&want)).map(|c| c.id.clone());
             }
         }
-        let mic_name = self.microphone.as_ref().and_then(|id| self.inputs.microphones.iter().find(|c| &c.id == id)).map(|c| c.name.clone());
+        // the meter opens the device by id (unique) and the name is kept for the hover label
+        let mic_name = self.microphone.as_ref().filter(|id| self.inputs.microphones.iter().any(|c| &c.id == *id)).cloned();
         match (&mic_name, &self.mic_meter) {
             (Some(n), Some(m)) if &m.device_name == n => {}
             (Some(n), _) => self.mic_meter = crate::mic_meter::MicMeter::start(n),

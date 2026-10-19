@@ -299,10 +299,11 @@ mod mic {
         };
         let device = match &want_name {
             None => host.default_input_device(),
+            // the id first (on Linux it is the ALSA PCM name; display names repeat per card)
             Some(name) => host
                 .input_devices()
                 .map_err(|e| Error::Audio(e.to_string()))?
-                .find(|d| d.description().map(|d| d.name() == name).unwrap_or(false)),
+                .find(|d| uid.as_deref().is_some_and(|u| d.id().map(|i| i.id() == u).unwrap_or(false)) || d.description().map(|d| d.name() == name).unwrap_or(false)),
         }
         .ok_or_else(|| Error::Audio(format!("microphone not found: {selector}")))?;
         let name = device.description().map_err(|e| Error::Audio(e.to_string()))?.name().to_string();

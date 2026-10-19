@@ -13,13 +13,13 @@ pub struct MicMeter {
 }
 
 impl MicMeter {
-    /// Open the input device whose name matches `name` (falls back to the default input).
+    /// Open the input device whose id or name matches `name` (falls back to the default input).
     pub fn start(name: &str) -> Option<MicMeter> {
         let host = cpal::default_host();
         let device = host
             .input_devices()
             .ok()
-            .and_then(|mut it| it.find(|d| d.description().map(|n| n.name() == name).unwrap_or(false)))
+            .and_then(|mut it| it.find(|d| d.id().map(|i| i.id() == name).unwrap_or(false) || d.description().map(|n| n.name() == name).unwrap_or(false)))
             .or_else(|| host.default_input_device())?;
         let config = device.default_input_config().ok()?;
         let channels = config.channels() as usize;
