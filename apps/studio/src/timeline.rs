@@ -20,6 +20,8 @@ const RULER_H: f32 = 26.0;
 const MARKER_H: f32 = 22.0;
 const CLIP_H: f32 = 62.0;
 const AUDIO_H: f32 = 44.0;
+/// Gap between stacked audio lanes (layers).
+const LANE_GAP: f32 = 4.0;
 const ZOOM_H: f32 = 48.0;
 const MUSIC_H: f32 = 36.0;
 const GAP: f32 = 8.0;
@@ -117,6 +119,18 @@ struct AudioDrag {
     snapshot: Project,
 }
 
+/// Height of `lanes` stacked audio lanes (without the trailing gap).
+fn audio_lanes_h(lanes: u32) -> f32 {
+    let n = lanes.max(1) as f32;
+    n * AUDIO_H + (n - 1.0) * LANE_GAP
+}
+
+/// Top of the audio lanes, from the timeline rect top (constants only, so a live drag can
+/// use it before the lanes are laid out).
+fn audio_top_of(rect: Rect) -> f32 {
+    rect.top() + RULER_H + 2.0 + MARKER_H + GAP + CLIP_H + GAP
+}
+
 pub struct TimelineWidget {
     pub px_per_sec: f32,
     pub scroll_x: f32,
@@ -152,7 +166,10 @@ impl TimelineWidget {
         let show_music_lane = music_lane_visible(ed);
         let zoom_track_h = if has_zooms { ZOOM_H + GAP } else { 0.0 };
         let mask_track_h = if has_masks { ZOOM_H + GAP } else { 0.0 };
-        let audio_track_h = if show_audio_lane { AUDIO_H + GAP } else { 0.0 };
+        // one lane per audio layer, plus an empty drop lane while a clip is being moved so it
+        // can be dragged down onto a new layer
+        let audio_lanes = self.audio_lanes(ed);
+        let audio_track_h = if show_audio_lane { audio_lanes_h(audio_lanes) + GAP } else { 0.0 };
         let music_track_h = if show_music_lane { MUSIC_H + GAP } else { 0.0 };
         let (rect, resp) = ui.allocate_exact_size(vec2(avail.x, avail.y.max(RULER_H + MARKER_H + CLIP_H + audio_track_h + music_track_h + mask_track_h + zoom_track_h + GAP * 2.0)), Sense::click_and_drag());
         let painter = ui.painter_at(rect);
@@ -231,12 +248,18 @@ impl TimelineWidget {
                 let view = ed.session.timeline.clone();
                 let x_of = |ms: f64| map.x(view.output_to_view(ms));
                 let ms_of = |x: f32| view.view_to_output(map.view_ms(x));
-                self.apply_audio_drag(&drag, ed, p.x, shift, x_of, ms_of);
+                self.apply_audio_drag(&drag, ed, p, audio_top_of(rect), shift, x_of, ms_of);
             }
             if down {
                 self.audio_drag = Some(drag);
                 ui.ctx().request_repaint();
             } else {
+                // a lane left empty by the move collapses
+                let scene = &mut ed.session.pkg.project.scenes[0];
+                if let Some(mut clips) = scene.audio_clips() {
+                    sf_project::audio_clips::compact_layers(&mut clips);
+                    scene.set_audio_clips(Some(clips));
+                }
                 ed.commit_live_edit(drag.snapshot);
                 self.snap_x = None;
             }
@@ -437,12 +460,13 @@ impl TimelineWidget {
         // audio track: its own lane only while detached clips remain; linked audio is drawn
         // inside the video clips above
         let audio_top = clip_top + CLIP_H + GAP;
+        debug_assert!((audio_top - audio_top_of(rect)).abs() < 0.5);
         if show_audio_lane {
-            self.audio_track_ui(ed, ui, rect, audio_top, x_of, ms_of, &mut seek_to);
+            self.audio_track_ui(ed, ui, rect, audio_top, audio_lanes, x_of, ms_of, &mut seek_to);
         }
 
         // background music: a lane of its own, whether or not audio was recorded
-        let music_top = if show_audio_lane { audio_top + AUDIO_H + GAP } else { audio_top };
+        let music_top = if show_audio_lane { audio_top + audio_lanes_h(audio_lanes) + GAP } else { audio_top };
         if show_music_lane {
             self.music_track_ui(ed, ui, rect, music_top, x_of, ms_of, &mut seek_to);
         }
@@ -687,10 +711,38 @@ impl TimelineWidget {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn audio_track_ui(&mut self, ed: &mut Editor, ui: &mut egui::Ui, rect: Rect, top: f32, x_of: impl Fn(f64) -> f32 + Copy, ms_of: impl Fn(f32) -> f64 + Copy, seek_to: &mut Option<f64>) {
+    /// Lanes to lay out for the audio track: one per layer in use, plus an empty drop lane
+    /// below while a clip is being moved.
+    fn audio_lanes(&self, ed: &Editor) -> u32 {
+        let count = |p: &Project| p.scenes[0].audio_clips().map(|cs| sf_project::audio_clips::layer_count(&cs)).unwrap_or(0).max(1);
+        let used = count(&ed.session.pkg.project);
+        match &self.audio_drag {
+            // the drop lane sits below the lanes in use before the drag, so it stays put once
+            // the clip has been dragged onto it
+            Some(d) if d.kind == AudioDragKind::Move => used.max(count(&d.snapshot) + 1),
+            _ => used,
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn audio_track_ui(&mut self, ed: &mut Editor, ui: &mut egui::Ui, rect: Rect, top: f32, lanes: u32, x_of: impl Fn(f64) -> f32 + Copy, ms_of: impl Fn(f32) -> f64 + Copy, seek_to: &mut Option<f64>) {
         let painter = ui.painter_at(rect);
-        let track_rect = Rect::from_min_max(pos2(rect.left(), top), pos2(rect.right(), top + AUDIO_H));
-        painter.rect(track_rect.shrink2(vec2(1.5, 0.0)), 10.0, theme::p().track_empty, Stroke::new(1.0, theme::p().border), egui::StrokeKind::Inside);
+        let lane_top = |layer: u32| top + layer as f32 * (AUDIO_H + LANE_GAP);
+        let track_rect = Rect::from_min_max(pos2(rect.left(), top), pos2(rect.right(), top + audio_lanes_h(lanes)));
+        let moving = self.audio_drag.as_ref().is_some_and(|d| d.kind == AudioDragKind::Move);
+        for layer in 0..lanes {
+            let lr = Rect::from_min_max(pos2(rect.left(), lane_top(layer)), pos2(rect.right(), lane_top(layer) + AUDIO_H));
+            // the last lane while moving is the drop target for a new layer
+            let is_drop = moving && layer + 1 == lanes;
+            let fill = if is_drop { theme::p().track_empty.gamma_multiply(0.5) } else { theme::p().track_empty };
+            let stroke = if is_drop { theme::p().accent.gamma_multiply(0.5) } else { theme::p().border };
+            painter.rect(lr.shrink2(vec2(1.5, 0.0)), 10.0, fill, Stroke::new(1.0, stroke), egui::StrokeKind::Inside);
+            if is_drop {
+                painter.text(lr.center(), egui::Align2::CENTER_CENTER, "Drop here for a new layer", egui::FontId::proportional(11.0), theme::p().text_dim);
+            } else if lanes > 1 {
+                painter.text(pos2(lr.right() - 8.0, lr.center().y), egui::Align2::RIGHT_CENTER, format!("L{}", layer + 1), egui::FontId::proportional(10.0), theme::p().text_dim.gamma_multiply(0.7));
+            }
+        }
         let tracks = crate::audio::AudioPlayer::available_tracks(&ed.session);
         let base_id = ui.id().with("audiotrack");
         if tracks.is_empty() {
@@ -730,7 +782,8 @@ impl TimelineWidget {
         for span in &spans {
             let x0 = x_of(span.output_start_ms);
             let x1 = x_of(span.output_end_ms);
-            let full = Rect::from_min_max(pos2(x0 + 1.5, top + 3.0), pos2(x1 - 1.5, top + AUDIO_H - 3.0));
+            let lt = lane_top(span.layer.min(lanes.saturating_sub(1)));
+            let full = Rect::from_min_max(pos2(x0 + 1.5, lt + 3.0), pos2(x1 - 1.5, lt + AUDIO_H - 3.0));
             let r = full.intersect(rect);
             if r.width() <= 0.0 {
                 continue;
@@ -847,8 +900,9 @@ impl TimelineWidget {
 
     }
 
-    fn apply_audio_drag(&mut self, drag: &AudioDrag, ed: &mut Editor, x: f32, shift: bool, x_of: impl Fn(f64) -> f32 + Copy, ms_of: impl Fn(f32) -> f64) {
+    fn apply_audio_drag(&mut self, drag: &AudioDrag, ed: &mut Editor, pos: egui::Pos2, audio_top: f32, shift: bool, x_of: impl Fn(f64) -> f32 + Copy, ms_of: impl Fn(f32) -> f64) {
         // edges follow the pointer on screen (a pixel is not the same time everywhere)
+        let x = pos.x;
         let dx = x - drag.start_x;
         let moved = |ms: f64| ms_of(x_of(ms) + dx);
         let src_duration = ed.session.source.duration_ms;
@@ -872,7 +926,27 @@ impl TimelineWidget {
                         self.snap_x = Some(x_of(sn));
                     }
                 }
-                clips[i].output_start_ms = start.max(0.0);
+                let start = start.max(0.0);
+                // vertical: the lane under the pointer, at most one past the bottom lane in
+                // use (the "new layer" drop lane)
+                let max_layer = sf_project::audio_clips::layer_count(&drag.snapshot.scenes[0].audio_clips().unwrap_or_default());
+                let lane = ((pos.y - audio_top) / (AUDIO_H + LANE_GAP)).floor();
+                let layer = if lane.is_finite() { lane.clamp(0.0, max_layer as f32) as u32 } else { o.layer };
+                // clips on one lane never overlap: land in the nearest free gap, or stay put
+                let dur = o.output_duration_ms();
+                if sf_project::audio_clips::lane_is_free(&clips, layer, start, start + dur, &drag.id) {
+                    clips[i].layer = layer;
+                    clips[i].output_start_ms = start;
+                } else {
+                    self.snap_x = None;
+                    match sf_project::audio_clips::nearest_free_start(&clips, layer, dur, start, &drag.id) {
+                        Some(s) => {
+                            clips[i].layer = layer;
+                            clips[i].output_start_ms = s;
+                        }
+                        None => clips[i] = o.clone(),
+                    }
+                }
             }
             AudioDragKind::Left => {
                 let mut start = moved(o.output_start_ms);
@@ -883,7 +957,10 @@ impl TimelineWidget {
                     }
                 }
                 let max_start = o.output_end_ms() - AudioClip::MIN_DURATION_MS / o.speed;
-                let start = start.clamp((o.output_start_ms - o.source_start_ms / o.speed).max(0.0), max_start);
+                // not before the recording start, nor into the clip before it on this lane
+                let (before, _) = sf_project::audio_clips::lane_neighbours(&clips, &drag.id);
+                let min_start = (o.output_start_ms - o.source_start_ms / o.speed).max(0.0).max(before.unwrap_or(0.0));
+                let start = start.clamp(min_start.min(max_start), max_start);
                 let delta_src = (start - o.output_start_ms) * o.speed;
                 clips[i].output_start_ms = start;
                 clips[i].source_start_ms = (o.source_start_ms + delta_src).max(0.0);
@@ -896,8 +973,11 @@ impl TimelineWidget {
                         self.snap_x = Some(x_of(sn));
                     }
                 }
-                let max_end = o.output_start_ms + (src_duration - o.source_start_ms) / o.speed;
-                let end = end.clamp(o.output_start_ms + AudioClip::MIN_DURATION_MS / o.speed, max_end);
+                // not past the recording end, nor into the clip after it on this lane
+                let (_, after) = sf_project::audio_clips::lane_neighbours(&clips, &drag.id);
+                let max_end = (o.output_start_ms + (src_duration - o.source_start_ms) / o.speed).min(after.unwrap_or(f64::INFINITY));
+                let min_end = o.output_start_ms + AudioClip::MIN_DURATION_MS / o.speed;
+                let end = end.clamp(min_end, max_end.max(min_end));
                 clips[i].source_end_ms = o.source_start_ms + (end - o.output_start_ms) * o.speed;
             }
         }
@@ -911,21 +991,23 @@ impl TimelineWidget {
 fn audio_menu(ed: &mut Editor, ui: &mut egui::Ui, id: &str, at_ms: f64) {
     let Some(clips) = ed.session.pkg.project.scenes[0].audio_clips() else { return };
     let Some(clip) = clips.iter().find(|c| c.id == id).cloned() else { return };
-    let idc = id.to_string();
     if ui.button("Split audio here").clicked() {
-        ed.edit(move |p| {
-            let scene = &mut p.scenes[0];
-            if let Some(mut cs) = scene.audio_clips() {
-                if let Some(i) = cs.iter().position(|c| c.id == idc) {
-                    if let Some(r) = cs[i].split_at_output(at_ms) {
-                        cs.insert(i + 1, r);
-                    }
-                }
-                scene.set_audio_clips(Some(cs));
-            }
-        });
+        ed.split_audio_clip(id, at_ms, false);
         ui.close();
     }
+    if ui.button("Split here to new layer").on_hover_text("Cut the clip and move the right-hand part one lane down, so the two parts can overlap").clicked() {
+        ed.split_audio_clip(id, at_ms, true);
+        ui.close();
+    }
+    if ui.button("Move to layer below").on_hover_text("Also: drag the clip down, or ⌥↓").clicked() {
+        ed.move_audio_clip_layer(id, 1);
+        ui.close();
+    }
+    if ui.add_enabled(clip.layer > 0, egui::Button::new("Move to layer above")).on_hover_text("Also: drag the clip up, or ⌥↑").clicked() {
+        ed.move_audio_clip_layer(id, -1);
+        ui.close();
+    }
+    ui.separator();
     ui.menu_button(format!("Speed ({}×)", clip.speed), |ui| {
         for sp in SPEEDS {
             if ui.selectable_label((sp - clip.speed).abs() < 1e-6, format!("{sp}×")).clicked() {
