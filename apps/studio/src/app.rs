@@ -119,6 +119,7 @@ const PICKER_FIXED_H: f32 = crate::picker::MENU_WINDOW_H;
 
 impl App {
     pub fn new(cc: &CreationContext<'_>) -> Self {
+        crate::theme::install_fonts(&cc.egui_ctx);
         crate::theme::apply(&cc.egui_ctx);
         egui_extras::install_image_loaders(&cc.egui_ctx);
         let rs = cc.wgpu_render_state.as_ref().expect("wgpu renderer required");

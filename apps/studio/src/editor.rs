@@ -722,6 +722,9 @@ impl Editor {
                 let card_rect = ui.available_rect_before_wrap();
                 widgets::card(ui.painter(), card_rect);
                 let mut inner = ui.new_child(egui::UiBuilder::new().max_rect(card_rect.shrink2(vec2(18.0, 10.0))).layout(egui::Layout::top_down(egui::Align::Min)));
+                // nothing in the inspector may paint past the card (the child would otherwise
+                // inherit the whole panel's clip rect)
+                inner.set_clip_rect(card_rect.shrink2(vec2(6.0, 0.0)).intersect(ui.clip_rect()));
                 sidebar::ui(self, &mut inner, self.section);
             });
         });

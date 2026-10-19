@@ -271,6 +271,35 @@ pub fn sync(ctx: &egui::Context) -> bool {
 pub const RADIUS: u8 = 10;
 pub const RADIUS_SM: u8 = 7;
 
+/// System font with the key-cap symbols egui's bundled fonts lack (⌥ ⌫ ⌃), tried in order.
+#[cfg(target_os = "macos")]
+const SYMBOL_FONTS: &[&str] = &["/System/Library/Fonts/Apple Symbols.ttf"];
+#[cfg(target_os = "windows")]
+const SYMBOL_FONTS: &[&str] = &["C:\\Windows\\Fonts\\seguisym.ttf"];
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+const SYMBOL_FONTS: &[&str] = &["/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", "/usr/share/fonts/dejavu/DejaVuSans.ttf", "/usr/share/fonts/TTF/DejaVuSans.ttf"];
+
+/// Install the fonts once: egui's proportional face has no ⇧ ↑ ↓, so Hack (which does) becomes
+/// a fallback for it, and the system's symbol font, where present, supplies ⌥ ⌫ ⌃ for shortcut
+/// hints. Without it those characters would show as boxes.
+pub fn install_fonts(ctx: &egui::Context) {
+    let mut fonts = egui::FontDefinitions::default();
+    let families = [FontFamily::Proportional, FontFamily::Monospace];
+    for fam in &families {
+        let list = fonts.families.entry(fam.clone()).or_default();
+        if !list.iter().any(|n| n == "Hack") {
+            list.push("Hack".to_owned());
+        }
+    }
+    if let Some(bytes) = SYMBOL_FONTS.iter().find_map(|p| std::fs::read(p).ok()) {
+        fonts.font_data.insert("symbols".to_owned(), std::sync::Arc::new(egui::FontData::from_owned(bytes)));
+        for fam in &families {
+            fonts.families.entry(fam.clone()).or_default().push("symbols".to_owned());
+        }
+    }
+    ctx.set_fonts(fonts);
+}
+
 /// Apply the palette matching `ctx.theme()` to egui's visuals and style.
 #[allow(non_snake_case)]
 pub fn apply(ctx: &egui::Context) {

@@ -76,7 +76,7 @@ pub fn mask_item_ui(ed: &mut Editor, ui: &mut egui::Ui) {
         widgets::hint(ui, "The areas are blurred, for passwords, emails and other private details.");
         cfg_slider(ed, ui, "Blur amount", move |p| p.scenes[0].masks.iter().find(|m| m.id == gid).map(|m| m.blur).unwrap_or(32.0), move |p, v| with(&sid, p, &|m| m.blur = v), 4.0..=100.0, Some(32.0), "");
     }
-    ui.horizontal(|ui| {
+    ui.horizontal_wrapped(|ui| {
         ui.label(RichText::new(match m.bounds.len() { 1 => "1 area".to_string(), n => format!("{n} areas") }).color(theme::p().text_dim));
         if ui.button("Add area").clicked() {
             let r = crate::masks::new_region(ed);
@@ -156,7 +156,7 @@ pub fn zoom_item_ui(ed: &mut Editor, ui: &mut egui::Ui) {
             let zid = id.clone();
             ed.edit(move |p| { if let Some(z) = p.scenes[0].zooms.iter_mut().find(|z| z.id == zid) { z.has_instant_animation = instant } });
         }
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             ui.label("Start");
             ui.label(RichText::new(format!("{:.0} ms", z.source_start_ms)).monospace());
             ui.label("End");
@@ -238,6 +238,13 @@ fn cfg_slider(ed: &mut Editor, ui: &mut egui::Ui, label: &str, get: impl Fn(&sf_
 }
 
 pub fn ui(ed: &mut Editor, ui: &mut egui::Ui, section: Section) {
+    // a solid scroll bar takes its own column, so full-width controls (sliders, segmented
+    // rows) stop short of it instead of running underneath egui's floating bar
+    let mut scroll = egui::style::ScrollStyle::solid();
+    scroll.bar_width = 6.0;
+    scroll.bar_inner_margin = 8.0;
+    scroll.bar_outer_margin = 0.0;
+    ui.spacing_mut().scroll = scroll;
     egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
         ui.add_space(8.0);
         if ed.selected_zoom.is_some() {
@@ -649,8 +656,7 @@ fn camera_style_ui(ed: &mut Editor, ui: &mut egui::Ui) {
     ];
     // four square tiles in one aligned row: name, wheel, master value
     let gap = 6.0;
-    // leave room for the scroll bar so the last tile is not clipped
-    let tile_w = ((ui.available_width() - gap * 3.0 - 12.0) / 4.0).clamp(56.0, 112.0);
+    let tile_w = ((ui.available_width() - gap * 3.0) / 4.0).clamp(56.0, 112.0);
     let tile_h = tile_w + 34.0;
     let diameter = (tile_w - 18.0).min(72.0);
     egui::Grid::new("camera-color-wheels").num_columns(4).spacing(egui::vec2(gap, 0.0)).show(ui, |ui| {
@@ -897,7 +903,7 @@ pub fn audio_item_ui(ed: &mut Editor, ui: &mut egui::Ui) {
             }
         });
     }
-    ui.horizontal(|ui| {
+    ui.horizontal_wrapped(|ui| {
         if ui.button("Split at playhead").clicked() {
             ed.split_at_playhead();
         }
@@ -910,7 +916,7 @@ pub fn audio_item_ui(ed: &mut Editor, ui: &mut egui::Ui) {
         }
     });
     widgets::title(ui, &format!("Layer {}", clip.layer + 1));
-    ui.horizontal(|ui| {
+    ui.horizontal_wrapped(|ui| {
         if ui.add_enabled(clip.layer > 0, egui::Button::new("Move up")).clicked() {
             ed.move_audio_clip_layer(&id, -1);
         }
