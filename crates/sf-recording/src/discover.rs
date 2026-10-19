@@ -402,28 +402,46 @@ mod linux {
 /// Microphone ids that name a PipeWire source: `pw:<node.name>`.
 pub const PIPEWIRE_ID_PREFIX: &str = "pw:";
 
-/// The ALSA PCM to open for a microphone id, pointing the PipeWire ALSA plugin at the
-/// chosen source first. The plugin reads `PIPEWIRE_NODE` when a PCM opens, so a `pw:` id
-/// sets it and opens `default`; any other id clears it so "System default" follows the
-/// system setting again. The recorder and the level meter are the only audio streams the
-/// app opens on Linux, so a process-wide variable is safe here.
+/// Keeps `PIPEWIRE_NODE` set while a microphone PCM is opened and clears it on drop.
+///
+/// The PipeWire ALSA plugin reads the variable when a PCM opens, which is how a `pw:` id
+/// selects its source. libpipewire reads the same variable for every stream it creates,
+/// including the screen capture, which would be sent to the microphone node and fail with
+/// "no more input formats" if the variable stayed set. So it lives only as long as this
+/// guard, and the recorder opens the microphone before it connects the display stream.
+pub struct PipewireTarget {
+    set: bool,
+}
+
+impl Drop for PipewireTarget {
+    fn drop(&mut self) {
+        if self.set {
+            std::env::remove_var("PIPEWIRE_NODE");
+        }
+    }
+}
+
+/// The ALSA PCM to open for a microphone id, plus the guard that points the PipeWire ALSA
+/// plugin at the chosen source until the PCM is open. A `pw:` id opens `default` with the
+/// variable set; any other id opens as is with the variable cleared, so "System default"
+/// follows the system setting.
 #[cfg(target_os = "linux")]
-pub fn alsa_selector(selector: &str) -> &str {
+pub fn alsa_selector(selector: &str) -> (&str, PipewireTarget) {
     match selector.strip_prefix(PIPEWIRE_ID_PREFIX) {
         Some(node) => {
             std::env::set_var("PIPEWIRE_NODE", node);
-            "default"
+            ("default", PipewireTarget { set: true })
         }
         None => {
             std::env::remove_var("PIPEWIRE_NODE");
-            selector
+            (selector, PipewireTarget { set: false })
         }
     }
 }
 
 #[cfg(not(target_os = "linux"))]
-pub fn alsa_selector(selector: &str) -> &str {
-    selector
+pub fn alsa_selector(selector: &str) -> (&str, PipewireTarget) {
+    (selector, PipewireTarget { set: false })
 }
 
 /// Microphones from `pw-dump` output: "System default" first, then every `Audio/Source`
@@ -623,6 +641,19 @@ pub fn microphones() -> Vec<AudioDevice> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn pipewire_target_is_cleared_when_the_guard_drops() {
+        let (pcm, guard) = alsa_selector("pw:alsa_input.card.HiFi__Mic1__source");
+        assert_eq!(pcm, "default");
+        assert_eq!(std::env::var("PIPEWIRE_NODE").as_deref(), Ok("alsa_input.card.HiFi__Mic1__source"));
+        drop(guard);
+        assert!(std::env::var_os("PIPEWIRE_NODE").is_none());
+        let (pcm, _guard) = alsa_selector("plughw:CARD=x,DEV=0");
+        assert_eq!(pcm, "plughw:CARD=x,DEV=0");
+        assert!(std::env::var_os("PIPEWIRE_NODE").is_none());
+    }
 
     #[test]
     fn pw_dump_lists_sources_with_the_system_default_marked() {

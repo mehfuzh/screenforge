@@ -16,8 +16,9 @@ impl MicMeter {
     /// Open the input device whose id or name matches `name` (falls back to the default input).
     pub fn start(name: &str) -> Option<MicMeter> {
         let host = cpal::default_host();
-        // Linux: a `pw:` id becomes the default PCM pointed at that PipeWire source
-        let open_as = sf_recording::discover::alsa_selector(name);
+        // Linux: a `pw:` id becomes the default PCM pointed at that PipeWire source; the
+        // guard clears the target again when this function returns
+        let (open_as, _pipewire_target) = sf_recording::discover::alsa_selector(name);
         let device = host
             .input_devices()
             .ok()
