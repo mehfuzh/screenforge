@@ -277,6 +277,45 @@ impl Editor {
         self.set_status(&format!("Audio clip speed {speed}×"));
     }
 
+    /// Split a detached audio clip at output time `at_ms`; with `next_layer` the right-hand
+    /// part goes one lane down so the pieces can overlap.
+    pub fn split_audio_clip(&mut self, id: &str, at_ms: f64, next_layer: bool) {
+        use sf_project::SceneAudioExt;
+        let idc = id.to_string();
+        let mut done = false;
+        self.edit(|p| {
+            let scene = &mut p.scenes[0];
+            if let Some(mut cs) = scene.audio_clips() {
+                done = sf_project::audio_clips::split_clip(&mut cs, &idc, at_ms, next_layer).is_some();
+                scene.set_audio_clips(Some(cs));
+            }
+        });
+        self.set_status(match (done, next_layer) {
+            (true, true) => "Split audio — right part moved to the layer below",
+            (true, false) => "Split audio",
+            (false, _) => "Too close to the clip edge to split",
+        });
+    }
+
+    /// Move a detached audio clip up (`delta` < 0) or down (`delta` > 0) by whole lanes; one
+    /// lane past the bottom one creates a new layer, and lanes left empty collapse.
+    pub fn move_audio_clip_layer(&mut self, id: &str, delta: i32) {
+        use sf_project::SceneAudioExt;
+        let idc = id.to_string();
+        let mut layer = None;
+        self.edit(|p| {
+            let scene = &mut p.scenes[0];
+            if let Some(mut cs) = scene.audio_clips() {
+                layer = sf_project::audio_clips::move_clip_layer(&mut cs, &idc, delta);
+                scene.set_audio_clips(Some(cs));
+            }
+        });
+        match layer {
+            Some(l) => self.set_status(&format!("Audio clip on layer {}", l + 1)),
+            None => self.set_status(if delta > 0 { "No room on the layer below" } else { "No room on the layer above" }),
+        }
+    }
+
     /// Push volume/mute changes to the audio player without re-decoding.
     pub fn refresh_audio_levels(&mut self) {
         self.audio.update_timeline(&self.session);
@@ -454,7 +493,10 @@ impl Editor {
         let (mut split, mut del, mut undo, mut redo, mut save, mut export, mut prev_b, mut next_b, mut toggle) = (false, false, false, false, false, false, false, false, false);
         let mut toggle_sidebar = false;
         let mut section: Option<Section> = None;
+        let mut layer_delta = 0i32;
         ctx.input_mut(|i| {
+            if i.consume_key(egui::Modifiers::ALT, egui::Key::ArrowDown) { layer_delta = 1; }
+            if i.consume_key(egui::Modifiers::ALT, egui::Key::ArrowUp) { layer_delta = -1; }
             toggle = i.consume_key(egui::Modifiers::NONE, egui::Key::Space);
             if i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowLeft) { self.playhead_ms = (self.playhead_ms - frame).max(0.0); }
             if i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowRight) { self.playhead_ms = (self.playhead_ms + frame).min(self.duration_ms()); }
@@ -489,6 +531,11 @@ impl Editor {
         if prev_b { crate::timeline::jump_boundary(self, false); }
         if next_b { crate::timeline::jump_boundary(self, true); }
         if toggle_sidebar { self.sidebar_open = !self.sidebar_open; }
+        if layer_delta != 0 {
+            if let Some(id) = self.selected_audio.clone() {
+                self.move_audio_clip_layer(&id, layer_delta);
+            }
+        }
         if let Some(s) = section {
             self.section = s;
             self.sidebar_open = true;
@@ -506,19 +553,7 @@ impl Editor {
             self.session.pkg.project.scenes[0].audio_clips().is_some_and(|cs| cs.iter().any(|c| &c.id == id && c.contains_output(t)))
         });
         if let Some(id) = audio_hit {
-            self.edit(move |p| {
-                use sf_project::SceneAudioExt;
-                let scene = &mut p.scenes[0];
-                if let Some(mut clips) = scene.audio_clips() {
-                    if let Some(i) = clips.iter().position(|c| c.id == id) {
-                        if let Some(right) = clips[i].split_at_output(t) {
-                            clips.insert(i + 1, right);
-                        }
-                    }
-                    scene.set_audio_clips(Some(clips));
-                }
-            });
-            self.set_status("Split audio");
+            self.split_audio_clip(&id, t, false);
             return;
         }
         self.edit(|p| {
@@ -541,6 +576,7 @@ impl Editor {
                 let scene = &mut p.scenes[0];
                 if let Some(mut clips) = scene.audio_clips() {
                     clips.retain(|c| c.id != id);
+                    sf_project::audio_clips::compact_layers(&mut clips);
                     scene.set_audio_clips(Some(clips));
                 }
             });
@@ -656,7 +692,7 @@ impl Editor {
                         }
                     }
                     ui.add_space(6.0);
-                    widgets::icon_button(ui, widgets::Icon::Command, 16.0, "Shortcuts: Space play · S split · ⌫ delete · ⌘Z undo · ⌘S save · ⌘⇧E export · [ ] jump cuts · ⌘1…⌘0 sidebar · ⌘\\ toggle sidebar");
+                    widgets::icon_button(ui, widgets::Icon::Command, 16.0, "Shortcuts: Space play · S split · ⌥↑↓ audio layer · ⌫ delete · ⌘Z undo · ⌘S save · ⌘⇧E export · [ ] jump cuts · ⌘1…⌘0 sidebar · ⌘\\ toggle sidebar");
                     if let Some((s, t)) = &self.status {
                         if t.elapsed().as_secs() < 4 {
                             ui.label(RichText::new(s).color(theme::p().text_dim));

@@ -901,10 +901,24 @@ pub fn audio_item_ui(ed: &mut Editor, ui: &mut egui::Ui) {
         if ui.button("Split at playhead").clicked() {
             ed.split_at_playhead();
         }
+        if ui.button("Split to new layer").on_hover_text("Cut at the playhead and move the right-hand part one lane down").clicked() {
+            let t = ed.playhead_ms;
+            ed.split_audio_clip(&id, t, true);
+        }
         if ui.button("Delete").clicked() {
             ed.delete_selected();
         }
     });
+    widgets::title(ui, &format!("Layer {}", clip.layer + 1));
+    ui.horizontal(|ui| {
+        if ui.add_enabled(clip.layer > 0, egui::Button::new("Move up")).clicked() {
+            ed.move_audio_clip_layer(&id, -1);
+        }
+        if ui.button("Move down").clicked() {
+            ed.move_audio_clip_layer(&id, 1);
+        }
+    });
+    widgets::hint(ui, "Clips on one layer never overlap; clips on different layers can, and play together. Drag a clip down onto the empty lane to start a new layer (⌥↑ / ⌥↓).");
 }
 
 fn audio_ui(ed: &mut Editor, ui: &mut egui::Ui) {

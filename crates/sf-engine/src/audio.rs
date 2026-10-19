@@ -19,6 +19,8 @@ pub struct AudioSpan {
     pub speed: f64,
     pub volume: f64,
     pub muted: bool,
+    /// Timeline lane (detached mode); linked audio is always on lane 0.
+    pub layer: u32,
 }
 
 impl AudioSpan {
@@ -56,6 +58,7 @@ pub fn audio_spans(scene: &Scene, tracks: &[AudioTrack], mic_volume: f64, mute_m
                 speed: c.speed,
                 volume: c.volume * base(&c.track),
                 muted: c.muted || track_muted(&c.track),
+                layer: c.layer,
                 id: c.id,
                 track: c.track,
             })
@@ -81,6 +84,7 @@ pub fn audio_spans(scene: &Scene, tracks: &[AudioTrack], mic_volume: f64, mute_m
                 speed: 1.0 / ts,
                 volume: vol * base(t),
                 muted: track_muted(t),
+                layer: 0,
             });
         }
         cursor += out_len;
