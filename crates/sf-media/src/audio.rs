@@ -45,15 +45,44 @@ impl AudioClip {
 }
 
 /// Decode `path` to f32 PCM at `sample_rate` with `channels` channels (1 or 2).
-/// ffmpeg audio filter for a microphone preset (`config.audio.microphoneAudioPreset`).
-/// `voice` (Standard) is untouched; the others clean up and level speech.
-pub fn microphone_filter(preset: &str) -> Option<&'static str> {
-    match preset {
+/// ffmpeg audio filter for a microphone preset (`config.audio.microphoneAudioPreset`) plus an
+/// optional boost in dB. `voice` (Standard) is untouched; the others clean up and level speech.
+/// The boost comes after the preset (so noise reduction sees the mic as recorded) and is
+/// followed by a limiter so a loud passage cannot clip. `None` when nothing is to be done.
+pub fn microphone_filter(preset: &str, boost_db: f64) -> Option<String> {
+    let preset = match preset {
         // rumble cut + FFT noise reduction
         "noise-reduction" => Some("highpass=f=80,afftdn=nr=18:nf=-30:tn=1"),
         // noise reduction, presence, compression and make-up gain, limited: louder, even voice
         "podcast" => Some("highpass=f=80,afftdn=nr=18:nf=-30:tn=1,equalizer=f=3500:t=q:w=1.2:g=3,acompressor=threshold=-20dB:ratio=3.5:attack=5:release=150:makeup=6,alimiter=limit=0.89"),
         _ => None,
+    };
+    let boost = (boost_db > 0.0 && boost_db.is_finite()).then(|| format!("volume={boost_db:.1}dB,alimiter=limit=0.95"));
+    match (preset, boost) {
+        (None, None) => None,
+        (Some(p), None) => Some(p.to_string()),
+        (None, Some(b)) => Some(b),
+        (Some(p), Some(b)) => Some(format!("{p},{b}")),
+    }
+}
+
+#[cfg(test)]
+mod filter_tests {
+    use super::microphone_filter;
+
+    #[test]
+    fn standard_without_boost_is_untouched() {
+        assert_eq!(microphone_filter("voice", 0.0), None);
+        assert_eq!(microphone_filter("voice", -3.0), None);
+        assert_eq!(microphone_filter("voice", f64::NAN), None);
+    }
+
+    #[test]
+    fn boost_is_limited_and_follows_the_preset() {
+        assert_eq!(microphone_filter("voice", 6.0).unwrap(), "volume=6.0dB,alimiter=limit=0.95");
+        let chain = microphone_filter("noise-reduction", 12.0).unwrap();
+        assert!(chain.starts_with("highpass=f=80,afftdn="), "{chain}");
+        assert!(chain.ends_with(",volume=12.0dB,alimiter=limit=0.95"), "{chain}");
     }
 }
 
