@@ -357,7 +357,7 @@ impl App {
                 }
                 if e.chain().any(|c| matches!(c.downcast_ref::<sf_project::Error>(), Some(sf_project::Error::Cancelled))) {
                     if let Screen::Picker(p) = &mut self.screen {
-                        p.status = Some(format!("Import of “{}” cancelled", ed_name(&path)));
+                        p.set_status(format!("Import of “{}” cancelled", ed_name(&path)));
                     }
                 } else {
                     self.error = Some(format!("Could not open {}:\n{e:#}", path.display()));
@@ -740,7 +740,7 @@ impl eframe::App for App {
                 }
             }
             if let (Some(name), Screen::Picker(p)) = (removed, &mut self.screen) {
-                p.status = Some(format!("Moved “{name}” to the Trash"));
+                p.set_status(format!("Moved “{name}” to the Trash"));
             }
         }
         match action {
@@ -809,7 +809,7 @@ impl eframe::App for App {
                         self.prefs.save();
                         if let Screen::Picker(pk) = &mut self.screen {
                             pk.thumbs = None;
-                            pk.status = Some(format!("Moved “{name}” to the Trash"));
+                            pk.set_status(format!("Moved “{name}” to the Trash"));
                         }
                     }
                     Err(e) => self.error = Some(format!("Could not move “{name}” to the Trash: {e}")),
