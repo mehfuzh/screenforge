@@ -330,10 +330,6 @@
   .doc pre code { font-size: inherit; color: inherit; background: none; border: 0; padding: 0; }
   pre .c { color: var(--dim); }
   pre .p { color: var(--jade); user-select: none; }
-  .box { border: 1px solid var(--line-2); background: var(--panel); padding: 24px 24px 22px; margin-top: 28px; }
-  .box .k { font-family: var(--mono); font-size: 11px; letter-spacing: .14em; text-transform: uppercase; color: var(--jade); margin-bottom: 12px; display: flex; align-items: center; gap: 10px; }
-  .box .k::before { content: ''; width: 7px; height: 7px; background: var(--jade); flex: none; }
-  .box p:last-child, .box pre:last-child { margin-bottom: 0; }
   .doc .steps { list-style: none; padding: 0; margin: 28px 0 0; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1px; background: var(--line); border: 1px solid var(--line); counter-reset: step; }
   .steps li { background: var(--ink); padding: 20px 20px 22px; margin: 0; font-size: 14.5px; color: var(--dim); }
   .steps li b { display: block; font-family: var(--mono); font-size: 11px; letter-spacing: .14em; text-transform: uppercase; color: var(--jade); margin-bottom: 10px; font-weight: 400; }
@@ -350,7 +346,6 @@
   @media (max-width: 720px) { .doc .steps { grid-template-columns: minmax(0, 1fr); } }
   @media (max-width: 560px) {
     .doc { padding: 48px 16px 72px; }
-    .box { padding: 20px 18px; }
     .doc h2 { margin-top: 44px; }
     .doc .cta .go, .doc .cta .alt { width: auto; flex: 1 1 100%; }
   }
@@ -447,12 +442,6 @@ gtag('config', 'G-ZYRJDJ736V');
   </ol>
   <p style="margin-top:18px">The app runs without a license. Recording, editing and your first three exports are free; after that, exporting needs a key from the <a href="pricing.html">pricing page</a>.</p>
 
-  <div class="box">
-    <div class="k">Build from source</div>
-    <p>ScreenForge is Apache-2.0. With a Rust toolchain and the Xcode command line tools installed:</p>
-<pre><code><span class="p">$ </span>git clone https://github.com/mehfuzh/screenforge &amp;&amp; cargo build --release -p studio</code></pre>
-    <p>The binary lands in <code>target/release/screenforge</code>; <code>scripts/bundle.sh</code> wraps it in an <code>.app</code>. The export gate is ordinary Apache-2.0 code: a source build can remove it. The license exists to fund the signed, notarized download, the CI that produces it and ongoing maintenance.</p>
-  </div>
   <p style="margin-top:28px">On Windows? <a href="#windows" data-os-link="windows">Get the Windows version</a>. On Linux? <a href="#linux" data-os-link="linux">Get the Linux version</a>.</p>
   </section>
 
