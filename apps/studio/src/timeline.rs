@@ -24,6 +24,7 @@ const AUDIO_H: f32 = 44.0;
 const LANE_GAP: f32 = 4.0;
 const ZOOM_H: f32 = 48.0;
 const MUSIC_H: f32 = 36.0;
+const VOICE_H: f32 = 48.0;
 const GAP: f32 = 8.0;
 const HANDLE_W: f32 = 6.0;
 const SNAP_PX: f32 = 6.0;
@@ -119,6 +120,29 @@ struct AudioDrag {
     snapshot: Project,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum VoiceDragKind {
+    Move,
+    /// Trim the front: the take starts later in its file (or earlier, back to the file start).
+    TrimStart,
+    /// Trim the end, at most to the end of the file.
+    TrimEnd,
+}
+
+/// A voice-over being moved or trimmed, with its values when the drag started.
+struct VoiceDrag {
+    kind: VoiceDragKind,
+    id: String,
+    /// Move: where in the take it was grabbed (output ms from its start).
+    grab_ms: f64,
+    out0: f64,
+    out1: f64,
+    offset0: f64,
+    /// Length of the audio file (ms): the end trim cannot go past it.
+    file_ms: f64,
+    snapshot: Project,
+}
+
 /// Height of `lanes` stacked audio lanes (without the trailing gap).
 fn audio_lanes_h(lanes: u32) -> f32 {
     let n = lanes.max(1) as f32;
@@ -139,6 +163,11 @@ pub struct TimelineWidget {
     /// Cached waveform peaks (track, peaks, recording duration ms).
     peaks: Option<(AudioTrack, Vec<f32>, f64)>,
     peaks_gen: u64,
+    /// Voice-over being moved along the timeline.
+    voice_drag: Option<VoiceDrag>,
+    /// Cached waveform peaks per voice-over file (refreshed with `peaks_gen`).
+    voice_peaks: std::collections::HashMap<String, Vec<f32>>,
+    voice_peaks_gen: u64,
     /// Output ms under the pointer when a context menu was opened.
     ctx_ms: f64,
     /// Screen x of the active snap guide.
@@ -151,7 +180,7 @@ pub struct TimelineWidget {
 
 impl Default for TimelineWidget {
     fn default() -> Self {
-        TimelineWidget { px_per_sec: 40.0, scroll_x: 0.0, drag: None, audio_drag: None, peaks: None, peaks_gen: u64::MAX, ctx_ms: 0.0, snap_x: None, follow: true, was_playing: false }
+        TimelineWidget { px_per_sec: 40.0, scroll_x: 0.0, drag: None, audio_drag: None, peaks: None, peaks_gen: u64::MAX, voice_drag: None, voice_peaks: Default::default(), voice_peaks_gen: u64::MAX, ctx_ms: 0.0, snap_x: None, follow: true, was_playing: false }
     }
 }
 
@@ -164,6 +193,7 @@ impl TimelineWidget {
         let has_masks = !ed.session.pkg.project.scenes[0].masks.is_empty();
         let show_audio_lane = audio_lane_visible(ed);
         let show_music_lane = music_lane_visible(ed);
+        let show_voice_lane = !ed.session.pkg.project.scenes[0].voice_overs.is_empty();
         let zoom_track_h = if has_zooms { ZOOM_H + GAP } else { 0.0 };
         let mask_track_h = if has_masks { ZOOM_H + GAP } else { 0.0 };
         // one lane per audio layer, plus an empty drop lane while a clip is being moved so it
@@ -171,7 +201,8 @@ impl TimelineWidget {
         let audio_lanes = self.audio_lanes(ed);
         let audio_track_h = if show_audio_lane { audio_lanes_h(audio_lanes) + GAP } else { 0.0 };
         let music_track_h = if show_music_lane { MUSIC_H + GAP } else { 0.0 };
-        let (rect, resp) = ui.allocate_exact_size(vec2(avail.x, avail.y.max(RULER_H + MARKER_H + CLIP_H + audio_track_h + music_track_h + mask_track_h + zoom_track_h + GAP * 2.0)), Sense::click_and_drag());
+        let voice_track_h = if show_voice_lane { VOICE_H + GAP } else { 0.0 };
+        let (rect, resp) = ui.allocate_exact_size(vec2(avail.x, avail.y.max(RULER_H + MARKER_H + CLIP_H + audio_track_h + music_track_h + voice_track_h + mask_track_h + zoom_track_h + GAP * 2.0)), Sense::click_and_drag());
         let painter = ui.painter_at(rect);
         painter.rect_filled(rect, 0.0, theme::p().bg);
 
@@ -262,6 +293,45 @@ impl TimelineWidget {
                 }
                 ed.commit_live_edit(drag.snapshot);
                 self.snap_x = None;
+            }
+        }
+        if let Some(drag) = self.voice_drag.take() {
+            let (down, pos) = ui.input(|i| (i.pointer.primary_down(), i.pointer.latest_pos()));
+            if let Some(p) = pos {
+                let view = ed.session.timeline.clone();
+                let at = view.view_to_output(map.view_ms(p.x));
+                let min = sf_engine::audio::MIN_VOICE_OVER_MS;
+                let duration = ed.duration_ms();
+                if let Some(v) = ed.session.pkg.project.scenes[0].voice_overs.iter_mut().find(|v| v.id == drag.id) {
+                    match drag.kind {
+                        VoiceDragKind::Move => {
+                            let start = (at - drag.grab_ms).clamp(0.0, (duration - MIN_MS).max(0.0));
+                            if let Some(src) = view.output_to_source(start) {
+                                v.source_start_ms = src;
+                            }
+                        }
+                        VoiceDragKind::TrimStart => {
+                            // back to the start of the file at most, and not before the video
+                            let start = at.clamp((drag.out0 - drag.offset0).max(0.0), drag.out1 - min);
+                            if let Some(src) = view.output_to_source(start) {
+                                v.source_start_ms = src;
+                                v.file_offset_ms = drag.offset0 + (start - drag.out0);
+                                v.voiceover_duration_ms = drag.out1 - start;
+                            }
+                        }
+                        VoiceDragKind::TrimEnd => {
+                            let end = at.clamp(drag.out0 + min, (drag.out0 + drag.file_ms - drag.offset0).min(duration).max(drag.out0 + min));
+                            v.voiceover_duration_ms = end - drag.out0;
+                        }
+                    }
+                }
+                ed.refresh_audio_levels();
+            }
+            if down {
+                self.voice_drag = Some(drag);
+                ui.ctx().request_repaint();
+            } else {
+                ed.commit_live_edit(drag.snapshot);
             }
         }
         let duration = ed.duration_ms().max(1.0);
@@ -471,8 +541,14 @@ impl TimelineWidget {
             self.music_track_ui(ed, ui, rect, music_top, x_of, ms_of, &mut seek_to);
         }
 
+        // voice-overs: one lane for every take (recorded from the tool rail)
+        let voice_top = if show_music_lane { music_top + MUSIC_H + GAP } else { music_top };
+        if show_voice_lane {
+            self.voice_track_ui(ed, ui, rect, voice_top, x_of, ms_of, &mut seek_to);
+        }
+
         // mask track (only shown once the project has masks; add them from the tool rail)
-        let mask_top = if show_music_lane { music_top + MUSIC_H + GAP } else { music_top };
+        let mask_top = voice_top + voice_track_h;
         let clip_boundaries: Vec<f64> = spans.iter().map(|s| s.output_start_ms).chain(std::iter::once(duration)).collect();
         if has_masks {
             let track_rect = Rect::from_min_max(pos2(rect.left(), mask_top), pos2(rect.right(), mask_top + ZOOM_H));
@@ -535,8 +611,11 @@ impl TimelineWidget {
         }
 
         // one selection at a time: picking a clip, zoom or audio clip deselects the music
-        if ed.selected_slice.is_some() || ed.selected_zoom.is_some() || ed.selected_audio.is_some() || !show_music_lane {
+        if ed.selected_slice.is_some() || ed.selected_zoom.is_some() || ed.selected_audio.is_some() || ed.selected_voice_over.is_some() || !show_music_lane {
             ed.selected_music = false;
+        }
+        if ed.selected_slice.is_some() || ed.selected_zoom.is_some() || ed.selected_mask.is_some() || ed.selected_audio.is_some() {
+            ed.selected_voice_over = None;
         }
 
         // snap guide
@@ -708,6 +787,104 @@ impl TimelineWidget {
             }
         }
         lane.context_menu(|ui| music_menu(ed, ui));
+    }
+
+    /// Voice-over lane: a block per take with its waveform. Click selects and scrubs, drag
+    /// moves the take along the video, its edges trim it, right-click splits, mutes, sets the
+    /// volume or deletes it.
+    #[allow(clippy::too_many_arguments)]
+    fn voice_track_ui(&mut self, ed: &mut Editor, ui: &mut egui::Ui, rect: Rect, top: f32, x_of: impl Fn(f64) -> f32 + Copy, ms_of: impl Fn(f32) -> f64 + Copy, seek_to: &mut Option<f64>) {
+        let pal = theme::p();
+        let painter = ui.painter_at(rect);
+        let track_rect = Rect::from_min_max(pos2(rect.left(), top), pos2(rect.right(), top + VOICE_H));
+        painter.rect(track_rect.shrink2(vec2(1.5, 0.0)), 10.0, pal.track_empty, Stroke::new(1.0, pal.border), egui::StrokeKind::Inside);
+        let lane = ui.interact(track_rect, ui.id().with("voicetrack"), Sense::click_and_drag());
+        if let Some(p) = lane.interact_pointer_pos() {
+            if lane.clicked() || lane.drag_started() || lane.dragged() {
+                *seek_to = Some(ms_of(p.x));
+            }
+        }
+        lane.context_menu(|ui| {
+            if ui.button("Record voice-over at playhead").clicked() {
+                ed.start_voice_over();
+                ui.close();
+            }
+        });
+        let gen = ed.audio.generation.load(std::sync::atomic::Ordering::Relaxed);
+        if self.voice_peaks_gen != gen {
+            self.voice_peaks.clear();
+            self.voice_peaks_gen = gen;
+        }
+        for vo in ed.session.voice_over_spans() {
+            let (x0, x1) = (x_of(vo.output_start_ms), x_of(vo.output_end_ms));
+            let block = Rect::from_min_max(pos2(x0 + 1.5, top + 3.0), pos2((x1 - 1.5).max(x0 + 4.0), top + VOICE_H - 3.0));
+            let visible = block.intersect(rect);
+            if visible.width() <= 0.0 {
+                continue;
+            }
+            let selected = ed.selected_voice_over.as_deref() == Some(vo.id.as_str());
+            let color = if vo.muted { pal.meter.gamma_multiply(0.4) } else { pal.meter };
+            glass_block(&painter, block, 8.0, color, selected);
+            if !self.voice_peaks.contains_key(&vo.file_name) {
+                if let Some(p) = ed.audio.voice_peaks(&vo.file_name, 2000) {
+                    self.voice_peaks.insert(vo.file_name.clone(), p);
+                }
+            }
+            let file_ms = ed.audio.voice_duration_ms(&vo.file_name).unwrap_or(vo.file_offset_ms + vo.output_duration_ms()).max(1.0);
+            if let Some(peaks) = self.voice_peaks.get(&vo.file_name).filter(|p| !p.is_empty()) {
+                // dB scale (-50..0 dB fills the block), like the microphone meter: on a linear
+                // scale normal speech is a thin line
+                let gain = if vo.muted { 0.0 } else { vo.volume as f32 };
+                let (mid, half) = (block.center().y + 4.0, block.height() / 2.0 - 6.0);
+                let mut x = visible.left().max(block.left() + 3.0);
+                while x < visible.right().min(block.right() - 3.0) {
+                    let f = (vo.file_ms_at(ms_of(x)) / file_ms).clamp(0.0, 1.0);
+                    let peak = (peaks[((f * peaks.len() as f64) as usize).min(peaks.len() - 1)] * gain).max(1e-6);
+                    let a = ((20.0 * peak.log10() + 50.0) / 50.0).clamp(0.04, 1.0);
+                    painter.line_segment([pos2(x, mid - a * half), pos2(x, mid + a * half)], Stroke::new(1.5, color.gamma_multiply(0.8)));
+                    x += 1.5;
+                }
+            }
+            if visible.width() > 90.0 {
+                let label = if vo.muted { "Voice-over · muted".to_string() } else { format!("Voice-over · {:.0}%", vo.volume * 100.0) };
+                let lx = visible.left() + 10.0;
+                painter.with_clip_rect(visible.shrink(2.0)).text(pos2(lx, block.top() + 8.0), egui::Align2::LEFT_CENTER, label, egui::FontId::proportional(11.0), pal.text);
+            }
+            let item = ui.interact(visible, ui.id().with(("voiceover", &vo.id)), Sense::click_and_drag()).on_hover_cursor(CursorIcon::Grab);
+            if let Some(p) = item.interact_pointer_pos() {
+                if item.clicked() || item.secondary_clicked() || item.drag_started() {
+                    ed.select_voice_over(vo.id.clone());
+                }
+                if item.clicked() {
+                    *seek_to = Some(ms_of(p.x));
+                }
+                if item.drag_started() {
+                    self.voice_drag = Some(VoiceDrag { kind: VoiceDragKind::Move, id: vo.id.clone(), grab_ms: ms_of(p.x) - vo.output_start_ms, out0: vo.output_start_ms, out1: vo.output_end_ms, offset0: vo.file_offset_ms, file_ms, snapshot: ed.session.pkg.project.clone() });
+                }
+                if item.secondary_clicked() {
+                    self.ctx_ms = ms_of(p.x);
+                }
+            }
+            let (id, at_ms) = (vo.id.clone(), self.ctx_ms);
+            item.context_menu(|ui| voice_over_menu(ed, ui, &id, at_ms));
+            // trim handles on both edges (after the body, so they win where they overlap it)
+            if block.width() > HANDLE_W * 3.0 {
+                for (kind, hr) in [(VoiceDragKind::TrimStart, Rect::from_min_max(block.left_top(), pos2(block.left() + HANDLE_W, block.bottom()))), (VoiceDragKind::TrimEnd, Rect::from_min_max(pos2(block.right() - HANDLE_W, block.top()), block.right_bottom()))] {
+                    let hr = hr.intersect(rect);
+                    if hr.width() <= 0.0 {
+                        continue;
+                    }
+                    let h = ui.interact(hr, ui.id().with(("voiceover-trim", &vo.id, kind == VoiceDragKind::TrimStart)), Sense::drag()).on_hover_cursor(CursorIcon::ResizeHorizontal).on_hover_text("Drag to trim");
+                    if h.hovered() || h.dragged() {
+                        painter.rect_filled(hr, 2.0, pal.accent.gamma_multiply(0.7));
+                    }
+                    if h.drag_started() {
+                        ed.select_voice_over(vo.id.clone());
+                        self.voice_drag = Some(VoiceDrag { kind, id: vo.id.clone(), grab_ms: 0.0, out0: vo.output_start_ms, out1: vo.output_end_ms, offset0: vo.file_offset_ms, file_ms, snapshot: ed.session.pkg.project.clone() });
+                    }
+                }
+            }
+        }
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1074,6 +1251,47 @@ fn audio_lane_visible(ed: &Editor) -> bool {
 /// A background track is chosen and found (shown even while muted).
 fn music_lane_visible(ed: &Editor) -> bool {
     ed.session.pkg.project.config.audio.background_audio_file_name.is_some() && ed.session.background_audio_path().is_some()
+}
+
+fn voice_over_menu(ed: &mut Editor, ui: &mut egui::Ui, id: &str, at_ms: f64) {
+    let Some(vo) = ed.session.pkg.project.scenes[0].voice_overs.iter().find(|v| v.id == id).cloned() else { return };
+    if ui.button("Split here").clicked() {
+        ed.split_voice_over(id, at_ms);
+        ui.close();
+    }
+    let playhead = ed.playhead_ms;
+    let under_playhead = ed.session.voice_over_spans().iter().any(|v| v.id == id && v.contains_output(playhead));
+    if ui.add_enabled(under_playhead, egui::Button::new("Split at playhead")).on_hover_text("S").clicked() {
+        ed.split_voice_over(id, playhead);
+        ui.close();
+    }
+    ui.separator();
+    if ui.button(if vo.is_disabled { "Unmute voice-over" } else { "Mute voice-over" }).clicked() {
+        ed.edit_voice_over(id, |v| v.is_disabled = !v.is_disabled);
+        ui.close();
+    }
+    ui.menu_button("Volume", |ui| {
+        for v in [0.5, 0.75, 1.0, 1.25, 1.5, 2.0] {
+            if ui.selectable_label((vo.volume - v).abs() < 1e-6, format!("{:.0}%", v * 100.0)).clicked() {
+                ed.edit_voice_over(id, move |o| {
+                    o.volume = v;
+                    o.is_disabled = false;
+                });
+                ui.close();
+            }
+        }
+    });
+    if ui.button("Move to playhead").clicked() {
+        let src = ed.session.timeline.output_to_source(ed.playhead_ms).unwrap_or(0.0);
+        ed.edit_voice_over(id, move |v| v.source_start_ms = src);
+        ui.close();
+    }
+    ui.separator();
+    if ui.button("Delete voice-over").clicked() {
+        ed.select_voice_over(id.to_string());
+        ed.delete_selected();
+        ui.close();
+    }
 }
 
 fn music_menu(ed: &mut Editor, ui: &mut egui::Ui) {

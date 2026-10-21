@@ -29,6 +29,51 @@ fn slider(ed: &mut Editor, ui: &mut egui::Ui, label: &str, get: impl Fn(&sf_proj
     }
 }
 
+/// A preset tile painted with its gradient (a vertex-coloured grid, so stops in the middle
+/// show too); outlined when it is the project's gradient.
+fn gradient_swatch(ui: &mut egui::Ui, g: &sf_project::schema::common::Gradient, selected: bool, name: &str) -> egui::Response {
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(64.0, 40.0), egui::Sense::click());
+    let colour_at = |t: f32| {
+        let stops: Vec<(sf_render::Color, f32)> = g.stops.iter().map(|s| (sf_render::Color::from_hex(&s.color).unwrap_or(sf_render::Color::BLACK), s.at as f32)).collect();
+        // before the first stop / after the last: that stop's colour
+        let (c0, c1, f) = match stops.iter().position(|(_, at)| *at >= t) {
+            Some(0) => (stops[0].0, stops[0].0, 0.0),
+            Some(i) => (stops[i - 1].0, stops[i].0, (t - stops[i - 1].1) / (stops[i].1 - stops[i - 1].1).max(1e-6)),
+            None => {
+                let last = stops.last().map(|s| s.0).unwrap_or(sf_render::Color::BLACK);
+                (last, last, 0.0)
+            }
+        };
+        let mix = |a: f32, b: f32| ((a + (b - a) * f) * 255.0).round().clamp(0.0, 255.0) as u8;
+        egui::Color32::from_rgb(mix(c0.r, c1.r), mix(c0.g, c1.g), mix(c0.b, c1.b))
+    };
+    // project each vertex on the start → end axis (in tile fractions)
+    let (sx, sy, ex, ey) = (g.start.x as f32, g.start.y as f32, g.end.x as f32, g.end.y as f32);
+    let (dx, dy) = (ex - sx, ey - sy);
+    let len2 = (dx * dx + dy * dy).max(1e-6);
+    const N: u32 = 8;
+    let mut mesh = egui::Mesh::default();
+    for j in 0..=N {
+        for i in 0..=N {
+            let (u, v) = (i as f32 / N as f32, j as f32 / N as f32);
+            let t = (((u - sx) * dx + (v - sy) * dy) / len2).clamp(0.0, 1.0);
+            mesh.colored_vertex(egui::pos2(rect.left() + u * rect.width(), rect.top() + v * rect.height()), colour_at(t));
+        }
+    }
+    for j in 0..N {
+        for i in 0..N {
+            let a = j * (N + 1) + i;
+            mesh.add_triangle(a, a + 1, a + N + 1);
+            mesh.add_triangle(a + 1, a + N + 2, a + N + 1);
+        }
+    }
+    let painter = ui.painter();
+    painter.add(mesh);
+    let stroke = if selected { egui::Stroke::new(2.0, theme::p().accent_hover) } else if resp.hovered() { egui::Stroke::new(1.0, theme::p().text_dim) } else { egui::Stroke::new(1.0, theme::p().border) };
+    painter.rect_stroke(rect, egui::CornerRadius::same(2), stroke, egui::StrokeKind::Inside);
+    resp.on_hover_text(name)
+}
+
 fn color_edit(ui: &mut egui::Ui, label: &str, hex: &mut String) -> bool {
     let mut c = sf_render::Color::from_hex(hex).unwrap_or(sf_render::Color::BLACK);
     let mut rgb = [c.r, c.g, c.b];
@@ -262,6 +307,11 @@ pub fn ui(ed: &mut Editor, ui: &mut egui::Ui, section: Section) {
             ui.add_space(12.0);
             ui.separator();
         }
+        if ed.selected_voice_over.is_some() {
+            voice_over_item_ui(ed, ui);
+            ui.add_space(12.0);
+            ui.separator();
+        }
         match section {
             Section::General => general_ui(ed, ui),
             Section::Cursor => cursor_ui(ed, ui),
@@ -343,7 +393,7 @@ fn general_ui(ed: &mut Editor, ui: &mut egui::Ui) {
     let kinds = ["system", "gradient", "color", "image", "unsplash"];
     let kind = ed.session.pkg.project.config.styles.background.kind.clone();
     let idx = kinds.iter().position(|k| *k == kind).unwrap_or(0);
-    if let Some(i) = widgets::segmented_with_disabled(ui, idx, &["Wallpaper", "Gradient", "Color", "Image", "Unsplash"], &[4]) {
+    if let Some(i) = widgets::segmented_with_disabled(ui, idx, &["Wallpaper", "Gradient", "Color", "Image", "Unsplash"], &[]) {
         let k = kinds[i].to_string();
         ed.edit(move |p| p.config.styles.background.kind = k);
     }
@@ -362,6 +412,15 @@ fn general_ui(ed: &mut Editor, ui: &mut egui::Ui) {
         }
         "gradient" => {
             widgets::title(ui, "Gradient");
+            let current = ed.session.pkg.project.config.styles.background.gradient.clone();
+            ui.horizontal_wrapped(|ui| {
+                for (name, _) in sf_project::schema::common::Gradient::PRESETS {
+                    let Some(g) = sf_project::schema::common::Gradient::preset(name) else { continue };
+                    if gradient_swatch(ui, &g, g.stops == current.stops, name).clicked() {
+                        ed.edit(move |p| p.config.styles.background.gradient = g);
+                    }
+                }
+            });
             let stops = ed.session.pkg.project.config.styles.background.gradient.stops.clone();
             for (i, s) in stops.iter().enumerate() {
                 let mut hex = s.color.clone();
@@ -432,7 +491,8 @@ fn general_ui(ed: &mut Editor, ui: &mut egui::Ui) {
                 }
             }
         }
-        _ => widgets::hint(ui, "Unsplash backgrounds are on the roadmap."),
+        "unsplash" => unsplash_ui(ed, ui),
+        _ => {}
     }
     cfg_slider(ed, ui, "Background blur", |p| p.config.styles.background.blur, |p, v| p.config.styles.background.blur = v, 0.0..=100.0, Some(0.0), "");
     cfg_slider(ed, ui, "Padding", |p| p.config.output.padding_ratio01 * 100.0, |p, v| p.config.output.padding_ratio01 = v / 100.0, 0.0..=40.0, Some(10.0), "%");
@@ -927,6 +987,43 @@ pub fn audio_item_ui(ed: &mut Editor, ui: &mut egui::Ui) {
     widgets::hint(ui, "Clips on one layer never overlap; clips on different layers can, and play together. Drag a clip down onto the empty lane to start a new layer (⌥↑ / ⌥↓).");
 }
 
+fn voice_over_item_ui(ed: &mut Editor, ui: &mut egui::Ui) {
+    let Some(id) = ed.selected_voice_over.clone() else { return };
+    let Some(span) = ed.session.voice_over_spans().into_iter().find(|v| v.id == id) else {
+        ed.selected_voice_over = None;
+        return;
+    };
+    widgets::title(ui, "Voice-over");
+    widgets::hint(ui, &format!("{} – {} on the timeline", crate::editor::fmt_clock(span.output_start_ms), crate::editor::fmt_clock(span.output_end_ms)));
+    let idc = id.clone();
+    cfg_slider(ed, ui, "Volume", move |p| p.scenes[0].voice_overs.iter().find(|v| v.id == idc).map(|v| v.volume).unwrap_or(1.0), {
+        let idc = id.clone();
+        move |p, v| {
+            if let Some(o) = p.scenes[0].voice_overs.iter_mut().find(|o| o.id == idc) {
+                o.volume = v;
+            }
+        }
+    }, 0.0..=2.0, Some(1.0), "");
+    let mut muted = span.muted;
+    if widgets::toggle_row(ui, "Mute", "", &mut muted) {
+        ed.edit_voice_over(&id, move |v| v.is_disabled = muted);
+    }
+    ui.horizontal_wrapped(|ui| {
+        if ui.add_enabled(span.contains_output(ed.playhead_ms), egui::Button::new("Split at playhead")).on_hover_text("S").clicked() {
+            let t = ed.playhead_ms;
+            ed.split_voice_over(&id, t);
+        }
+        if ui.button("Move to playhead").clicked() {
+            let src = ed.session.timeline.output_to_source(ed.playhead_ms).unwrap_or(0.0);
+            ed.edit_voice_over(&id, move |v| v.source_start_ms = src);
+        }
+        if ui.button("Delete").clicked() {
+            ed.delete_selected();
+        }
+    });
+    widgets::hint(ui, "Drag the take along the voice-over lane to move it, or drag its edges to trim it. Split it (S) to cut out a part: select the piece and press ⌫. It stays with the frame it starts on when you cut or speed up clips before it.");
+}
+
 fn audio_ui(ed: &mut Editor, ui: &mut egui::Ui) {
     use sf_project::SceneAudioExt;
     widgets::title(ui, "Audio track");
@@ -980,6 +1077,36 @@ fn audio_ui(ed: &mut Editor, ui: &mut egui::Ui) {
         ed.edit(move |p| p.config.audio.mute_system_audio = mute_sys);
         ed.reload_audio();
     }
+    widgets::title(ui, "Voice-over");
+    let default_name = crate::voice_over::default_input_name().unwrap_or_else(|| "none found".into());
+    let mic_label = ed.voice_mic.clone().unwrap_or_else(|| format!("System default ({default_name})"));
+    ui.add_enabled_ui(ed.voice_rec.is_none(), |ui| {
+        egui::ComboBox::from_id_salt("voice-over-mic").selected_text(mic_label).width(ui.available_width()).show_ui(ui, |ui| {
+            if ui.selectable_label(ed.voice_mic.is_none(), format!("System default ({default_name})")).clicked() {
+                ed.voice_mic = None;
+            }
+            // listed while the menu is open only (enumerating devices is not free)
+            for name in crate::voice_over::input_devices() {
+                if ui.selectable_label(ed.voice_mic.as_deref() == Some(name.as_str()), &name).clicked() {
+                    ed.voice_mic = Some(name);
+                }
+            }
+        });
+    });
+    if ed.voice_rec.is_some() {
+        if widgets::accent_button(ui, "Stop recording").clicked() {
+            ed.stop_voice_over();
+        }
+    } else if widgets::secondary_button(ui, "Record voice-over at playhead").on_hover_text("R").clicked() {
+        ed.start_voice_over();
+    }
+    let n = ed.session.pkg.project.scenes[0].voice_overs.len();
+    widgets::hint(ui, &match n {
+        0 => "Narrate over the video: it plays without sound from the playhead while the microphone above records. Press Space or Stop when you are done.".to_string(),
+        1 => "1 voice-over. Select it on the timeline to move, mute or change its volume.".to_string(),
+        n => format!("{n} voice-overs. Select one on the timeline to move, mute or change its volume."),
+    });
+    widgets::hint(ui, "In a call, record from a microphone the call is not using: a Bluetooth headset (AirPods) shared with a call records near silence. macOS also turns other apps down during a call, so play takes back after it.");
     widgets::title(ui, "Background audio");
     let current = ed.session.pkg.project.config.audio.background_audio_file_name.clone();
     let library = ed.session.assets.list_background_audio();
@@ -1193,6 +1320,91 @@ fn cursor_tile(ui: &mut egui::Ui, preview: CursorPreview, label: &str, selected:
 }
 
 /// A square, centre-cropped wallpaper thumbnail.
+/// Background → Unsplash: search, a grid of results, and the credit for the current photo.
+fn unsplash_ui(ed: &mut Editor, ui: &mut egui::Ui) {
+    let ctx = ui.ctx().clone();
+    ed.unsplash.ensure_started(&ctx);
+    if let Some(applied) = ed.unsplash.poll(&ctx) {
+        let value = crate::unsplash::background_value(&applied);
+        ed.edit(move |p| {
+            let bg = &mut p.config.styles.background;
+            bg.kind = sf_project::v4::background_type::UNSPLASH.into();
+            bg.unsplash = Some(value);
+        });
+    }
+    widgets::title(ui, "Unsplash");
+    let current = ed.session.pkg.project.config.styles.background.unsplash.clone();
+    let current_id = current.as_ref().and_then(|v| v.get("id")).and_then(|v| v.as_str()).map(str::to_string);
+    // credit the photographer, as Unsplash asks (links carry its referral parameters)
+    if let Some(v) = &current {
+        let get = |k: &str| v.get(k).and_then(|x| x.as_str()).map(str::to_string);
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing.x = 4.0;
+            ui.label(RichText::new("Photo by").color(theme::p().text_dim));
+            match (get("author"), get("authorUrl")) {
+                (Some(name), Some(url)) => {
+                    ui.hyperlink_to(name, crate::unsplash::referral(&url));
+                }
+                (Some(name), None) => {
+                    ui.label(name);
+                }
+                _ => {
+                    ui.label("an Unsplash photographer");
+                }
+            }
+            ui.label(RichText::new("on").color(theme::p().text_dim));
+            ui.hyperlink_to("Unsplash", crate::unsplash::referral(&get("photoUrl").unwrap_or_else(|| "https://unsplash.com/".into())));
+        });
+        ui.add_space(4.0);
+    }
+    let searched = ui
+        .horizontal(|ui| {
+            let field = ui.add(egui::TextEdit::singleline(&mut ed.unsplash.query).hint_text("Search photos (empty: wallpapers)").desired_width(ui.available_width() - 76.0));
+            let enter = field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+            widgets::secondary_button(ui, "Search").clicked() || enter
+        })
+        .inner;
+    if searched {
+        ed.unsplash.search(&ctx, 1);
+    }
+    if let Some(e) = &ed.unsplash.error {
+        widgets::hint(ui, &format!("Unsplash: {e}"));
+    }
+    if ed.unsplash.results.is_empty() && ed.unsplash.error.is_none() {
+        widgets::hint(ui, if ed.unsplash.is_busy() { "Loading photos…" } else { "No photos found." });
+    }
+    let cols = 3;
+    let gap = 8.0;
+    let tile = ((ui.available_width() - (cols as f32 - 1.0) * gap) / cols as f32).floor();
+    let mut pick = None;
+    egui::Grid::new("unsplash").spacing([gap, gap]).show(ui, |ui| {
+        for (i, photo) in ed.unsplash.results.iter().enumerate() {
+            let selected = current_id.as_deref() == Some(photo.id.as_str());
+            let author = photo.author.clone().unwrap_or_default();
+            let tip = if ed.unsplash.applying.as_deref() == Some(photo.id.as_str()) { "Downloading…".to_string() } else { format!("Photo by {author}") };
+            if wallpaper_tile(ui, ed.unsplash.thumb(&photo.id), &tip, tile, selected).clicked() && !selected {
+                pick = Some(photo.clone());
+            }
+            if (i + 1) % cols == 0 {
+                ui.end_row();
+            }
+        }
+    });
+    if let Some(photo) = pick {
+        let assets = ed.session.pkg.path.join("assets");
+        ed.unsplash.apply(&ctx, photo, assets);
+    }
+    if ed.unsplash.applying.is_some() {
+        widgets::hint(ui, "Downloading the photo…");
+    }
+    if ed.unsplash.can_load_more() && widgets::secondary_button(ui, "Load more").clicked() {
+        ed.unsplash.load_more(&ctx);
+    }
+    if ed.unsplash.is_busy() {
+        ctx.request_repaint_after(std::time::Duration::from_millis(150));
+    }
+}
+
 fn wallpaper_tile(ui: &mut egui::Ui, path: Option<&std::path::Path>, name: &str, size: f32, selected: bool) -> egui::Response {
     let (rect, resp) = ui.allocate_exact_size(egui::vec2(size, size), egui::Sense::click());
     let painter = ui.painter();

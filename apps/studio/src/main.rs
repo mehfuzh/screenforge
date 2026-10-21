@@ -20,8 +20,10 @@ mod sidebar;
 mod theme;
 mod timeline;
 mod tray;
+mod unsplash;
 mod update;
 mod vibrancy;
+mod voice_over;
 mod widgets;
 
 /// eframe's defaults, except that the backends follow `sf_render::Gpu::default_backends`

@@ -203,6 +203,16 @@ impl Session {
         self.assets.background_audio(name)
     }
 
+    /// Audio file of a voice-over (`<project>/voiceovers/<file_name>`).
+    pub fn voice_over_path(&self, file_name: &str) -> std::path::PathBuf {
+        self.pkg.path.join(sf_project::v4::VoiceOver::DIR).join(file_name)
+    }
+
+    /// Voice-overs of the scene on the output timeline (see `sf_engine::audio::voice_over_spans`).
+    pub fn voice_over_spans(&self) -> Vec<sf_engine::audio::VoiceOverSpan> {
+        sf_engine::audio::voice_over_spans(&self.pkg.project.scenes[0], &self.timeline)
+    }
+
     /// Resolved zooms (source time) for timeline display.
     pub fn timeline_zooms(&self) -> &[sf_engine::camera::ResolvedZoom] {
         self.camera.zooms()

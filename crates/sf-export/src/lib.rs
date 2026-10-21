@@ -34,7 +34,8 @@ pub struct Progress {
 }
 
 /// Build the ffmpeg audio inputs reproducing the audio timeline (linked to the video slices,
-/// or the detached ScreenForge audio clips) for every microphone / system-audio session.
+/// or the detached ScreenForge audio clips) for every microphone / system-audio session, plus
+/// the voice-overs and the background music.
 pub fn audio_inputs(session: &Session) -> Vec<AudioMixInput> {
     use sf_project::audio_clips::AudioTrack;
     let cfg = &session.pkg.project.config;
@@ -71,6 +72,14 @@ pub fn audio_inputs(session: &Session) -> Vec<AudioMixInput> {
                 },
             });
         }
+    }
+    for vo in session.voice_over_spans() {
+        let path = session.voice_over_path(&vo.file_name);
+        if vo.muted || vo.volume <= 0.0 || !path.is_file() {
+            continue;
+        }
+        let dur = vo.output_duration_ms();
+        inputs.push(AudioMixInput { path, volume: vo.volume, delay_ms: vo.output_start_ms, start_ms: Some(vo.file_offset_ms), end_ms: Some(vo.file_offset_ms + dur), tempo: 1.0, loop_input: false, filter: None });
     }
     if !cfg.audio.mute_background_audio && cfg.audio.background_audio_volume > 0.0 {
         if let Some(path) = session.background_audio_path() {

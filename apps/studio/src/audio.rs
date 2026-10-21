@@ -1,6 +1,9 @@
 //! Preview audio playback: the microphone / system-audio tracks are decoded to a 48 kHz stereo
 //! mix in memory and played through cpal, following the output timeline (cuts and speed).
 //!
+//! Voice-overs are decoded on their own (by file name) and played at their place on the output
+//! timeline, so recording a new one does not decode the recording again.
+//!
 //! The audio callback owns the master clock while playing: the editor reads
 //! [`AudioPlayer::position_ms`] every frame so video follows audio.
 
@@ -8,7 +11,7 @@ use std::sync::Arc;
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use parking_lot::Mutex;
-use sf_engine::audio::AudioSpan;
+use sf_engine::audio::{AudioSpan, VoiceOverSpan};
 use sf_media::AudioClip;
 use sf_project::audio_clips::AudioTrack;
 
@@ -30,6 +33,9 @@ struct Shared {
     tracks: Vec<Track>,
     background: Option<Background>,
     spans: Vec<AudioSpan>,
+    /// Decoded voice-overs by file name, and where they play.
+    voice_clips: std::collections::HashMap<String, Arc<AudioClip>>,
+    voice_spans: Vec<VoiceOverSpan>,
     playing: bool,
     /// End of the audio handed to the device so far (advances a whole buffer per callback).
     output_ms: f64,
@@ -57,7 +63,7 @@ pub struct AudioPlayer {
 
 impl AudioPlayer {
     pub fn new() -> Self {
-        let shared = Arc::new(Mutex::new(Shared { tracks: vec![], background: None, spans: vec![], playing: false, output_ms: 0.0, callback_at: None, callback_ms: 0.0, duration_ms: 0.0, master_volume: 1.0, bg_volume: 0.05, bg_muted: false }));
+        let shared = Arc::new(Mutex::new(Shared { tracks: vec![], background: None, spans: vec![], voice_clips: Default::default(), voice_spans: vec![], playing: false, output_ms: 0.0, callback_at: None, callback_ms: 0.0, duration_ms: 0.0, master_volume: 1.0, bg_volume: 0.05, bg_muted: false }));
         let stream = Self::open_stream(shared.clone());
         if let Err(e) = &stream {
             tracing::warn!("audio output unavailable: {e}");
@@ -95,6 +101,17 @@ impl AudioPlayer {
                                     if i < t.clip.frames() {
                                         l += t.clip.samples[i * ch] * vol;
                                         r += t.clip.samples[i * ch + (ch - 1).min(1)] * vol;
+                                    }
+                                }
+                            }
+                            for vo in s.voice_spans.iter().filter(|v| !v.muted && v.contains_output(t_out)) {
+                                if let Some(clip) = s.voice_clips.get(&vo.file_name) {
+                                    let i = clip.frame_at_ms(vo.file_ms_at(t_out));
+                                    let ch = clip.channels as usize;
+                                    if i < clip.frames() {
+                                        let vol = vo.volume as f32 * master;
+                                        l += clip.samples[i * ch] * vol;
+                                        r += clip.samples[i * ch + (ch - 1).min(1)] * vol;
                                     }
                                 }
                             }
@@ -139,6 +156,7 @@ impl AudioPlayer {
         let background_path = session.background_audio_path();
         let (shared, generation, pending) = (self.shared.clone(), self.generation.clone(), self.pending.clone());
         self.update_timeline(session);
+        self.load_voice_overs(session);
         pending.fetch_add(1, Ordering::Relaxed);
         std::thread::spawn(move || {
             struct Done(Arc<std::sync::atomic::AtomicUsize>);
@@ -175,6 +193,35 @@ impl AudioPlayer {
         });
     }
 
+    /// Decode the voice-overs not decoded yet (a new take) on a background thread.
+    pub fn load_voice_overs(&self, session: &sf_session::Session) {
+        use std::sync::atomic::Ordering;
+        let missing: Vec<(String, std::path::PathBuf)> = {
+            let s = self.shared.lock();
+            let mut names: Vec<String> = session.pkg.project.scenes[0].voice_overs.iter().map(|v| v.file_name.clone()).filter(|n| !n.is_empty() && !s.voice_clips.contains_key(n)).collect();
+            names.sort_unstable();
+            names.dedup();
+            names.into_iter().map(|n| (session.voice_over_path(&n), n)).filter(|(p, _)| p.is_file()).map(|(p, n)| (n, p)).collect()
+        };
+        if missing.is_empty() {
+            return;
+        }
+        let (shared, generation, pending) = (self.shared.clone(), self.generation.clone(), self.pending.clone());
+        pending.fetch_add(1, Ordering::Relaxed);
+        std::thread::spawn(move || {
+            for (name, path) in missing {
+                match sf_media::decode_audio(&path, RATE, 2) {
+                    Ok(clip) => {
+                        shared.lock().voice_clips.insert(name, Arc::new(clip));
+                    }
+                    Err(e) => tracing::warn!("voice-over decode failed for {}: {e}", path.display()),
+                }
+            }
+            generation.fetch_add(1, Ordering::Relaxed);
+            pending.fetch_sub(1, Ordering::Relaxed);
+        });
+    }
+
     /// A `load` is still decoding.
     pub fn is_loading(&self) -> bool {
         self.pending.load(std::sync::atomic::Ordering::Relaxed) > 0
@@ -199,6 +246,7 @@ impl AudioPlayer {
         let spans = sf_engine::audio::audio_spans(scene, &Self::available_tracks(session), cfg.audio.volume, cfg.audio.mute_microphone, cfg.audio.mute_system_audio);
         let mut s = self.shared.lock();
         s.spans = spans;
+        s.voice_spans = session.voice_over_spans();
         s.duration_ms = session.duration_ms();
         let (volume, muted) = (cfg.audio.background_audio_volume as f32, cfg.audio.mute_background_audio);
         s.bg_volume = volume;
@@ -214,6 +262,16 @@ impl AudioPlayer {
         let s = self.shared.lock();
         let t = s.tracks.iter().find(|t| &t.kind == kind)?;
         Some(t.clip.peaks(buckets))
+    }
+
+    /// Waveform peaks of a voice-over file, `buckets` across the whole take.
+    pub fn voice_peaks(&self, file_name: &str, buckets: usize) -> Option<Vec<f32>> {
+        self.shared.lock().voice_clips.get(file_name).map(|c| c.peaks(buckets))
+    }
+
+    /// Length of a decoded voice-over file (ms).
+    pub fn voice_duration_ms(&self, file_name: &str) -> Option<f64> {
+        self.shared.lock().voice_clips.get(file_name).map(|c| c.duration_ms())
     }
 
     pub fn track_duration_ms(&self, kind: &AudioTrack) -> Option<f64> {
@@ -252,11 +310,13 @@ impl AudioPlayer {
         }
     }
 
+    /// Something to play drives the clock: recorded tracks or voice-overs.
     pub fn has_audio(&self) -> bool {
-        !self.shared.lock().tracks.is_empty()
+        let s = self.shared.lock();
+        !s.tracks.is_empty() || !s.voice_clips.is_empty()
     }
 
-    #[allow(dead_code)]
+    /// Master volume (0 while a voice-over is being recorded, so the mic does not pick it up).
     pub fn set_volume(&self, v: f32) {
         self.shared.lock().master_volume = v;
     }

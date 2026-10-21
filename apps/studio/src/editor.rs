@@ -39,6 +39,14 @@ pub struct Editor {
     pub selected_audio: Option<String>,
     /// The background music block is selected (⌫ removes the music).
     pub selected_music: bool,
+    /// Selected voice-over (id).
+    pub selected_voice_over: Option<String>,
+    /// A voice-over is being recorded: the video plays muted from where it started.
+    pub voice_rec: Option<crate::voice_over::VoiceRecorder>,
+    /// Microphone for voice-overs (device name); `None` records from the system default.
+    pub voice_mic: Option<String>,
+    /// Background → Unsplash search and downloads.
+    pub unsplash: crate::unsplash::Browser,
     pub dirty: bool,
     /// Time of the last change; unsaved changes are written shortly after editing stops.
     last_edit: Option<Instant>,
@@ -112,6 +120,10 @@ impl Editor {
             mask_drag: None,
             selected_audio: None,
             selected_music: false,
+            selected_voice_over: None,
+            voice_rec: None,
+            voice_mic: None,
+            unsplash: Default::default(),
             dirty: false,
             last_edit: None,
             timeline: TimelineWidget::default(),
@@ -191,6 +203,7 @@ impl Editor {
         self.selected_slice = None;
         self.selected_audio = None;
         self.selected_music = false;
+        self.selected_voice_over = None;
     }
 
     /// `edit` for a speed change: the playhead stays on the same source frame (and so the same
@@ -333,6 +346,88 @@ impl Editor {
         self.set_status(&format!("Background music: {label}"));
     }
 
+    /// Start recording a voice-over at the playhead: the video plays without sound (so the
+    /// microphone hears only you) until it ends or the recording is stopped.
+    pub fn start_voice_over(&mut self) {
+        if self.voice_rec.is_some() || self.export.is_busy() {
+            return;
+        }
+        if self.playhead_ms >= self.duration_ms() - 500.0 {
+            self.seek(0.0);
+        }
+        let src = self.session.timeline.output_to_source(self.playhead_ms).unwrap_or(0.0);
+        match crate::voice_over::VoiceRecorder::start(src, self.voice_mic.as_deref()) {
+            Ok(rec) => {
+                self.set_status(format!("Recording voice-over from {}", rec.device_name));
+                self.voice_rec = Some(rec);
+                self.audio.set_volume(0.0);
+                self.pause();
+                self.toggle_play();
+            }
+            Err(e) => self.set_status(format!("Could not start the microphone: {e}")),
+        }
+    }
+
+    /// Stop the voice-over recording and place the take on the timeline.
+    pub fn stop_voice_over(&mut self) {
+        let Some(rec) = self.voice_rec.take() else { return };
+        self.pause();
+        self.audio.set_volume(1.0);
+        let (start, device) = (rec.source_start_ms, rec.device_name.clone());
+        let dir = self.session.pkg.path.join(sf_project::v4::VoiceOver::DIR);
+        match rec.finish(&dir) {
+            Ok(Some(take)) => {
+                let silent = take.is_silent();
+                let vo = sf_project::v4::VoiceOver::microphone(start, take.duration_ms, take.file_name);
+                let id = vo.id.clone();
+                self.edit(move |p| p.scenes[0].voice_overs.push(vo));
+                self.audio.load_voice_overs(&self.session);
+                self.select_voice_over(id);
+                if silent {
+                    // kept so it can be checked, but say why it will play back as nothing
+                    self.set_status(format!("Voice-over is silent: {device} sent no sound (muted, or in use by a call?). Choose another microphone in Audio."));
+                } else {
+                    self.set_status("Added voice-over");
+                }
+            }
+            Ok(None) => self.set_status("Voice-over too short: discarded"),
+            Err(e) => self.set_status(format!("Could not save the voice-over: {e}")),
+        }
+    }
+
+    /// Cut voice-over `id` at output time `t`; the right-hand part is selected.
+    pub fn split_voice_over(&mut self, id: &str, t: f64) {
+        let mut scene = self.session.pkg.project.scenes[0].clone();
+        match sf_engine::audio::split_voice_over(&mut scene, &self.session.timeline, id, t) {
+            Some(right) => {
+                self.edit(move |p| p.scenes[0] = scene);
+                self.select_voice_over(right);
+                self.set_status("Split voice-over");
+            }
+            None => self.set_status("Move the playhead inside the voice-over to split it"),
+        }
+    }
+
+    /// Select a voice-over (and nothing else).
+    pub fn select_voice_over(&mut self, id: String) {
+        self.selected_voice_over = Some(id);
+        self.selected_zoom = None;
+        self.selected_slice = None;
+        self.selected_mask = None;
+        self.selected_audio = None;
+        self.selected_music = false;
+    }
+
+    /// Change one voice-over through `edit` (no-op when it is gone).
+    pub fn edit_voice_over(&mut self, id: &str, f: impl FnOnce(&mut sf_project::v4::VoiceOver)) {
+        let id = id.to_string();
+        self.edit(move |p| {
+            if let Some(v) = p.scenes[0].voice_overs.iter_mut().find(|v| v.id == id) {
+                f(v);
+            }
+        });
+    }
+
     pub fn undo(&mut self) {
         if let Some(p) = self.undo.pop() {
             self.redo.push(std::mem::replace(&mut self.session.pkg.project, p));
@@ -438,6 +533,10 @@ impl Editor {
     }
 
     pub fn toggle_play(&mut self) {
+        if self.voice_rec.is_some() && self.playing {
+            self.stop_voice_over();
+            return;
+        }
         if self.playing {
             self.playing = false;
             self.audio.pause();
@@ -482,6 +581,10 @@ impl Editor {
             }
             ctx.request_repaint();
         }
+        // the video reached its end (or playback stopped some other way): keep the take
+        if self.voice_rec.is_some() && !self.playing {
+            self.stop_voice_over();
+        }
     }
 
     fn shortcuts(&mut self, ctx: &egui::Context) {
@@ -489,15 +592,24 @@ impl Editor {
         if ctx.memory(|m| m.focused().is_some()) || self.export.open || self.export.is_busy() {
             return;
         }
+        // while a voice-over records, Space and Esc stop it and nothing else edits the project
+        if self.voice_rec.is_some() {
+            if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Space) || i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
+                self.stop_voice_over();
+            }
+            return;
+        }
         let frame = 1000.0 / 60.0;
         let (mut split, mut del, mut undo, mut redo, mut save, mut export, mut prev_b, mut next_b, mut toggle) = (false, false, false, false, false, false, false, false, false);
         let mut toggle_sidebar = false;
         let mut section: Option<Section> = None;
         let mut layer_delta = 0i32;
+        let mut record = false;
         ctx.input_mut(|i| {
             if i.consume_key(egui::Modifiers::ALT, egui::Key::ArrowDown) { layer_delta = 1; }
             if i.consume_key(egui::Modifiers::ALT, egui::Key::ArrowUp) { layer_delta = -1; }
             toggle = i.consume_key(egui::Modifiers::NONE, egui::Key::Space);
+            record = i.consume_key(egui::Modifiers::NONE, egui::Key::R);
             if i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowLeft) { self.playhead_ms = (self.playhead_ms - frame).max(0.0); }
             if i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowRight) { self.playhead_ms = (self.playhead_ms + frame).min(self.duration_ms()); }
             if i.consume_key(egui::Modifiers::SHIFT, egui::Key::ArrowLeft) { self.playhead_ms = (self.playhead_ms - 1000.0).max(0.0); }
@@ -522,6 +634,7 @@ impl Editor {
             }
         });
         if toggle { self.toggle_play(); }
+        if record && self.voice_rec.is_none() { self.start_voice_over(); }
         if split { self.split_at_playhead(); }
         if del { self.delete_selected(); }
         if undo { self.undo(); }
@@ -547,6 +660,13 @@ impl Editor {
 
     pub fn split_at_playhead(&mut self) {
         let t = self.playhead_ms;
+        // a selected voice-over under the playhead is cut instead of the video
+        if let Some(id) = self.selected_voice_over.clone() {
+            if self.session.voice_over_spans().iter().any(|v| v.id == id && v.contains_output(t)) {
+                self.split_voice_over(&id, t);
+                return;
+            }
+        }
         // Split the selected audio clip only when the playhead is over it; otherwise cut the video.
         let audio_hit = self.selected_audio.clone().filter(|id| {
             use sf_project::SceneAudioExt;
@@ -568,6 +688,11 @@ impl Editor {
             self.edit(|p| p.config.audio.background_audio_file_name = None);
             self.reload_audio();
             self.set_status("Removed background music");
+            return;
+        }
+        if let Some(id) = self.selected_voice_over.take() {
+            self.edit(move |p| p.scenes[0].voice_overs.retain(|v| v.id != id));
+            self.set_status("Removed voice-over");
             return;
         }
         if let Some(id) = self.selected_audio.take() {
@@ -692,7 +817,7 @@ impl Editor {
                         }
                     }
                     ui.add_space(6.0);
-                    widgets::icon_button(ui, widgets::Icon::Command, 16.0, "Shortcuts: Space play · S split · ⌥↑↓ audio layer · ⌫ delete · ⌘Z undo · ⌘S save · ⌘⇧E export · [ ] jump cuts · ⌘1…⌘0 sidebar · ⌘\\ toggle sidebar");
+                    widgets::icon_button(ui, widgets::Icon::Command, 16.0, "Shortcuts: Space play · S split · R record voice-over · ⌥↑↓ audio layer · ⌫ delete · ⌘Z undo · ⌘S save · ⌘⇧E export · [ ] jump cuts · ⌘1…⌘0 sidebar · ⌘\\ toggle sidebar");
                     if let Some((s, t)) = &self.status {
                         if t.elapsed().as_secs() < 4 {
                             ui.label(RichText::new(s).color(theme::p().text_dim));
@@ -775,7 +900,7 @@ impl Editor {
                 ui.painter().text(stage.center(), Align2::CENTER_CENTER, "Rendering…", FontId::proportional(14.0), theme::p().text_dim);
             }
             // floating tool rail (left)
-            let rail = Rect::from_min_size(pos2(stage.left() + 4.0, stage.center().y - 110.0), vec2(56.0, 220.0));
+            let rail = Rect::from_min_size(pos2(stage.left() + 4.0, stage.center().y - 134.0), vec2(56.0, 268.0));
             ui.painter().rect(rail, CornerRadius::same(14), theme::p().card, Stroke::new(1.0, theme::p().border), egui::StrokeKind::Inside);
             let mut rail_ui = ui.new_child(egui::UiBuilder::new().max_rect(rail.shrink2(vec2(8.0, 10.0))).layout(egui::Layout::top_down(egui::Align::Center)));
             rail_ui.spacing_mut().item_spacing.y = 8.0;
@@ -795,12 +920,52 @@ impl Editor {
             if widgets::rail_icon(&mut rail_ui, widgets::Icon::Mask, false, "Add blur mask at playhead").clicked() {
                 crate::masks::add_at_playhead(self);
             }
+            let recording = self.voice_rec.is_some();
+            if widgets::rail_icon(&mut rail_ui, widgets::Icon::Mic, recording, if recording { "Stop voice-over (Space)" } else { "Record voice-over from playhead (R)" }).clicked() {
+                if recording {
+                    self.stop_voice_over();
+                } else {
+                    self.start_voice_over();
+                }
+            }
+            if self.voice_rec.is_some() {
+                self.voice_over_hud(ui, stage);
+            }
         });
 
         self.export_modal(ctx);
         self.preset_modal(ctx);
 
         go_home
+    }
+
+    /// Floating bar over the top of the preview while a voice-over records: red dot, elapsed
+    /// time, input level and a Stop button.
+    fn voice_over_hud(&mut self, ui: &mut egui::Ui, stage: Rect) {
+        let Some(rec) = &self.voice_rec else { return };
+        let pal = theme::p();
+        let (elapsed, level) = (rec.elapsed_ms(), rec.level());
+        // nothing heard after a couple of seconds: the mic is muted or held by a call
+        let no_sound = elapsed > 2000.0 && rec.is_silent();
+        let bar = Rect::from_center_size(pos2(stage.center().x, stage.top() + 30.0), vec2(if no_sound { 420.0 } else { 300.0 }, 44.0));
+        let p = ui.painter();
+        p.rect(bar, CornerRadius::same(10), pal.glass_solid, Stroke::new(1.0, pal.glass_border), egui::StrokeKind::Inside);
+        // the dot pulses once a second
+        let pulse = 0.55 + 0.45 * ((elapsed / 1000.0 * std::f64::consts::TAU).cos() as f32 * 0.5 + 0.5);
+        p.circle_filled(pos2(bar.left() + 20.0, bar.center().y), 6.0, pal.danger.gamma_multiply(pulse));
+        let (label, color) = if no_sound { (format!("{}  No sound from {}", fmt_clock_short(elapsed), rec.device_name), pal.danger) } else { (format!("Voice-over  {}", fmt_clock_short(elapsed)), pal.on_glass) };
+        let label_rect = Rect::from_min_max(pos2(bar.left() + 34.0, bar.top()), pos2(bar.right() - 112.0, bar.bottom()));
+        p.with_clip_rect(label_rect).text(pos2(label_rect.left(), bar.center().y), Align2::LEFT_CENTER, label, FontId::proportional(14.0), color);
+        widgets::paint_mic_level(p, Rect::from_center_size(pos2(bar.right() - 96.0, bar.center().y), vec2(20.0, 20.0)), level, pal.on_glass, pal.meter);
+        let stop = Rect::from_center_size(pos2(bar.right() - 44.0, bar.center().y), vec2(60.0, 28.0));
+        let resp = ui.interact(stop, ui.id().with("voice-over-stop"), Sense::click()).on_hover_text("Stop and keep the take (Space)");
+        let p = ui.painter();
+        p.rect_filled(stop, CornerRadius::same(2), if resp.hovered() { pal.danger } else { pal.danger.gamma_multiply(0.85) });
+        p.text(stop.center(), Align2::CENTER_CENTER, "Stop", FontId::proportional(13.0), pal.glass_button_fg);
+        if resp.clicked() {
+            self.stop_voice_over();
+        }
+        ui.ctx().request_repaint();
     }
 
     /// Name prompt for "Save preset as…" / "Rename preset", and the delete confirmation.
@@ -1090,7 +1255,7 @@ impl Editor {
         if widgets::icon_button(&mut left, widgets::Icon::Scissors, 20.0, "Split at playhead (S)").clicked() {
             self.split_at_playhead();
         }
-        let can_delete = self.selected_zoom.is_some() || self.selected_mask.is_some() || self.selected_audio.is_some() || (self.selected_slice.is_some() && self.session.pkg.project.scenes[0].slices.len() > 1);
+        let can_delete = self.selected_zoom.is_some() || self.selected_mask.is_some() || self.selected_audio.is_some() || self.selected_voice_over.is_some() || (self.selected_slice.is_some() && self.session.pkg.project.scenes[0].slices.len() > 1);
         if widgets::icon_button(&mut left, widgets::Icon::Trash, 16.0, "Delete selection (⌫)").clicked() && can_delete {
             self.delete_selected();
         }
