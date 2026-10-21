@@ -3,21 +3,22 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>ScreenForge — open-source screen recorder and editor for Mac and Linux</title>
-<meta name="description" content="ScreenForge is an open-source screen recorder and editor: record your Mac or Linux screen and get automatic zooms that follow your cursor, captions, a smooth cursor, backgrounds and a separate voice track. Imports Screen Studio projects. Free to record and edit.">
+<title>ScreenForge — open-source screencast recorder, a Screen Studio and CapCut alternative</title>
+<meta name="description" content="ScreenForge is an open-source screen recorder and editor for screencasts, a free alternative to Screen Studio and CapCut: automatic zooms that follow your cursor, voice-over narration, captions, a smooth cursor, backgrounds and a separate voice track. Imports Screen Studio projects. Free to record and edit.">
+<meta name="keywords" content="screen recorder, screencast software, screencast alternative, Screen Studio alternative, CapCut alternative, voice-over, screen recording editor, automatic zoom, open source screen recorder, Mac screen recorder, Linux screen recorder, Windows screen recorder">
 <link rel="canonical" href="https://screenforge.studio/">
 <meta name="color-scheme" content="light dark">
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="ScreenForge">
 <meta property="og:url" content="https://screenforge.studio/">
-<meta property="og:title" content="ScreenForge — open-source screen recorder and editor">
-<meta property="og:description" content="Record your Mac or Linux screen, get automatic zooms, a smooth cursor, backgrounds and an editable voice track. Imports Screen Studio projects. Free to record and edit.">
+<meta property="og:title" content="ScreenForge — open-source screencast recorder, a Screen Studio and CapCut alternative">
+<meta property="og:description" content="Record your screen, get automatic zooms, a smooth cursor and backgrounds, and narrate it with a voice-over. A free, open-source Screen Studio and CapCut alternative. Imports Screen Studio projects.">
 <meta property="og:image" content="https://screenforge.studio/og.png?v=3">
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
 <meta name="twitter:card" content="summary_large_image">
-<meta name="twitter:title" content="ScreenForge — open-source screen recorder and editor">
-<meta name="twitter:description" content="Record your Mac or Linux screen, get automatic zooms, a smooth cursor, backgrounds and an editable voice track. Imports Screen Studio projects.">
+<meta name="twitter:title" content="ScreenForge — open-source screencast recorder, a Screen Studio and CapCut alternative">
+<meta name="twitter:description" content="Record your screen, get automatic zooms, a smooth cursor and backgrounds, and narrate it with a voice-over. Imports Screen Studio projects.">
 <meta name="twitter:image" content="https://screenforge.studio/og.png?v=3">
 <script type="application/ld+json">
 {
@@ -26,7 +27,10 @@
   "name": "ScreenForge",
   "url": "https://screenforge.studio/",
   "image": "https://screenforge.studio/og.png?v=3",
-  "description": "Open-source screen recorder and editor: automatic zooms, smooth cursor, backgrounds and a separate voice track. Imports Screen Studio projects.",
+  "alternateName": "ScreenForge screencast recorder",
+  "description": "Open-source screen recorder and editor for screencasts, an alternative to Screen Studio and CapCut: automatic zooms, voice-over narration, smooth cursor, backgrounds and a separate voice track. Imports Screen Studio projects.",
+  "keywords": "screencast software, Screen Studio alternative, CapCut alternative, screen recorder, voice-over",
+  "featureList": ["Automatic zooms", "Voice-over narration", "Captions", "Smooth cursor", "Backgrounds", "Separate voice track", "Blur and highlight masks", "Crop", "Keyboard shortcut overlay", "Imports Screen Studio projects"],
   "applicationCategory": "MultimediaApplication",
   "operatingSystem": "macOS 14 or later, Linux",
   "license": "https://www.apache.org/licenses/LICENSE-2.0",
@@ -278,6 +282,8 @@
   }
   .card p { font-size: 14px; color: var(--dim); }
   .card code { font-family: var(--mono); font-size: 12.5px; color: var(--fg); }
+  /* three columns: a lone card on the last row spans the row */
+  @media (min-width: 921px) { .grid .card:last-child:nth-child(3n + 1) { grid-column: 1 / -1; } }
   @media (max-width: 920px) { .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
   @media (max-width: 560px) { .grid { grid-template-columns: minmax(0, 1fr); } }
 
@@ -480,6 +486,11 @@ gtag('config', 'G-ZYRJDJ736V');
         <h3>Shortcuts on screen</h3>
         <p>The shortcuts you press while recording show up as key caps, like <code>⇧ ⌘ S</code>, so viewers can follow along. Plain key presses too, if you want them.</p>
       </div>
+      <div class="card">
+        <div class="k">Voice-over <span class="tag">new</span></div>
+        <h3>Narrate after you record</h3>
+        <p>Press <code>R</code> and talk over the video as it plays from the playhead. Each take lands on its own lane: move it, trim its edges, split out the ums, set its volume. It stays with its frame when you cut or speed up the clips before it.</p>
+      </div>
     </div>
   </div>
 </section>
@@ -496,6 +507,7 @@ gtag('config', 'G-ZYRJDJ736V');
         <li class="done"><strong><i class="box">[x]</i>Captions</strong><span>on-device Whisper transcription, captions in the preview and export, SRT export</span></li>
         <li class="done"><strong><i class="box">[x]</i>Keyboard shortcut overlay</strong><span>key caps for the shortcuts pressed while recording, in the preview and export</span></li>
         <li class="done"><strong><i class="box">[x]</i>Face tracking and color grading</strong><span>the camera follows your face on device; DaVinci Resolve style primaries (lift, gamma, gain, offset wheels, contrast, saturation, hue…), bundled looks and .cube LUTs</span></li>
+        <li class="done"><strong><i class="box">[x]</i>Voice-over</strong><span>record narration over the video after the fact; split, trim, move and set the volume of each take</span></li>
         <li><strong><i class="box">[ ]</i>Auto timeline</strong><span>a first cut laid out by on-device models: zooms where the action is, pauses and retakes trimmed, captions placed; nothing leaves your computer</span></li>
         <li><strong><i class="box">[ ]</i>Device frames</strong><span>iPhone/iPad recording and mockup frames</span></li>
         <li><strong><i class="box">[ ]</i>Unsplash backgrounds</strong><span>online wallpaper search</span></li>
