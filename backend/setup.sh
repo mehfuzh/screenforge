@@ -65,7 +65,7 @@ fi
 supabase db push
 
 echo "→ Supabase: functions"
-supabase functions deploy create-checkout license-refresh free-export --project-ref "$REF"
+supabase functions deploy create-checkout license-refresh license-activate free-export unsplash --project-ref "$REF"
 supabase functions deploy stripe-webhook --no-verify-jwt --project-ref "$REF"
 
 echo "→ Supabase: secrets"

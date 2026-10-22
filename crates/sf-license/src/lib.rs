@@ -2,7 +2,12 @@
 //! (US$49 once, lifetime) is checked offline against the embedded Ed25519 public key.
 //!
 //! Key format: `SF1.<base64url payload>.<base64url signature>`, payload JSON:
-//! `{ "email": "...", "plan": "monthly" | "lifetime", "expires": "2026-11-12" | null, "issued": "2026-10-12" }`
+//! `{ "email": "...", "plan": "monthly" | "lifetime", "expires": "2026-11-12" | null, "issued": "2026-10-12", "device": "<sha-256 hex>" }`
+//!
+//! One license works on one computer at a time. The backend signs a key for the computer it
+//! activates (`device`, see [`device_id`]); [`verify`] only accepts a key bound to this
+//! computer, so a copied key file does not export elsewhere, even offline. Keys without a
+//! device (issued before device activation) need activating once.
 //! (only lifetime keys are sold now; monthly keys from earlier subscriptions stay valid until
 //! they expire and keep renewing while the subscription is active)
 //!
@@ -49,7 +54,12 @@ fn request(name: &str, body: serde_json::Value) -> Result<serde_json::Value, (u1
     match resp {
         Ok(r) => r.into_json().map_err(|e| (0, e.to_string())),
         Err(ureq::Error::Status(code, r)) => Err((code, r.into_json::<serde_json::Value>().ok().and_then(|v| v.get("error").and_then(|e| e.as_str()).map(String::from)).unwrap_or_else(|| format!("server returned {code}")))),
-        Err(e) => Err((0, format!("network error: {e}"))),
+        // the transport error text repeats itself ("Network Error: Network Error: …"): say
+        // what happened, keep the cause short
+        Err(ureq::Error::Transport(t)) if t.kind() == ureq::ErrorKind::Io || t.kind() == ureq::ErrorKind::ConnectionFailed || t.kind() == ureq::ErrorKind::Dns => {
+            Err((0, "Could not reach the license server. Check your connection and try again.".into()))
+        }
+        Err(e) => Err((0, format!("The license server did not answer ({}). Try again in a moment.", e.kind()))),
     }
 }
 
@@ -63,13 +73,69 @@ pub fn call_backend(name: &str, body: serde_json::Value) -> Result<serde_json::V
     request(name, body).map_err(|(code, msg)| if code == 404 { format!("the {name} service is not available yet") } else { msg })
 }
 
-/// Ask the backend for the newest key issued to `email`. Verifies and saves it on success.
-pub fn activate(email: &str) -> Result<Status, String> {
+/// Check in with the backend for the key saved on this computer, without emailing anything:
+/// a renewed key is saved, and when the license was moved to another computer the saved key is
+/// removed (`Ok(Some(false))`). `Ok(None)`: no key or no email saved, nothing to check. A
+/// network problem is an `Err` and changes nothing, so the key keeps working offline.
+pub fn check_in() -> Result<Option<bool>, String> {
+    let (Some(_), Some(email)) = (load_saved(), load_email()) else { return Ok(None) };
+    match activate(&email, false)? {
+        Activation::Done(status) => Ok(Some(status.is_valid())),
+        Activation::NeedsCode | Activation::CodeSent => {
+            forget().map_err(|e| e.to_string())?;
+            Ok(Some(false))
+        }
+    }
+}
+
+/// Outcome of [`activate`].
+#[derive(Debug, Clone, PartialEq)]
+pub enum Activation {
+    /// This computer is activated: the key was fetched, verified and saved.
+    Done(Status),
+    /// A 6-digit code was emailed to the license address; finish with [`confirm_code`].
+    CodeSent,
+    /// This computer is not activated yet and `send_code` was false (nothing was emailed).
+    NeedsCode,
+}
+
+/// Activate this computer for the license bought with `email`. The backend only returns a key
+/// to a computer already activated for that license; otherwise, with `send_code`, it emails a
+/// code to the license address that [`confirm_code`] takes. The silent renewal check passes
+/// `send_code: false` so it never sends email by itself.
+pub fn activate(email: &str, send_code: bool) -> Result<Activation, String> {
+    let email = checked_email(email)?;
+    let device = device_id().ok_or_else(|| "ScreenForge cannot identify this computer, so the license cannot be activated.".to_string())?;
+    let v = call_function("license-activate", serde_json::json!({ "email": email, "device": device, "send": send_code }))?;
+    match v.get("status").and_then(|s| s.as_str()) {
+        Some("code_sent") => Ok(Activation::CodeSent),
+        Some("verify") => Ok(Activation::NeedsCode),
+        _ => store_key(&v, email).map(Activation::Done),
+    }
+}
+
+/// Finish activation with the emailed `code`: verifies and saves the key on success.
+pub fn confirm_code(email: &str, code: &str) -> Result<Status, String> {
+    let email = checked_email(email)?;
+    let code: String = code.chars().filter(|c| c.is_ascii_digit()).collect();
+    if code.len() != 6 {
+        return Err("Enter the 6-digit code from the email.".into());
+    }
+    let device = device_id().ok_or_else(|| "ScreenForge cannot identify this computer.".to_string())?;
+    let v = call_function("license-activate", serde_json::json!({ "email": email, "device": device, "code": code }))?;
+    store_key(&v, email)
+}
+
+fn checked_email(email: &str) -> Result<&str, String> {
     let email = email.trim();
     if email.is_empty() || !email.contains('@') {
         return Err("Enter the email you used at checkout.".into());
     }
-    let v = call_function("license-refresh", serde_json::json!({ "email": email }))?;
+    Ok(email)
+}
+
+/// Verify the key in a backend reply and save it (and the email) when valid.
+fn store_key(v: &serde_json::Value, email: &str) -> Result<Status, String> {
     let key = v.get("key").and_then(|k| k.as_str()).ok_or_else(|| "no license".to_string())?;
     let status = verify(key);
     if status.is_valid() {
@@ -106,6 +172,9 @@ pub struct Payload {
     pub plan: String,
     pub expires: Option<NaiveDate>,
     pub issued: NaiveDate,
+    /// The computer the key is for ([`device_id`]); `None` on keys from before activation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub device: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -137,11 +206,26 @@ fn issuer_key(b64: &str) -> Result<VerifyingKey, Error> {
     VerifyingKey::from_bytes(&arr).map_err(|_| Error::Other("bad issuer key".into()))
 }
 
-/// Verify a key against the embedded issuer key.
+/// Verify a key against the embedded issuer key, for this computer: a key bound to another
+/// computer, or to none, is not valid here.
 pub fn verify(key: &str) -> Status {
-    verify_with(key, ISSUER_PUBLIC_KEY_B64)
+    for_device(verify_with(key, ISSUER_PUBLIC_KEY_B64), device_id().as_deref())
 }
 
+/// `status` for the computer `device`: only a key bound to it stays valid or expired.
+pub fn for_device(status: Status, device: Option<&str>) -> Status {
+    let payload = match &status {
+        Status::Valid(p) | Status::Expired(p) => p,
+        Status::Invalid(_) => return status,
+    };
+    match (payload.device.as_deref(), device) {
+        (Some(bound), Some(here)) if bound == here => status,
+        (Some(_), _) => Status::Invalid("This license is activated on another computer. Press Activate to move it here.".into()),
+        (None, _) => Status::Invalid("Licenses now work on one computer at a time. Press Activate to activate this computer.".into()),
+    }
+}
+
+/// Verify a key's signature and dates against `issuer_b64` (any computer).
 pub fn verify_with(key: &str, issuer_b64: &str) -> Status {
     let key = key.trim();
     let parse = || -> Result<Payload, Error> {
@@ -266,7 +350,7 @@ fn hex(bytes: &[u8]) -> String {
 /// the device has no identifier, in which case the local file alone counts.
 pub fn sync_free_exports() {
     let Some(device) = device_id() else { return };
-    let Ok(v) = call_function("free-export", serde_json::json!({ "device": device })) else { return };
+    let Ok(v) = call_function("free-export", serde_json::json!({ "device": device, "v": 2 })) else { return };
     if let Some(used) = v.get("used").and_then(|u| u.as_u64()) {
         reconcile_server_count(used as u32);
     }
@@ -286,7 +370,7 @@ pub fn record_free_export() -> std::io::Result<()> {
     write_local_free_exports(n)?;
     if let Some(device) = device_id() {
         std::thread::spawn(move || {
-            if let Ok(v) = call_function("free-export", serde_json::json!({ "device": device, "record": true })) {
+            if let Ok(v) = call_function("free-export", serde_json::json!({ "device": device, "record": true, "v": 2 })) {
                 if let Some(used) = v.get("used").and_then(|u| u.as_u64()) {
                     reconcile_server_count(used as u32);
                 }
@@ -298,6 +382,14 @@ pub fn record_free_export() -> std::io::Result<()> {
 
 pub fn load_saved() -> Option<String> {
     std::fs::read_to_string(key_file()?).ok().map(|s| s.trim().to_string()).filter(|s| !s.is_empty())
+}
+
+/// Remove the saved key (the license moved to another computer).
+pub fn forget() -> std::io::Result<()> {
+    match key_file() {
+        Some(p) if p.exists() => std::fs::remove_file(p),
+        _ => Ok(()),
+    }
 }
 
 pub fn save(key: &str) -> std::io::Result<()> {
@@ -313,7 +405,7 @@ mod tests {
     #[test]
     fn sign_and_verify() {
         let (sk, pk) = keygen();
-        let p = Payload { email: "a@b.c".into(), plan: "monthly".into(), expires: Some(Utc::now().date_naive() + chrono::Duration::days(30)), issued: Utc::now().date_naive() };
+        let p = Payload { email: "a@b.c".into(), plan: "monthly".into(), expires: Some(Utc::now().date_naive() + chrono::Duration::days(30)), issued: Utc::now().date_naive(), device: None };
         let key = sign(&sk, &p).unwrap();
         assert!(matches!(verify_with(&key, &pk), Status::Valid(_)));
         let expired = Payload { expires: Some(Utc::now().date_naive() - chrono::Duration::days(1)), ..p.clone() };
@@ -324,10 +416,44 @@ mod tests {
     }
 
     #[test]
+    fn a_key_only_works_on_its_own_computer() {
+        let (sk, pk) = keygen();
+        let here = "a".repeat(64);
+        let p = Payload { email: "a@b.c".into(), plan: "lifetime".into(), expires: None, issued: Utc::now().date_naive(), device: Some(here.clone()) };
+        let key = sign(&sk, &p).unwrap();
+        assert!(for_device(verify_with(&key, &pk), Some(&here)).is_valid());
+        assert!(!for_device(verify_with(&key, &pk), Some(&"b".repeat(64))).is_valid());
+        assert!(!for_device(verify_with(&key, &pk), None).is_valid());
+        // keys from before activation are bound to no computer: activate once
+        let old = sign(&sk, &Payload { device: None, ..p }).unwrap();
+        assert!(matches!(for_device(verify_with(&old, &pk), Some(&here)), Status::Invalid(m) if m.contains("Activate")));
+    }
+
+    #[test]
+    fn keys_from_the_backend_parse_with_or_without_a_device() {
+        let old: Payload = serde_json::from_str(r#"{"email":"a@b.c","plan":"lifetime","expires":null,"issued":"2026-10-12"}"#).unwrap();
+        assert_eq!(old.device, None);
+        let new: Payload = serde_json::from_str(r#"{"email":"a@b.c","plan":"lifetime","expires":null,"issued":"2026-10-12","device":"ab"}"#).unwrap();
+        assert_eq!(new.device.as_deref(), Some("ab"));
+    }
+
+    #[test]
     fn ioreg_uuid_parses() {
         let text = "+-o MacBookPro18,3  <class IOPlatformExpertDevice>\n  {\n    \"IOPlatformUUID\" = \"5A3C1F2E-0B6D-4E8A-9C7B-1234567890AB\"\n    \"model\" = <\"x\">\n  }\n";
         assert_eq!(parse_ioreg_uuid(text).as_deref(), Some("5A3C1F2E-0B6D-4E8A-9C7B-1234567890AB"));
         assert_eq!(parse_ioreg_uuid("nothing here"), None);
+    }
+
+    #[test]
+    fn activation_checks_input_before_calling_the_server() {
+        assert!(activate("not-an-email", true).unwrap_err().contains("email"));
+        assert!(confirm_code("you@example.com", "12 34").unwrap_err().contains("6-digit"));
+        assert!(confirm_code("you@example.com", "1234567").unwrap_err().contains("6-digit"));
+    }
+
+    #[test]
+    fn a_reply_without_a_key_is_no_license() {
+        assert_eq!(store_key(&serde_json::json!({ "status": "verify" }), "you@example.com").unwrap_err(), "no license");
     }
 
     #[test]

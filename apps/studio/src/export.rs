@@ -42,8 +42,13 @@ pub struct ExportDialog {
     /// Email used at checkout; the backend looks the key up by it.
     pub email: String,
     /// Result of the last activation attempt (background thread).
-    activation: Option<Receiver<Result<sf_license::Status, String>>>,
+    activation: Option<Receiver<Result<sf_license::Activation, String>>>,
+    /// The quiet check-in started when the dialog was created (see `sf_license::check_in`).
+    check_in: Option<Receiver<Result<Option<bool>, String>>>,
     activation_msg: Option<(bool, String)>,
+    /// A code was emailed for this address; the dialog asks for it.
+    code_sent_to: Option<String>,
+    code: String,
     /// User opened the license section while free exports remain.
     show_license: bool,
     /// The free-export count was reconciled with the backend since the dialog last opened.
@@ -53,17 +58,29 @@ pub struct ExportDialog {
     started: Option<std::time::Instant>,
 }
 
+/// An empty dialog: no file reads, no network. `std::mem::take` puts one in place every frame
+/// while the real dialog is borrowed, so this must stay free; [`ExportDialog::new`] is the one
+/// that loads the license and talks to the backend.
 impl Default for ExportDialog {
     fn default() -> Self {
+        ExportDialog { open: false, license: sf_license::Status::Invalid("no key".into()), email: String::new(), activation: None, check_in: None, activation_msg: None, code_sent_to: None, code: String::new(), show_license: false, free_exports_synced: false, format: Format::Mp4, fps: 60.0, height: 1080, quality: QualityPreset::SocialMedia, codec: VideoCodec::H264, audio: true, job: None, progress: None, result: None, started: None }
+    }
+}
+
+impl ExportDialog {
+    /// The dialog for a newly opened editor: loads the saved license and starts the one quiet
+    /// check-in with the backend (or the free-export count sync without a license).
+    pub fn new() -> Self {
         let license_key = sf_license::load_saved().unwrap_or_default();
         let license = if license_key.is_empty() { sf_license::Status::Invalid("no key".into()) } else { sf_license::verify(&license_key) };
         let email = sf_license::load_email().unwrap_or_default();
-        // a monthly key that ran out: ask the backend for the renewed one, no user action needed
-        let activation = if matches!(license, sf_license::Status::Expired(_)) && !email.is_empty() {
+        // a key on this computer: check in quietly (never emails a code). A renewed monthly key
+        // is saved; a license moved to another computer is removed here. Offline, nothing
+        // changes.
+        let check_in = if !license_key.is_empty() && !email.is_empty() {
             let (tx, rx) = channel();
-            let e = email.clone();
             std::thread::spawn(move || {
-                let _ = tx.send(sf_license::activate(&e));
+                let _ = tx.send(sf_license::check_in());
             });
             Some(rx)
         } else {
@@ -72,7 +89,7 @@ impl Default for ExportDialog {
         if !license.is_valid() {
             std::thread::spawn(sf_license::sync_free_exports);
         }
-        ExportDialog { open: false, license, email, activation, activation_msg: None, show_license: false, free_exports_synced: false, format: Format::Mp4, fps: 60.0, height: 1080, quality: QualityPreset::SocialMedia, codec: VideoCodec::H264, audio: true, job: None, progress: None, result: None, started: None }
+        ExportDialog { license, email, check_in, ..Default::default() }
     }
 }
 
@@ -103,10 +120,34 @@ impl ExportDialog {
         } else if !self.open {
             self.free_exports_synced = false;
         }
+        if let Some(rx) = &self.check_in {
+            match rx.try_recv() {
+                Ok(r) => {
+                    self.check_in = None;
+                    let had_valid = self.license.is_valid();
+                    // the key file was renewed or removed: read it again
+                    self.license = sf_license::load_saved().map(|k| sf_license::verify(&k)).unwrap_or_else(|| sf_license::Status::Invalid("no key".into()));
+                    if matches!(r, Ok(Some(false))) && had_valid && !self.license.is_valid() {
+                        self.activation_msg = Some((false, "This license was moved to another computer. Press Activate to move it back here.".into()));
+                        self.show_license = true;
+                    }
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => ctx.request_repaint_after(std::time::Duration::from_millis(500)),
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => self.check_in = None,
+            }
+        }
         if let Some(rx) = &self.activation {
             if let Ok(r) = rx.try_recv() {
                 match r {
-                    Ok(status) => {
+                    Ok(sf_license::Activation::CodeSent) => {
+                        self.code_sent_to = Some(self.email.trim().to_string());
+                        self.code.clear();
+                        self.activation_msg = Some((true, format!("We emailed a 6-digit code to {}. Enter it below to activate this computer.", self.email.trim())));
+                    }
+                    Ok(sf_license::Activation::NeedsCode) => {}
+                    Ok(sf_license::Activation::Done(status)) => {
+                        self.code_sent_to = None;
+                        self.code.clear();
                         self.license = status.clone();
                         self.activation_msg = Some(match status {
                             sf_license::Status::Valid(_) => (true, "License activated on this Mac.".into()),
@@ -249,17 +290,37 @@ impl ExportDialog {
                 ui.label("Email used at checkout");
                 ui.add_space(2.0);
                 widgets::text_field(ui, &mut self.email, "you@example.com");
+                // a code belongs to the address it was sent to
+                let awaiting_code = self.code_sent_to.as_deref() == Some(self.email.trim());
+                if awaiting_code {
+                    ui.add_space(6.0);
+                    ui.label("Code from the email");
+                    ui.add_space(2.0);
+                    widgets::text_field(ui, &mut self.code, "123456");
+                }
                 ui.add_space(8.0);
                 ui.horizontal(|ui| {
                     let busy = self.activation.is_some();
-                    if ui.add_enabled_ui(!busy, |ui| widgets::secondary_button(ui, if busy { "Activating…" } else { "Activate" })).inner.clicked() {
+                    let start = |this: &mut Self, f: Box<dyn FnOnce() -> Result<sf_license::Activation, String> + Send>| {
                         let (tx, rx) = channel();
-                        let email = self.email.clone();
                         std::thread::spawn(move || {
-                            let _ = tx.send(sf_license::activate(&email));
+                            let _ = tx.send(f());
                         });
-                        self.activation = Some(rx);
-                        self.activation_msg = None;
+                        this.activation = Some(rx);
+                        this.activation_msg = None;
+                    };
+                    if awaiting_code {
+                        if ui.add_enabled_ui(!busy, |ui| widgets::secondary_button(ui, if busy { "Checking…" } else { "Confirm" })).inner.clicked() {
+                            let (email, code) = (self.email.clone(), self.code.clone());
+                            start(self, Box::new(move || sf_license::confirm_code(&email, &code).map(sf_license::Activation::Done)));
+                        }
+                        if ui.add_enabled_ui(!busy, |ui| widgets::secondary_button(ui, "Send again")).inner.clicked() {
+                            let email = self.email.clone();
+                            start(self, Box::new(move || sf_license::activate(&email, true)));
+                        }
+                    } else if ui.add_enabled_ui(!busy, |ui| widgets::secondary_button(ui, if busy { "Activating…" } else { "Activate" })).inner.clicked() {
+                        let email = self.email.clone();
+                        start(self, Box::new(move || sf_license::activate(&email, true)));
                     }
                     if widgets::accent_button(ui, &format!("Buy · {}", sf_license::PRICE_LIFETIME)).clicked() {
                         open_checkout(&self.email, "lifetime");
@@ -268,7 +329,7 @@ impl ExportDialog {
                 if let Some((ok, msg)) = &self.activation_msg {
                     ui.colored_label(if *ok { theme::p().accent_hover } else { theme::p().danger }, msg);
                 }
-                widgets::hint(ui, "After paying, come back and press Activate: the key is fetched for your email and stored on this Mac. Nothing to copy.");
+                widgets::hint(ui, "After paying, press Activate: we email you a code to confirm this computer, then the key is stored on it. Nothing to copy. A license works on one computer at a time; activating another computer moves it there.");
                 ui.add_space(6.0);
                 ui.separator();
             }

@@ -135,6 +135,9 @@ enum LicenseCmd {
         plan: String,
         #[arg(long, default_value_t = 31)]
         days: i64,
+        /// Bind the key to a computer (its `sf_license::device_id` hash)
+        #[arg(long)]
+        device: Option<String>,
     },
     /// Verify a key against the embedded (or SF_LICENSE_PUBLIC_KEY) issuer key
     Verify { key: String },
@@ -203,10 +206,10 @@ fn main() -> Result<()> {
                     let (sk, pk) = sf_license::keygen();
                     println!("SF_LICENSE_SIGNING_KEY={sk}\nISSUER_PUBLIC_KEY_B64={pk}");
                 }
-                LicenseCmd::Sign { email, plan, days } => {
+                LicenseCmd::Sign { email, plan, days, device } => {
                     let sk = std::env::var("SF_LICENSE_SIGNING_KEY").map_err(|_| anyhow::anyhow!("set SF_LICENSE_SIGNING_KEY"))?;
                     let today = chrono::Utc::now().date_naive();
-                    let payload = sf_license::Payload { email, expires: if plan == "lifetime" { None } else { Some(today + chrono::Duration::days(days)) }, plan, issued: today };
+                    let payload = sf_license::Payload { email, expires: if plan == "lifetime" { None } else { Some(today + chrono::Duration::days(days)) }, plan, issued: today, device };
                     println!("{}", sf_license::sign(&sk, &payload)?);
                 }
                 LicenseCmd::Verify { key } => {

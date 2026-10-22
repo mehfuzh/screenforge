@@ -1,17 +1,24 @@
-// The app calls this with { email } when a monthly key has expired: returns the newest key
-// for that email if the subscription is still active (a renewal was paid).
+// Renewed key for the license's computer: { email, device } → { key, plan, expires } (signed
+// for that computer) when it is the one the license is activated on (see `license-activate`). An unknown device gets
+// { error: "verify" } (403) instead of a key, so knowing a customer's email is not enough.
+// Builds before device activation sent { email } only; they are asked to update.
 import { serve } from "https://deno.land/std@0.190.0/http/server.ts";
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2.57.2";
-
-const cors = { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type" };
+import { cleanEmail, cors, db, isActivated, isDevice, json, keyFor, newestLicense } from "../_shared/activation.ts";
 
 serve(async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: cors });
-  const { email } = await req.json().catch(() => ({}));
-  if (!email) return new Response(JSON.stringify({ error: "email required" }), { status: 400, headers: cors });
-  const db = createClient(Deno.env.get("SUPABASE_URL") ?? "", Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "", { auth: { persistSession: false } });
-  const { data } = await db.from("licenses").select("key, expires_at, plan").ilike("email", email).order("created_at", { ascending: false }).limit(1);
-  const row = data?.[0];
-  if (!row) return new Response(JSON.stringify({ error: "no license" }), { status: 404, headers: cors });
-  return new Response(JSON.stringify({ key: row.key, plan: row.plan, expires: row.expires_at }), { headers: { ...cors, "Content-Type": "application/json" } });
+  const body = await req.json().catch(() => ({}));
+  const email = cleanEmail(body.email);
+  if (!email) return json({ error: "email required" }, 400);
+  if (!isDevice(body.device)) return json({ error: "Update ScreenForge to activate your license." }, 400);
+  try {
+    const client = db();
+    const lic = await newestLicense(client, email);
+    if (!lic) return json({ error: "no license" }, 404);
+    if (!(await isActivated(client, lic.email.toLowerCase(), body.device))) return json({ error: "verify" }, 403);
+    return json(await keyFor(lic, body.device));
+  } catch (e) {
+    console.error("license-refresh", e);
+    return json({ error: "The license server had a problem. Try again in a moment." }, 500);
+  }
 });
