@@ -10,51 +10,79 @@ use std::time::Instant;
 use anyhow::{Context, Result};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use parking_lot::Mutex;
+use sf_recording::discover::AudioDevice;
 
 /// Recordings shorter than this are dropped (a slip of the button).
 pub const MIN_MS: f64 = 300.0;
 
-/// RMS level below which a take counts as silent (-50 dBFS; speech sits around -30..-20). A
-/// microphone held by a call, or muted, delivers about this little; a single click or bump
-/// does not lift the RMS of a take the way it lifts its peak.
-pub const SILENT_RMS: f64 = 0.003_16;
+/// Level a 50 ms stretch must reach to count as voice (-45 dBFS RMS). A room heard through a
+/// working microphone sits near -65 dB, an unplugged or muted one lower still, and speech
+/// reaches -40..-20 dB even with the input volume turned well down.
+pub const VOICE_RMS: f64 = 0.005_62;
 
-/// Samples captured so far and their running sum of squares (for the RMS level).
+/// Stretches of voice a take needs before it has sound (200 ms in all). Counting stretches
+/// rather than the level of the whole take keeps pauses from making quiet speech "silent",
+/// while a single click or bump fills one stretch at most.
+pub const MIN_VOICE_WINDOWS: u32 = 4;
+
+/// Samples captured so far, cut into 50 ms stretches to count the ones with voice in them.
 #[derive(Default)]
 struct Capture {
     samples: Vec<f32>,
-    sum_sq: f64,
+    /// Samples per stretch (50 ms at the device rate).
+    window: usize,
+    win_sum_sq: f64,
+    win_len: usize,
+    voice_windows: u32,
 }
 
 impl Capture {
-    fn rms(&self) -> f64 {
-        (self.sum_sq / self.samples.len().max(1) as f64).sqrt()
+    fn new(rate: u32) -> Capture {
+        Capture { samples: Vec::with_capacity(rate as usize * 60), window: (rate as usize / 20).max(1), ..Default::default() }
+    }
+
+    fn push(&mut self, v: f32) {
+        self.samples.push(v);
+        self.win_sum_sq += (v as f64) * (v as f64);
+        self.win_len += 1;
+        if self.win_len >= self.window {
+            if (self.win_sum_sq / self.win_len as f64).sqrt() >= VOICE_RMS {
+                self.voice_windows += 1;
+            }
+            self.win_sum_sq = 0.0;
+            self.win_len = 0;
+        }
+    }
+
+    fn is_silent(&self) -> bool {
+        self.voice_windows < MIN_VOICE_WINDOWS
     }
 }
 
-/// Names of the input devices, for the microphone menu.
-pub fn input_devices() -> Vec<String> {
-    let host = cpal::default_host();
-    host.input_devices().map(|it| it.filter_map(|d| d.description().ok().map(|n| n.name().to_string())).collect()).unwrap_or_default()
+/// Microphones for the menu: the list the recording toolbar offers (on Linux every PipeWire
+/// source by name, plus a `default` entry saying which source the system default is).
+pub fn microphones() -> Vec<AudioDevice> {
+    sf_recording::discover::microphones()
 }
 
-/// Name of the system's default input device.
-pub fn default_input_name() -> Option<String> {
-    cpal::default_host().default_input_device().and_then(|d| d.description().ok()).map(|n| n.name().to_string())
+/// Label of the "System default" row. Linux lists its own `default` entry, already named after
+/// the source it routes to; elsewhere it is the device flagged as the default.
+pub fn default_label(mics: &[AudioDevice]) -> String {
+    match mics.iter().find(|m| m.id == "default") {
+        Some(m) => m.name.clone(),
+        None => match mics.iter().find(|m| m.is_default) {
+            Some(m) => format!("System default ({})", m.name),
+            None => "System default".into(),
+        },
+    }
 }
 
 /// A saved take.
 pub struct Take {
     pub file_name: String,
     pub duration_ms: f64,
-    /// RMS level of the whole take (0..1).
-    pub rms: f64,
-}
-
-impl Take {
-    pub fn is_silent(&self) -> bool {
-        self.rms < SILENT_RMS
-    }
+    /// Nothing in the take was loud enough to be a voice (see [`MIN_VOICE_WINDOWS`]).
+    pub silent: bool,
 }
 
 pub struct VoiceRecorder {
@@ -70,17 +98,19 @@ pub struct VoiceRecorder {
 }
 
 impl VoiceRecorder {
-    /// Open the input device named `device` (the system default when `None` or not found) and
-    /// start capturing.
-    pub fn start(source_start_ms: f64, device: Option<&str>) -> Result<VoiceRecorder> {
+    /// Open microphone `mic` from [`microphones`] (the system default when `None` or no longer
+    /// there) and start capturing; `device_name` is what the status line calls it.
+    pub fn start(source_start_ms: f64, mic: Option<&AudioDevice>, device_name: String) -> Result<VoiceRecorder> {
         let host = cpal::default_host();
-        let chosen = device.and_then(|want| host.input_devices().ok()?.find(|d| d.description().map(|n| n.name() == want).unwrap_or(false)));
+        // Linux: a `pw:` id opens the default PCM pointed at that PipeWire source; the guard
+        // clears the target again when this function returns, after the stream is open
+        let (open_as, _pipewire_target) = sf_recording::discover::alsa_selector(mic.map_or("default", |m| m.id.as_str()));
+        let chosen = mic.and_then(|m| host.input_devices().ok()?.find(|d| d.id().map(|i| i.id() == open_as).unwrap_or(false) || d.description().map(|n| n.name() == m.name).unwrap_or(false)));
         let device = chosen.or_else(|| host.default_input_device()).context("no microphone found")?;
-        let device_name = device.description().map(|d| d.name().to_string()).unwrap_or_else(|_| "Microphone".into());
         let config = device.default_input_config().context("the microphone has no usable format")?;
         let channels = config.channels().max(1) as usize;
         let rate = config.sample_rate();
-        let capture = Arc::new(Mutex::new(Capture { samples: Vec::with_capacity(rate as usize * 60), sum_sq: 0.0 }));
+        let capture = Arc::new(Mutex::new(Capture::new(rate)));
         let level = Arc::new(AtomicU32::new(0f32.to_bits()));
         let (buf, lvl) = (capture.clone(), level.clone());
         let push = move |frames: &mut dyn Iterator<Item = f32>| {
@@ -88,8 +118,7 @@ impl VoiceRecorder {
             let mut out = buf.lock();
             for v in frames {
                 peak = peak.max(v.abs());
-                out.sum_sq += (v as f64) * (v as f64);
-                out.samples.push(v);
+                out.push(v);
             }
             // fast attack, slow release (as the picker's level meter)
             let prev = f32::from_bits(lvl.load(Ordering::Relaxed));
@@ -119,7 +148,7 @@ impl VoiceRecorder {
 
     /// What came in so far is below the silence threshold.
     pub fn is_silent(&self) -> bool {
-        self.capture.lock().rms() < SILENT_RMS
+        self.capture.lock().is_silent()
     }
 
     /// Stop capturing and write the take to `dir` as a new WAV file, or `None` when the take
@@ -128,7 +157,8 @@ impl VoiceRecorder {
         let VoiceRecorder { rate, capture, _stream, .. } = self;
         drop(_stream);
         let capture = std::mem::take(&mut *capture.lock());
-        let (rms, samples) = (capture.rms(), capture.samples);
+        let silent = capture.is_silent();
+        let samples = capture.samples;
         let duration_ms = samples.len() as f64 * 1000.0 / rate as f64;
         if duration_ms < MIN_MS {
             return Ok(None);
@@ -136,7 +166,7 @@ impl VoiceRecorder {
         std::fs::create_dir_all(dir)?;
         let name = format!("voiceover-{}.wav", chrono::Local::now().format("%Y%m%d-%H%M%S-%3f"));
         write_wav(&dir.join(&name), rate, &samples)?;
-        Ok(Some(Take { file_name: name, duration_ms, rms }))
+        Ok(Some(Take { file_name: name, duration_ms, silent }))
     }
 }
 
@@ -164,17 +194,28 @@ fn write_wav(path: &Path, rate: u32, samples: &[f32]) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    fn take(samples: impl Iterator<Item = f32>) -> super::Capture {
+        let mut c = super::Capture::new(48_000);
+        samples.for_each(|v| c.push(v));
+        c
+    }
+
     #[test]
     fn a_click_in_silence_is_still_silent() {
-        let mut c = super::Capture::default();
-        for i in 0..48_000 {
-            let v = if i == 100 { 0.04 } else { 0.0005 };
-            c.sum_sq += v * v;
-            c.samples.push(v as f32);
-        }
-        assert!(c.rms() < super::SILENT_RMS);
-        let speech = super::Capture { samples: vec![0.05; 10], sum_sq: 10.0 * 0.05 * 0.05 };
-        assert!(speech.rms() > super::SILENT_RMS);
+        // room tone of a working microphone (-66 dB) with one loud click
+        let c = take((0..48_000 * 3).map(|i| if i == 100 { 0.5 } else if i % 2 == 0 { 0.0005 } else { -0.0005 }));
+        assert!(c.is_silent());
+    }
+
+    #[test]
+    fn quiet_speech_between_pauses_has_sound() {
+        // half a second of speech at -40 dB inside three seconds of room tone: about -48 dB
+        // over the whole take, which the old whole-take level called silent
+        let c = take((0..48_000 * 3).map(|i| {
+            let a = if (48_000..72_000).contains(&i) { 0.014 } else { 0.0005 };
+            if i % 2 == 0 { a } else { -a }
+        }));
+        assert!(!c.is_silent());
     }
 
     #[test]
