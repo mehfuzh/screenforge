@@ -7,7 +7,9 @@
 use std::collections::HashMap;
 use std::io::Read;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::mpsc::{channel, Receiver};
+use std::sync::Arc;
 
 use serde::Deserialize;
 
@@ -63,6 +65,8 @@ pub struct Browser {
     /// Photo id being downloaded.
     pub applying: Option<String>,
     apply_rx: Option<Receiver<Result<Applied, String>>>,
+    /// Download progress of `applying` as f32 bits: 0..1, or negative while the size is unknown.
+    progress: Arc<AtomicU32>,
 }
 
 impl Browser {
@@ -107,6 +111,13 @@ impl Browser {
         self.thumbs.get(id).map(PathBuf::as_path)
     }
 
+    /// Fraction of the photo being applied that has downloaded, `None` while its size is not
+    /// known yet.
+    pub fn progress(&self) -> Option<f32> {
+        let v = f32::from_bits(self.progress.load(Ordering::Relaxed));
+        (v >= 0.0).then_some(v.min(1.0))
+    }
+
     /// Download `photo` into `assets_dir` (registering the download with Unsplash first).
     pub fn apply(&mut self, ctx: &egui::Context, photo: Photo, assets_dir: PathBuf) {
         if self.apply_rx.is_some() {
@@ -115,8 +126,10 @@ impl Browser {
         let (tx, rx) = channel();
         let ctx = ctx.clone();
         self.applying = Some(photo.id.clone());
+        self.progress.store((-1f32).to_bits(), Ordering::Relaxed);
+        let progress = self.progress.clone();
         std::thread::spawn(move || {
-            let _ = tx.send(download_photo(photo, &assets_dir));
+            let _ = tx.send(download_photo(photo, &assets_dir, &progress, &ctx));
             ctx.request_repaint();
         });
         self.apply_rx = Some(rx);
@@ -170,7 +183,7 @@ impl Browser {
             let _ = std::fs::create_dir_all(&dir);
             for (id, url) in todo {
                 let path = dir.join(format!("{}.jpg", safe_id(&id)));
-                if path.is_file() || fetch(&url, &path, 4 * 1024 * 1024).is_ok() {
+                if path.is_file() || fetch(&url, &path, 4 * 1024 * 1024, None).is_ok() {
                     let _ = tx.send((id, path));
                     ctx.request_repaint();
                 }
@@ -182,24 +195,39 @@ impl Browser {
 }
 
 /// Register the download with Unsplash, then fetch the image into `assets_dir`.
-fn download_photo(photo: Photo, assets_dir: &Path) -> Result<Applied, String> {
+fn download_photo(photo: Photo, assets_dir: &Path, progress: &AtomicU32, ctx: &egui::Context) -> Result<Applied, String> {
     let v = sf_license::call_backend("unsplash", serde_json::json!({ "download": photo.download_location }))?;
     // the download endpoint hands back the original; ask the CDN for a 4K-wide JPEG instead
     let url = v.get("url").and_then(|u| u.as_str()).map(|u| format!("{u}{}w=3840&fm=jpg&q=85", if u.contains('?') { "&" } else { "?" })).unwrap_or_else(|| photo.full.clone());
     std::fs::create_dir_all(assets_dir).map_err(|e| e.to_string())?;
     let file_name = format!("unsplash-{}.jpg", safe_id(&photo.id));
-    fetch(&url, &assets_dir.join(&file_name), MAX_IMAGE_BYTES)?;
+    fetch(&url, &assets_dir.join(&file_name), MAX_IMAGE_BYTES, Some((progress, ctx)))?;
     Ok(Applied { photo, file_name })
 }
 
 /// GET an image from Unsplash's CDN into `dest` (written via a temp file, at most `max` bytes).
-fn fetch(url: &str, dest: &Path, max: u64) -> Result<(), String> {
+/// With `progress`, the downloaded fraction is stored there as it arrives (when the server
+/// sends the length) and the UI is asked to repaint.
+fn fetch(url: &str, dest: &Path, max: u64, progress: Option<(&AtomicU32, &egui::Context)>) -> Result<(), String> {
     if !url.starts_with("https://images.unsplash.com/") {
         return Err("not an Unsplash image".into());
     }
     let resp = ureq::get(url).timeout(std::time::Duration::from_secs(60)).call().map_err(|e| format!("download failed: {e}"))?;
-    let mut bytes = vec![];
-    resp.into_reader().take(max + 1).read_to_end(&mut bytes).map_err(|e| e.to_string())?;
+    let total = resp.header("Content-Length").and_then(|v| v.parse::<u64>().ok()).filter(|n| *n > 0);
+    let mut reader = resp.into_reader().take(max + 1);
+    let mut bytes = Vec::with_capacity(total.unwrap_or(0).min(max) as usize);
+    let mut chunk = [0u8; 64 * 1024];
+    loop {
+        let n = reader.read(&mut chunk).map_err(|e| e.to_string())?;
+        if n == 0 {
+            break;
+        }
+        bytes.extend_from_slice(&chunk[..n]);
+        if let (Some((p, ctx)), Some(total)) = (progress, total) {
+            p.store((bytes.len() as f32 / total as f32).to_bits(), Ordering::Relaxed);
+            ctx.request_repaint();
+        }
+    }
     if bytes.len() as u64 > max {
         return Err("image too large".into());
     }
@@ -241,7 +269,7 @@ mod tests {
         assert_eq!(super::safe_id("a/../b_C-9"), "ab_C-9");
         assert_eq!(super::referral("https://unsplash.com/@x"), "https://unsplash.com/@x?utm_source=screenforge&utm_medium=referral");
         assert_eq!(super::referral("https://unsplash.com/?a=1"), "https://unsplash.com/?a=1&utm_source=screenforge&utm_medium=referral");
-        assert!(super::fetch("https://evil.example/x.jpg", std::path::Path::new("/tmp/never"), 10).is_err());
+        assert!(super::fetch("https://evil.example/x.jpg", std::path::Path::new("/tmp/never"), 10, None).is_err());
     }
 
     #[test]

@@ -1385,7 +1385,10 @@ fn unsplash_ui(ed: &mut Editor, ui: &mut egui::Ui) {
             let selected = current_id.as_deref() == Some(photo.id.as_str());
             let author = photo.author.clone().unwrap_or_default();
             let tip = if ed.unsplash.applying.as_deref() == Some(photo.id.as_str()) { "Downloading…".to_string() } else { format!("Photo by {author}") };
-            if wallpaper_tile(ui, ed.unsplash.thumb(&photo.id), &tip, tile, selected).clicked() && !selected {
+            let resp = wallpaper_tile(ui, ed.unsplash.thumb(&photo.id), &tip, tile, selected);
+            if ed.unsplash.applying.as_deref() == Some(photo.id.as_str()) {
+                download_ring(ui, resp.rect, ed.unsplash.progress());
+            } else if resp.clicked() && !selected {
                 pick = Some(photo.clone());
             }
             if (i + 1) % cols == 0 {
@@ -1397,15 +1400,35 @@ fn unsplash_ui(ed: &mut Editor, ui: &mut egui::Ui) {
         let assets = ed.session.pkg.path.join("assets");
         ed.unsplash.apply(&ctx, photo, assets);
     }
-    if ed.unsplash.applying.is_some() {
-        widgets::hint(ui, "Downloading the photo…");
-    }
     if ed.unsplash.can_load_more() && widgets::secondary_button(ui, "Load more").clicked() {
         ed.unsplash.load_more(&ctx);
     }
     if ed.unsplash.is_busy() {
         ctx.request_repaint_after(std::time::Duration::from_millis(150));
     }
+}
+
+/// Over a tile whose full-size photo is downloading: the tile dimmed, and a ring that fills
+/// with `progress` (a spinning arc while the size is unknown).
+fn download_ring(ui: &egui::Ui, rect: egui::Rect, progress: Option<f32>) {
+    let pal = theme::p();
+    let painter = ui.painter();
+    painter.rect_filled(rect, 9.0, pal.bg.gamma_multiply(0.6));
+    let (c, r) = (rect.center(), (rect.width().min(rect.height()) * 0.18).clamp(10.0, 22.0));
+    painter.circle_stroke(c, r, egui::Stroke::new(3.0, pal.text_faint.gamma_multiply(0.6)));
+    let t = ui.input(|i| i.time) as f32;
+    let (start, sweep) = match progress {
+        // from 12 o'clock, clockwise
+        Some(f) => (-std::f32::consts::FRAC_PI_2, f.max(0.02) * std::f32::consts::TAU),
+        None => (t * 5.0, std::f32::consts::FRAC_PI_2),
+    };
+    let n = ((sweep / std::f32::consts::TAU) * 48.0).ceil().max(2.0) as usize;
+    let points: Vec<egui::Pos2> = (0..=n).map(|i| start + sweep * i as f32 / n as f32).map(|a| c + egui::vec2(a.cos(), a.sin()) * r).collect();
+    painter.add(egui::Shape::line(points, egui::Stroke::new(3.0, pal.accent)));
+    if let Some(f) = progress {
+        painter.text(c + egui::vec2(0.0, r + 12.0), egui::Align2::CENTER_CENTER, format!("{:.0}%", f * 100.0), egui::FontId::proportional(11.0), pal.text);
+    }
+    ui.ctx().request_repaint();
 }
 
 fn wallpaper_tile(ui: &mut egui::Ui, path: Option<&std::path::Path>, name: &str, size: f32, selected: bool) -> egui::Response {
