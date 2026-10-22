@@ -105,6 +105,8 @@ pub struct VoiceOverSpan {
     pub file_offset_ms: f64,
     pub volume: f64,
     pub muted: bool,
+    /// Lane on the shared audio timeline.
+    pub layer: u32,
 }
 
 impl VoiceOverSpan {
@@ -139,6 +141,7 @@ pub fn voice_over_spans(scene: &Scene, timeline: &crate::timeline::Timeline) -> 
                 file_offset_ms: v.file_offset_ms.max(0.0),
                 volume: v.volume,
                 muted: v.is_disabled,
+                layer: v.layer,
             })
         })
         .filter(|s| s.output_duration_ms() > 0.0)

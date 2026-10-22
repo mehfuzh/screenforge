@@ -37,8 +37,8 @@ pub struct Editor {
     pub mask_drag: Option<crate::masks::RegionDrag>,
     /// Selected detached audio clip (id).
     pub selected_audio: Option<String>,
-    /// The background music block is selected (⌫ removes the music).
-    pub selected_music: bool,
+    /// Selected background music clip (id); ⌫ removes it, or the music with its last clip.
+    pub selected_music: Option<String>,
     /// Selected voice-over (id).
     pub selected_voice_over: Option<String>,
     /// A voice-over is being recorded: the video plays muted from where it started.
@@ -95,7 +95,11 @@ impl Editor {
     }
 
     /// Finish opening on the UI thread with a session from `load_session`.
-    pub fn with_session(path: &Path, session: Session, gpu: Gpu) -> Self {
+    pub fn with_session(path: &Path, mut session: Session, gpu: Gpu) -> Self {
+        // older projects (and Screen Studio ones) can have audio items overlapping on a lane:
+        // give each its own before anything is drawn (saved with the next edit)
+        let timeline = session.timeline.clone();
+        sf_engine::lanes::settle(&mut session.pkg.project, &timeline);
         let preview_size = session.output_size(1080);
         let compositor = Compositor::new(gpu);
         let audio = AudioPlayer::new();
@@ -119,7 +123,7 @@ impl Editor {
             selected_mask: None,
             mask_drag: None,
             selected_audio: None,
-            selected_music: false,
+            selected_music: None,
             selected_voice_over: None,
             voice_rec: None,
             voice_mic: None,
@@ -202,7 +206,7 @@ impl Editor {
         self.selected_zoom = None;
         self.selected_slice = None;
         self.selected_audio = None;
-        self.selected_music = false;
+        self.selected_music = None;
         self.selected_voice_over = None;
     }
 
@@ -230,6 +234,9 @@ impl Editor {
 
     fn after_edit(&mut self) {
         self.session.rebuild();
+        // keep the shared audio lanes valid: nothing overlaps on a lane, no empty lanes
+        let timeline = self.session.timeline.clone();
+        sf_engine::lanes::settle(&mut self.session.pkg.project, &timeline);
         self.preview_size = self.session.output_size(1080);
         self.mark_dirty();
         self.last_rendered_ms = None;
@@ -310,22 +317,60 @@ impl Editor {
         });
     }
 
-    /// Move a detached audio clip up (`delta` < 0) or down (`delta` > 0) by whole lanes; one
-    /// lane past the bottom one creates a new layer, and lanes left empty collapse.
-    pub fn move_audio_clip_layer(&mut self, id: &str, delta: i32) {
-        use sf_project::SceneAudioExt;
-        let idc = id.to_string();
+    /// The selected item on the shared audio lanes, as its lane key (`sf_engine::lanes::key`).
+    pub fn selected_lane_key(&self) -> Option<String> {
+        use sf_engine::lanes::{key, Kind};
+        self.selected_audio.as_deref().map(|id| key(Kind::Recorded, id)).or_else(|| self.selected_voice_over.as_deref().map(|id| key(Kind::Voice, id))).or_else(|| self.selected_music.as_deref().map(|id| key(Kind::Music, id)))
+    }
+
+    /// Move the audio item `key` (recorded clip, voice-over or music clip) up (`delta` < 0) or
+    /// down (`delta` > 0) by whole lanes; one lane past the bottom one creates a new lane, and
+    /// lanes left empty collapse.
+    pub fn move_lane_item(&mut self, key: &str, delta: i32) {
+        let (timeline, key) = (self.session.timeline.clone(), key.to_string());
         let mut layer = None;
-        self.edit(|p| {
-            let scene = &mut p.scenes[0];
-            if let Some(mut cs) = scene.audio_clips() {
-                layer = sf_project::audio_clips::move_clip_layer(&mut cs, &idc, delta);
-                scene.set_audio_clips(Some(cs));
-            }
-        });
+        self.edit(|p| layer = sf_engine::lanes::move_layer(p, &timeline, &key, delta));
         match layer {
-            Some(l) => self.set_status(&format!("Audio clip on layer {}", l + 1)),
+            Some(l) => self.set_status(&format!("Moved to layer {}", l + 1)),
             None => self.set_status(if delta > 0 { "No room on the layer below" } else { "No room on the layer above" }),
+        }
+    }
+
+    /// Select a background music clip (and nothing else).
+    pub fn select_music(&mut self, id: String) {
+        self.selected_music = Some(id);
+        self.selected_zoom = None;
+        self.selected_slice = None;
+        self.selected_mask = None;
+        self.selected_audio = None;
+        self.selected_voice_over = None;
+    }
+
+    /// Remove the background music (track and clips).
+    pub fn remove_music(&mut self) {
+        use sf_project::SceneMusicExt;
+        self.selected_music = None;
+        self.edit(|p| {
+            p.config.audio.background_audio_file_name = None;
+            p.scenes[0].set_music_clips(None);
+        });
+        self.reload_audio();
+    }
+
+    /// Split music clip `id` at output time `t`; the right-hand part is selected.
+    pub fn split_music(&mut self, id: &str, t: f64) {
+        use sf_project::SceneMusicExt;
+        let mut clips = sf_engine::lanes::music_clips(&self.session.pkg.project, &self.session.timeline);
+        let Some(i) = clips.iter().position(|c| c.id == id) else { return };
+        match clips[i].split_at_output(t) {
+            Some(right) => {
+                let rid = right.id.clone();
+                clips.insert(i + 1, right);
+                self.edit(move |p| p.scenes[0].set_music_clips(Some(clips)));
+                self.select_music(rid);
+                self.set_status("Split music");
+            }
+            None => self.set_status("Move the playhead inside the music clip to split it"),
         }
     }
 
@@ -415,7 +460,7 @@ impl Editor {
         self.selected_slice = None;
         self.selected_mask = None;
         self.selected_audio = None;
-        self.selected_music = false;
+        self.selected_music = None;
     }
 
     /// Change one voice-over through `edit` (no-op when it is gone).
@@ -645,8 +690,8 @@ impl Editor {
         if next_b { crate::timeline::jump_boundary(self, true); }
         if toggle_sidebar { self.sidebar_open = !self.sidebar_open; }
         if layer_delta != 0 {
-            if let Some(id) = self.selected_audio.clone() {
-                self.move_audio_clip_layer(&id, layer_delta);
+            if let Some(key) = self.selected_lane_key() {
+                self.move_lane_item(&key, layer_delta);
             }
         }
         if let Some(s) = section {
@@ -667,6 +712,12 @@ impl Editor {
                 return;
             }
         }
+        if let Some(id) = self.selected_music.clone() {
+            if sf_engine::lanes::music_clips(&self.session.pkg.project, &self.session.timeline).iter().any(|m| m.id == id && m.contains_output(t)) {
+                self.split_music(&id, t);
+                return;
+            }
+        }
         // Split the selected audio clip only when the playhead is over it; otherwise cut the video.
         let audio_hit = self.selected_audio.clone().filter(|id| {
             use sf_project::SceneAudioExt;
@@ -684,10 +735,17 @@ impl Editor {
     }
 
     pub fn delete_selected(&mut self) {
-        if std::mem::take(&mut self.selected_music) {
-            self.edit(|p| p.config.audio.background_audio_file_name = None);
-            self.reload_audio();
-            self.set_status("Removed background music");
+        if let Some(id) = self.selected_music.take() {
+            use sf_project::SceneMusicExt;
+            let mut clips = sf_engine::lanes::music_clips(&self.session.pkg.project, &self.session.timeline);
+            clips.retain(|c| c.id != id);
+            if clips.is_empty() {
+                self.remove_music();
+                self.set_status("Removed background music");
+            } else {
+                self.edit(move |p| p.scenes[0].set_music_clips(Some(clips)));
+                self.set_status("Removed music clip");
+            }
             return;
         }
         if let Some(id) = self.selected_voice_over.take() {
@@ -1255,7 +1313,7 @@ impl Editor {
         if widgets::icon_button(&mut left, widgets::Icon::Scissors, 20.0, "Split at playhead (S)").clicked() {
             self.split_at_playhead();
         }
-        let can_delete = self.selected_zoom.is_some() || self.selected_mask.is_some() || self.selected_audio.is_some() || self.selected_voice_over.is_some() || (self.selected_slice.is_some() && self.session.pkg.project.scenes[0].slices.len() > 1);
+        let can_delete = self.selected_zoom.is_some() || self.selected_mask.is_some() || self.selected_audio.is_some() || self.selected_voice_over.is_some() || self.selected_music.is_some() || (self.selected_slice.is_some() && self.session.pkg.project.scenes[0].slices.len() > 1);
         if widgets::icon_button(&mut left, widgets::Icon::Trash, 16.0, "Delete selection (⌫)").clicked() && can_delete {
             self.delete_selected();
         }

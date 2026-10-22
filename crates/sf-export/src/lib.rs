@@ -83,7 +83,26 @@ pub fn audio_inputs(session: &Session) -> Vec<AudioMixInput> {
     }
     if !cfg.audio.mute_background_audio && cfg.audio.background_audio_volume > 0.0 {
         if let Some(path) = session.background_audio_path() {
-            inputs.push(AudioMixInput { path, volume: cfg.audio.background_audio_volume, delay_ms: 0.0, start_ms: None, end_ms: None, tempo: 1.0, loop_input: true, filter: None });
+            // one looping input per music clip, started at its place in the track and cut to
+            // its length (`atrim` after the loop, so a clip longer than the track keeps going)
+            let track_ms = sf_media::probe(&path).ok().and_then(|i| i.duration_ms()).filter(|d| *d > 0.0);
+            for m in sf_engine::lanes::music_clips(&session.pkg.project, &session.timeline) {
+                let dur = m.duration_ms.min(session.duration_ms() - m.output_start_ms);
+                if dur <= 1.0 {
+                    continue;
+                }
+                let offset = track_ms.map(|t| m.file_offset_ms.rem_euclid(t)).unwrap_or(0.0);
+                inputs.push(AudioMixInput {
+                    path: path.clone(),
+                    volume: cfg.audio.background_audio_volume,
+                    delay_ms: m.output_start_ms,
+                    start_ms: (offset > 0.0).then_some(offset),
+                    end_ms: None,
+                    tempo: 1.0,
+                    loop_input: true,
+                    filter: Some(format!("atrim=duration={:.3}", dur / 1000.0)),
+                });
+            }
         }
     }
     inputs

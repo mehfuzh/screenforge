@@ -978,10 +978,10 @@ pub fn audio_item_ui(ed: &mut Editor, ui: &mut egui::Ui) {
     widgets::title(ui, &format!("Layer {}", clip.layer + 1));
     ui.horizontal_wrapped(|ui| {
         if ui.add_enabled(clip.layer > 0, egui::Button::new("Move up")).clicked() {
-            ed.move_audio_clip_layer(&id, -1);
+            ed.move_lane_item(&id, -1);
         }
         if ui.button("Move down").clicked() {
-            ed.move_audio_clip_layer(&id, 1);
+            ed.move_lane_item(&id, 1);
         }
     });
     widgets::hint(ui, "Clips on one layer never overlap; clips on different layers can, and play together. Drag a clip down onto the empty lane to start a new layer (⌥↑ / ⌥↓).");
@@ -1117,8 +1117,7 @@ fn audio_ui(ed: &mut Editor, ui: &mut egui::Ui) {
     categories.dedup();
     let none_sel = current.is_none();
     if ui.selectable_label(none_sel, "None").clicked() && !none_sel {
-        ed.edit(|p| p.config.audio.background_audio_file_name = None);
-        ed.reload_audio();
+        ed.remove_music();
     }
     for cat in categories {
         let title = {
