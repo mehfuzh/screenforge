@@ -877,8 +877,47 @@ pub struct VoiceOver {
     pub attach_mode: String,
     #[serde(default = "yes")]
     pub hide_recording: bool,
+    /// ScreenForge extension: where in the audio file playback starts (ms), so a take can be
+    /// trimmed at the front or split in two. Screen Studio always plays from the beginning.
+    #[serde(default, rename = "sfFileOffsetMs", skip_serializing_if = "is_zero")]
+    pub file_offset_ms: f64,
+    /// ScreenForge extension: lane on the shared audio timeline (0 = top).
+    #[serde(default, rename = "sfLayer", skip_serializing_if = "is_zero_u32")]
+    pub layer: u32,
     #[serde(flatten)]
     pub extra: Extra,
+}
+
+fn is_zero(v: &f64) -> bool {
+    *v == 0.0
+}
+
+fn is_zero_u32(v: &u32) -> bool {
+    *v == 0
+}
+
+impl VoiceOver {
+    /// Folder inside the project package that holds the voice-over audio files.
+    pub const DIR: &'static str = "voiceovers";
+
+    /// A narration recorded from the microphone, starting at source time `source_start_ms`.
+    pub fn microphone(source_start_ms: f64, duration_ms: f64, file_name: impl Into<String>) -> Self {
+        VoiceOver {
+            id: new_id(),
+            source_start_ms,
+            voiceover_duration_ms: duration_ms,
+            is_disabled: false,
+            file_name: file_name.into(),
+            time_scale: 1.0,
+            volume: 1.0,
+            source: serde_json::json!({ "type": "microphone" }),
+            attach_mode: first_frame(),
+            hide_recording: false,
+            file_offset_ms: 0.0,
+            layer: 0,
+            extra: Extra::new(),
+        }
+    }
 }
 
 fn one_f() -> f64 {

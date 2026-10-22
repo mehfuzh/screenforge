@@ -16,6 +16,7 @@ pub mod autozoom;
 pub mod camera;
 pub mod captions;
 pub mod cursor;
+pub mod lanes;
 pub mod spring;
 pub mod shortcuts;
 pub mod stage;

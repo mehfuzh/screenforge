@@ -357,6 +357,8 @@ fn migrate_voice_over(v: &Value) -> Option<v4::VoiceOver> {
         source: v.get("source").cloned().unwrap_or_else(|| serde_json::json!({ "type": "microphone" })),
         attach_mode: v.get("attachMode").and_then(Value::as_str).unwrap_or("first-frame").to_string(),
         hide_recording: v.get("hideRecording").and_then(Value::as_bool).unwrap_or(true),
+        file_offset_ms: 0.0,
+        layer: 0,
         extra: Extra::new(),
     })
 }

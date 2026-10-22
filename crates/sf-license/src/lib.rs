@@ -34,9 +34,11 @@ fn backend_configured() -> bool {
     !SUPABASE_URL.contains("SUPABASE_PROJECT_REF")
 }
 
-fn call_function(name: &str, body: serde_json::Value) -> Result<serde_json::Value, String> {
+/// POST `body` to edge function `name`: the JSON reply, or the HTTP status (0 for a network
+/// failure) and a message.
+fn request(name: &str, body: serde_json::Value) -> Result<serde_json::Value, (u16, String)> {
     if !backend_configured() {
-        return Err("The license server is not configured in this build.".into());
+        return Err((0, "The license server is not configured in this build.".into()));
     }
     let url = format!("{SUPABASE_URL}/functions/v1/{name}");
     let resp = ureq::post(&url)
@@ -45,11 +47,20 @@ fn call_function(name: &str, body: serde_json::Value) -> Result<serde_json::Valu
         .timeout(std::time::Duration::from_secs(15))
         .send_json(body);
     match resp {
-        Ok(r) => r.into_json().map_err(|e| e.to_string()),
-        Err(ureq::Error::Status(404, _)) => Err("no license".into()),
-        Err(ureq::Error::Status(code, r)) => Err(r.into_json::<serde_json::Value>().ok().and_then(|v| v.get("error").and_then(|e| e.as_str()).map(String::from)).unwrap_or_else(|| format!("server returned {code}"))),
-        Err(e) => Err(format!("network error: {e}")),
+        Ok(r) => r.into_json().map_err(|e| (0, e.to_string())),
+        Err(ureq::Error::Status(code, r)) => Err((code, r.into_json::<serde_json::Value>().ok().and_then(|v| v.get("error").and_then(|e| e.as_str()).map(String::from)).unwrap_or_else(|| format!("server returned {code}")))),
+        Err(e) => Err((0, format!("network error: {e}"))),
     }
+}
+
+/// License calls: a 404 from these functions means there is no license.
+fn call_function(name: &str, body: serde_json::Value) -> Result<serde_json::Value, String> {
+    request(name, body).map_err(|(code, msg)| if code == 404 { "no license".into() } else { msg })
+}
+
+/// Call another ScreenForge backend function (e.g. the `unsplash` proxy).
+pub fn call_backend(name: &str, body: serde_json::Value) -> Result<serde_json::Value, String> {
+    request(name, body).map_err(|(code, msg)| if code == 404 { format!("the {name} service is not available yet") } else { msg })
 }
 
 /// Ask the backend for the newest key issued to `email`. Verifies and saves it on success.

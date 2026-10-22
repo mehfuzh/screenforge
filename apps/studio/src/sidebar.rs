@@ -29,6 +29,51 @@ fn slider(ed: &mut Editor, ui: &mut egui::Ui, label: &str, get: impl Fn(&sf_proj
     }
 }
 
+/// A preset tile painted with its gradient (a vertex-coloured grid, so stops in the middle
+/// show too); outlined when it is the project's gradient.
+fn gradient_swatch(ui: &mut egui::Ui, g: &sf_project::schema::common::Gradient, selected: bool, name: &str) -> egui::Response {
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(64.0, 40.0), egui::Sense::click());
+    let colour_at = |t: f32| {
+        let stops: Vec<(sf_render::Color, f32)> = g.stops.iter().map(|s| (sf_render::Color::from_hex(&s.color).unwrap_or(sf_render::Color::BLACK), s.at as f32)).collect();
+        // before the first stop / after the last: that stop's colour
+        let (c0, c1, f) = match stops.iter().position(|(_, at)| *at >= t) {
+            Some(0) => (stops[0].0, stops[0].0, 0.0),
+            Some(i) => (stops[i - 1].0, stops[i].0, (t - stops[i - 1].1) / (stops[i].1 - stops[i - 1].1).max(1e-6)),
+            None => {
+                let last = stops.last().map(|s| s.0).unwrap_or(sf_render::Color::BLACK);
+                (last, last, 0.0)
+            }
+        };
+        let mix = |a: f32, b: f32| ((a + (b - a) * f) * 255.0).round().clamp(0.0, 255.0) as u8;
+        egui::Color32::from_rgb(mix(c0.r, c1.r), mix(c0.g, c1.g), mix(c0.b, c1.b))
+    };
+    // project each vertex on the start → end axis (in tile fractions)
+    let (sx, sy, ex, ey) = (g.start.x as f32, g.start.y as f32, g.end.x as f32, g.end.y as f32);
+    let (dx, dy) = (ex - sx, ey - sy);
+    let len2 = (dx * dx + dy * dy).max(1e-6);
+    const N: u32 = 8;
+    let mut mesh = egui::Mesh::default();
+    for j in 0..=N {
+        for i in 0..=N {
+            let (u, v) = (i as f32 / N as f32, j as f32 / N as f32);
+            let t = (((u - sx) * dx + (v - sy) * dy) / len2).clamp(0.0, 1.0);
+            mesh.colored_vertex(egui::pos2(rect.left() + u * rect.width(), rect.top() + v * rect.height()), colour_at(t));
+        }
+    }
+    for j in 0..N {
+        for i in 0..N {
+            let a = j * (N + 1) + i;
+            mesh.add_triangle(a, a + 1, a + N + 1);
+            mesh.add_triangle(a + 1, a + N + 2, a + N + 1);
+        }
+    }
+    let painter = ui.painter();
+    painter.add(mesh);
+    let stroke = if selected { egui::Stroke::new(2.0, theme::p().accent_hover) } else if resp.hovered() { egui::Stroke::new(1.0, theme::p().text_dim) } else { egui::Stroke::new(1.0, theme::p().border) };
+    painter.rect_stroke(rect, egui::CornerRadius::same(2), stroke, egui::StrokeKind::Inside);
+    resp.on_hover_text(name)
+}
+
 fn color_edit(ui: &mut egui::Ui, label: &str, hex: &mut String) -> bool {
     let mut c = sf_render::Color::from_hex(hex).unwrap_or(sf_render::Color::BLACK);
     let mut rgb = [c.r, c.g, c.b];
@@ -262,6 +307,11 @@ pub fn ui(ed: &mut Editor, ui: &mut egui::Ui, section: Section) {
             ui.add_space(12.0);
             ui.separator();
         }
+        if ed.selected_voice_over.is_some() {
+            voice_over_item_ui(ed, ui);
+            ui.add_space(12.0);
+            ui.separator();
+        }
         match section {
             Section::General => general_ui(ed, ui),
             Section::Cursor => cursor_ui(ed, ui),
@@ -343,7 +393,7 @@ fn general_ui(ed: &mut Editor, ui: &mut egui::Ui) {
     let kinds = ["system", "gradient", "color", "image", "unsplash"];
     let kind = ed.session.pkg.project.config.styles.background.kind.clone();
     let idx = kinds.iter().position(|k| *k == kind).unwrap_or(0);
-    if let Some(i) = widgets::segmented_with_disabled(ui, idx, &["Wallpaper", "Gradient", "Color", "Image", "Unsplash"], &[4]) {
+    if let Some(i) = widgets::segmented_with_disabled(ui, idx, &["Wallpaper", "Gradient", "Color", "Image", "Unsplash"], &[]) {
         let k = kinds[i].to_string();
         ed.edit(move |p| p.config.styles.background.kind = k);
     }
@@ -362,6 +412,15 @@ fn general_ui(ed: &mut Editor, ui: &mut egui::Ui) {
         }
         "gradient" => {
             widgets::title(ui, "Gradient");
+            let current = ed.session.pkg.project.config.styles.background.gradient.clone();
+            ui.horizontal_wrapped(|ui| {
+                for (name, _) in sf_project::schema::common::Gradient::PRESETS {
+                    let Some(g) = sf_project::schema::common::Gradient::preset(name) else { continue };
+                    if gradient_swatch(ui, &g, g.stops == current.stops, name).clicked() {
+                        ed.edit(move |p| p.config.styles.background.gradient = g);
+                    }
+                }
+            });
             let stops = ed.session.pkg.project.config.styles.background.gradient.stops.clone();
             for (i, s) in stops.iter().enumerate() {
                 let mut hex = s.color.clone();
@@ -432,7 +491,8 @@ fn general_ui(ed: &mut Editor, ui: &mut egui::Ui) {
                 }
             }
         }
-        _ => widgets::hint(ui, "Unsplash backgrounds are on the roadmap."),
+        "unsplash" => unsplash_ui(ed, ui),
+        _ => {}
     }
     cfg_slider(ed, ui, "Background blur", |p| p.config.styles.background.blur, |p, v| p.config.styles.background.blur = v, 0.0..=100.0, Some(0.0), "");
     cfg_slider(ed, ui, "Padding", |p| p.config.output.padding_ratio01 * 100.0, |p, v| p.config.output.padding_ratio01 = v / 100.0, 0.0..=40.0, Some(10.0), "%");
@@ -847,10 +907,13 @@ fn captions_ui(ed: &mut Editor, ui: &mut egui::Ui) {
 
     // ── export ──
     ui.add_space(10.0);
-    if widgets::secondary_button(ui, "Export captions (.srt)…").clicked() {
+    if widgets::secondary_button(ui, "Export captions (.srt / .vtt)…").clicked() {
         let name = format!("{}.srt", ed.session.pkg.project.name);
-        if let Some(path) = rfd::FileDialog::new().set_file_name(&name).add_filter("SubRip", &["srt"]).save_file() {
-            let msg = match std::fs::write(&path, ed.session.captions_srt()) {
+        if let Some(path) = rfd::FileDialog::new().set_file_name(&name).add_filter("SubRip", &["srt"]).add_filter("WebVTT", &["vtt"]).save_file() {
+            // the format follows the extension chosen in the dialog
+            let vtt = path.extension().is_some_and(|e| e.eq_ignore_ascii_case("vtt"));
+            let text = if vtt { ed.session.captions_vtt() } else { ed.session.captions_srt() };
+            let msg = match std::fs::write(&path, text) {
                 Ok(()) => format!("Saved {}", path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()),
                 Err(e) => format!("Could not save captions: {e}"),
             };
@@ -918,13 +981,50 @@ pub fn audio_item_ui(ed: &mut Editor, ui: &mut egui::Ui) {
     widgets::title(ui, &format!("Layer {}", clip.layer + 1));
     ui.horizontal_wrapped(|ui| {
         if ui.add_enabled(clip.layer > 0, egui::Button::new("Move up")).clicked() {
-            ed.move_audio_clip_layer(&id, -1);
+            ed.move_lane_item(&id, -1);
         }
         if ui.button("Move down").clicked() {
-            ed.move_audio_clip_layer(&id, 1);
+            ed.move_lane_item(&id, 1);
         }
     });
     widgets::hint(ui, "Clips on one layer never overlap; clips on different layers can, and play together. Drag a clip down onto the empty lane to start a new layer (⌥↑ / ⌥↓).");
+}
+
+fn voice_over_item_ui(ed: &mut Editor, ui: &mut egui::Ui) {
+    let Some(id) = ed.selected_voice_over.clone() else { return };
+    let Some(span) = ed.session.voice_over_spans().into_iter().find(|v| v.id == id) else {
+        ed.selected_voice_over = None;
+        return;
+    };
+    widgets::title(ui, "Voice-over");
+    widgets::hint(ui, &format!("{} – {} on the timeline", crate::editor::fmt_clock(span.output_start_ms), crate::editor::fmt_clock(span.output_end_ms)));
+    let idc = id.clone();
+    cfg_slider(ed, ui, "Volume", move |p| p.scenes[0].voice_overs.iter().find(|v| v.id == idc).map(|v| v.volume).unwrap_or(1.0), {
+        let idc = id.clone();
+        move |p, v| {
+            if let Some(o) = p.scenes[0].voice_overs.iter_mut().find(|o| o.id == idc) {
+                o.volume = v;
+            }
+        }
+    }, 0.0..=2.0, Some(1.0), "");
+    let mut muted = span.muted;
+    if widgets::toggle_row(ui, "Mute", "", &mut muted) {
+        ed.edit_voice_over(&id, move |v| v.is_disabled = muted);
+    }
+    ui.horizontal_wrapped(|ui| {
+        if ui.add_enabled(span.contains_output(ed.playhead_ms), egui::Button::new("Split at playhead")).on_hover_text("S").clicked() {
+            let t = ed.playhead_ms;
+            ed.split_voice_over(&id, t);
+        }
+        if ui.button("Move to playhead").clicked() {
+            let src = ed.session.timeline.output_to_source(ed.playhead_ms).unwrap_or(0.0);
+            ed.edit_voice_over(&id, move |v| v.source_start_ms = src);
+        }
+        if ui.button("Delete").clicked() {
+            ed.delete_selected();
+        }
+    });
+    widgets::hint(ui, "Drag the take along the voice-over lane to move it, or drag its edges to trim it. Split it (S) to cut out a part: select the piece and press ⌫. It stays with the frame it starts on when you cut or speed up clips before it.");
 }
 
 fn audio_ui(ed: &mut Editor, ui: &mut egui::Ui) {
@@ -980,8 +1080,52 @@ fn audio_ui(ed: &mut Editor, ui: &mut egui::Ui) {
         ed.edit(move |p| p.config.audio.mute_system_audio = mute_sys);
         ed.reload_audio();
     }
-    widgets::title(ui, "Background audio");
-    let current = ed.session.pkg.project.config.audio.background_audio_file_name.clone();
+    widgets::title(ui, "Voice-over");
+    let default_name = crate::voice_over::default_input_name().unwrap_or_else(|| "none found".into());
+    let mic_label = ed.voice_mic.clone().unwrap_or_else(|| format!("System default ({default_name})"));
+    ui.add_enabled_ui(ed.voice_rec.is_none(), |ui| {
+        egui::ComboBox::from_id_salt("voice-over-mic").selected_text(mic_label).width(ui.available_width()).show_ui(ui, |ui| {
+            if ui.selectable_label(ed.voice_mic.is_none(), format!("System default ({default_name})")).clicked() {
+                ed.voice_mic = None;
+            }
+            // listed while the menu is open only (enumerating devices is not free)
+            for name in crate::voice_over::input_devices() {
+                if ui.selectable_label(ed.voice_mic.as_deref() == Some(name.as_str()), &name).clicked() {
+                    ed.voice_mic = Some(name);
+                }
+            }
+        });
+    });
+    if ed.voice_rec.is_some() {
+        if widgets::accent_button(ui, "Stop recording").clicked() {
+            ed.stop_voice_over();
+        }
+    } else if widgets::secondary_button(ui, "Record voice-over at playhead").on_hover_text("R").clicked() {
+        ed.start_voice_over();
+    }
+    let n = ed.session.pkg.project.scenes[0].voice_overs.len();
+    widgets::hint(ui, &match n {
+        0 => "Narrate over the video: it plays without sound from the playhead while the microphone above records. Press Space or Stop when you are done.".to_string(),
+        1 => "1 voice-over. Select it on the timeline to move, mute or change its volume.".to_string(),
+        n => format!("{n} voice-overs. Select one on the timeline to move, mute or change its volume."),
+    });
+    widgets::hint(ui, "In a call, record from a microphone the call is not using: a Bluetooth headset (AirPods) shared with a call records near silence. macOS also turns other apps down during a call, so play takes back after it.");
+    // with a music part selected, every control below changes that part only
+    let part = ed.selected_music.clone().and_then(|id| sf_engine::lanes::music_clips(&ed.session.pkg.project, &ed.session.timeline).into_iter().find(|c| c.id == id));
+    let audio_cfg = ed.session.pkg.project.config.audio.clone();
+    if let Some(c) = &part {
+        widgets::title(ui, "Background audio · selected part");
+        widgets::hint(ui, &format!("Changes apply to the music part at {} – {} only.", crate::editor::fmt_clock(c.output_start_ms), crate::editor::fmt_clock(c.output_end_ms())));
+        if widgets::secondary_button(ui, "Change all the music instead").clicked() {
+            ed.selected_music = None;
+        }
+    } else {
+        widgets::title(ui, "Background audio");
+    }
+    let current = match &part {
+        Some(c) => c.track(&audio_cfg).map(str::to_string),
+        None => audio_cfg.background_audio_file_name.clone(),
+    };
     let library = ed.session.assets.list_background_audio();
     if library.is_empty() {
         widgets::hint(ui, "No music library on this Mac yet. Add your own track with \"Add background audio…\" below.");
@@ -989,10 +1133,13 @@ fn audio_ui(ed: &mut Editor, ui: &mut egui::Ui) {
     let mut categories: Vec<String> = library.iter().filter_map(|n| n.split('/').next().map(str::to_string)).collect();
     categories.dedup();
     let none_sel = current.is_none();
-    if ui.selectable_label(none_sel, "None").clicked() && !none_sel {
-        ed.edit(|p| p.config.audio.background_audio_file_name = None);
-        ed.reload_audio();
+    if ui.selectable_label(none_sel, if part.is_some() { "None (delete this part)" } else { "None" }).clicked() && !none_sel {
+        match &part {
+            Some(_) => ed.delete_selected(),
+            None => ed.remove_music(),
+        }
     }
+    let mut picked: Option<String> = None;
     for cat in categories {
         let title = {
             let mut c = cat.chars();
@@ -1008,17 +1155,7 @@ fn audio_ui(ed: &mut Editor, ui: &mut egui::Ui) {
                 let label = sf_session::assets::background_audio_label(track);
                 let sel = current.as_deref().is_some_and(|c| sf_session::assets::background_audio_key(c) == sf_session::assets::background_audio_key(track));
                 if ui.selectable_label(sel, label).clicked() && !sel {
-                    let t = track.clone();
-                    ed.edit(move |p| {
-                        p.config.audio.background_audio_file_name = Some(t);
-                        p.config.audio.mute_background_audio = false;
-                        // Screen Studio's 5 % default is near-silent; start at an audible level
-                        if p.config.audio.background_audio_volume < 0.2 {
-                            p.config.audio.background_audio_volume = 0.3;
-                        }
-                    });
-                    ed.reload_audio();
-                    ed.preview_background_audio();
+                    picked = Some(track.clone());
                 }
             }
         });
@@ -1029,23 +1166,74 @@ fn audio_ui(ed: &mut Editor, ui: &mut egui::Ui) {
             let dest = ed.session.pkg.path.join("assets").join(&name);
             let _ = std::fs::create_dir_all(dest.parent().unwrap());
             if std::fs::copy(&p, &dest).is_ok() {
-                ed.edit(move |pr| {
-                    pr.config.audio.background_audio_file_name = Some(name);
-                    pr.config.audio.mute_background_audio = false;
-                    if pr.config.audio.background_audio_volume < 0.2 {
-                        pr.config.audio.background_audio_volume = 0.3;
-                    }
-                });
-                ed.reload_audio();
-                ed.preview_background_audio();
+                picked = Some(name);
             }
         }
     }
-    let mut mute_bg = ed.session.pkg.project.config.audio.mute_background_audio;
-    if widgets::toggle_row(ui, "Mute background audio", "", &mut mute_bg) {
-        ed.edit(move |p| p.config.audio.mute_background_audio = mute_bg);
+    if let Some(track) = picked {
+        set_music_track(ed, part.as_ref().map(|c| c.id.as_str()), track);
+        ed.preview_background_audio();
     }
-    cfg_slider(ed, ui, "Background audio volume", |p| p.config.audio.background_audio_volume, |p, v| p.config.audio.background_audio_volume = v, 0.0..=1.0, Some(0.05), "");
+    match &part {
+        Some(c) => {
+            let id = c.id.clone();
+            let mut mute = c.muted;
+            if widgets::toggle_row(ui, "Mute this part", "", &mut mute) {
+                ed.edit_music_clip(&id, move |m| m.muted = mute);
+            }
+            let (get_id, set_id) = (id.clone(), id.clone());
+            cfg_slider(ed, ui, "Volume of this part", move |p| part_of(p, &get_id).map(|m| m.volume.unwrap_or(p.config.audio.background_audio_volume)).unwrap_or(0.0), move |p, v| with_parts(p, |m| if m.id == set_id { m.volume = Some(v) }), 0.0..=1.0, None, "");
+        }
+        None => {
+            let mut mute_bg = audio_cfg.mute_background_audio;
+            if widgets::toggle_row(ui, "Mute background audio", "", &mut mute_bg) {
+                // all the music: parts muted on their own follow too
+                ed.edit(move |p| {
+                    p.config.audio.mute_background_audio = mute_bg;
+                    with_parts(p, |m| m.muted = false);
+                });
+            }
+            cfg_slider(ed, ui, "Background audio volume", |p| p.config.audio.background_audio_volume, |p, v| {
+                p.config.audio.background_audio_volume = v;
+                with_parts(p, |m| m.volume = None);
+            }, 0.0..=1.0, Some(0.05), "");
+        }
+    }
+}
+
+/// Music part `id` of a project, when the music is saved as parts.
+fn part_of(p: &sf_project::Project, id: &str) -> Option<sf_project::MusicClip> {
+    use sf_project::SceneMusicExt;
+    p.scenes[0].music_clips()?.into_iter().find(|m| m.id == id)
+}
+
+/// Change every music part of a project (no-op before the music is saved as parts).
+fn with_parts(p: &mut sf_project::Project, mut f: impl FnMut(&mut sf_project::MusicClip)) {
+    use sf_project::SceneMusicExt;
+    if let Some(mut clips) = p.scenes[0].music_clips() {
+        clips.iter_mut().for_each(&mut f);
+        p.scenes[0].set_music_clips(Some(clips));
+    }
+}
+
+/// Play `track` in music part `part`, or in all the music (dropping the parts' own tracks).
+fn set_music_track(ed: &mut Editor, part: Option<&str>, track: String) {
+    match part {
+        Some(id) => ed.edit_music_clip(id, move |m| {
+            m.file_name = Some(track);
+            m.muted = false;
+        }),
+        None => ed.edit(move |p| {
+            p.config.audio.background_audio_file_name = Some(track);
+            p.config.audio.mute_background_audio = false;
+            // Screen Studio's 5 % default is near-silent; start at an audible level
+            if p.config.audio.background_audio_volume < 0.2 {
+                p.config.audio.background_audio_volume = 0.3;
+            }
+            with_parts(p, |m| m.file_name = None);
+        }),
+    }
+    ed.reload_audio();
 }
 
 fn shortcuts_ui(ed: &mut Editor, ui: &mut egui::Ui) {
@@ -1193,6 +1381,126 @@ fn cursor_tile(ui: &mut egui::Ui, preview: CursorPreview, label: &str, selected:
 }
 
 /// A square, centre-cropped wallpaper thumbnail.
+/// A text link that opens `url` in the default browser. eframe is built without egui's own
+/// URL handling, so `hyperlink_to` would do nothing; links go through `os::open` like the rest
+/// of the app.
+fn browser_link(ui: &mut egui::Ui, text: &str, url: &str) {
+    if ui.link(text).on_hover_text(url).clicked() {
+        crate::os::open(url);
+    }
+}
+
+/// Background → Unsplash: search, a grid of results, and the credit for the current photo.
+fn unsplash_ui(ed: &mut Editor, ui: &mut egui::Ui) {
+    let ctx = ui.ctx().clone();
+    ed.unsplash.ensure_started(&ctx);
+    if let Some(applied) = ed.unsplash.poll(&ctx) {
+        let value = crate::unsplash::background_value(&applied);
+        ed.edit(move |p| {
+            let bg = &mut p.config.styles.background;
+            bg.kind = sf_project::v4::background_type::UNSPLASH.into();
+            bg.unsplash = Some(value);
+        });
+    }
+    widgets::title(ui, "Unsplash");
+    let current = ed.session.pkg.project.config.styles.background.unsplash.clone();
+    let current_id = current.as_ref().and_then(|v| v.get("id")).and_then(|v| v.as_str()).map(str::to_string);
+    // credit the photographer, as Unsplash asks (links carry its referral parameters)
+    if let Some(v) = &current {
+        let get = |k: &str| v.get(k).and_then(|x| x.as_str()).map(str::to_string);
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing.x = 4.0;
+            ui.label(RichText::new("Photo by").color(theme::p().text_dim));
+            match (get("author"), get("authorUrl")) {
+                (Some(name), Some(url)) => {
+                    browser_link(ui, &name, &crate::unsplash::referral(&url));
+                }
+                (Some(name), None) => {
+                    ui.label(name);
+                }
+                _ => {
+                    ui.label("an Unsplash photographer");
+                }
+            }
+            ui.label(RichText::new("on").color(theme::p().text_dim));
+            browser_link(ui, "Unsplash", &crate::unsplash::referral(&get("photoUrl").unwrap_or_else(|| "https://unsplash.com/".into())));
+        });
+        ui.add_space(4.0);
+    }
+    // the button first, right to left, so the field takes the rest of the row
+    let searched = ui
+        .allocate_ui_with_layout(egui::vec2(ui.available_width(), 38.0), egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            let button = widgets::secondary_button(ui, "Search").clicked();
+            let field = widgets::text_field(ui, &mut ed.unsplash.query, "Search photos");
+            let enter = field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+            button || enter
+        })
+        .inner;
+    widgets::hint(ui, "Leave it empty to browse Unsplash's wallpapers.");
+    if searched {
+        ed.unsplash.search(&ctx, 1);
+    }
+    if let Some(e) = &ed.unsplash.error {
+        widgets::hint(ui, &format!("Unsplash: {e}"));
+    }
+    if ed.unsplash.results.is_empty() && ed.unsplash.error.is_none() {
+        widgets::hint(ui, if ed.unsplash.is_busy() { "Loading photos…" } else { "No photos found." });
+    }
+    let cols = 3;
+    let gap = 8.0;
+    let tile = ((ui.available_width() - (cols as f32 - 1.0) * gap) / cols as f32).floor();
+    let mut pick = None;
+    egui::Grid::new("unsplash").spacing([gap, gap]).show(ui, |ui| {
+        for (i, photo) in ed.unsplash.results.iter().enumerate() {
+            let selected = current_id.as_deref() == Some(photo.id.as_str());
+            let author = photo.author.clone().unwrap_or_default();
+            let tip = if ed.unsplash.applying.as_deref() == Some(photo.id.as_str()) { "Downloading…".to_string() } else { format!("Photo by {author}") };
+            let resp = wallpaper_tile(ui, ed.unsplash.thumb(&photo.id), &tip, tile, selected);
+            if ed.unsplash.applying.as_deref() == Some(photo.id.as_str()) {
+                download_ring(ui, resp.rect, ed.unsplash.progress());
+            } else if resp.clicked() && !selected {
+                pick = Some(photo.clone());
+            }
+            if (i + 1) % cols == 0 {
+                ui.end_row();
+            }
+        }
+    });
+    if let Some(photo) = pick {
+        let assets = ed.session.pkg.path.join("assets");
+        ed.unsplash.apply(&ctx, photo, assets);
+    }
+    if ed.unsplash.can_load_more() && widgets::secondary_button(ui, "Load more").clicked() {
+        ed.unsplash.load_more(&ctx);
+    }
+    if ed.unsplash.is_busy() {
+        ctx.request_repaint_after(std::time::Duration::from_millis(150));
+    }
+}
+
+/// Over a tile whose full-size photo is downloading: the tile dimmed, and a ring that fills
+/// with `progress` (a spinning arc while the size is unknown).
+fn download_ring(ui: &egui::Ui, rect: egui::Rect, progress: Option<f32>) {
+    let pal = theme::p();
+    let painter = ui.painter();
+    painter.rect_filled(rect, 9.0, pal.bg.gamma_multiply(0.6));
+    let (c, r) = (rect.center(), (rect.width().min(rect.height()) * 0.18).clamp(10.0, 22.0));
+    painter.circle_stroke(c, r, egui::Stroke::new(3.0, pal.text_faint.gamma_multiply(0.6)));
+    let t = ui.input(|i| i.time) as f32;
+    let (start, sweep) = match progress {
+        // from 12 o'clock, clockwise
+        Some(f) => (-std::f32::consts::FRAC_PI_2, f.max(0.02) * std::f32::consts::TAU),
+        None => (t * 5.0, std::f32::consts::FRAC_PI_2),
+    };
+    let n = ((sweep / std::f32::consts::TAU) * 48.0).ceil().max(2.0) as usize;
+    let points: Vec<egui::Pos2> = (0..=n).map(|i| start + sweep * i as f32 / n as f32).map(|a| c + egui::vec2(a.cos(), a.sin()) * r).collect();
+    painter.add(egui::Shape::line(points, egui::Stroke::new(3.0, pal.accent)));
+    if let Some(f) = progress {
+        painter.text(c + egui::vec2(0.0, r + 12.0), egui::Align2::CENTER_CENTER, format!("{:.0}%", f * 100.0), egui::FontId::proportional(11.0), pal.text);
+    }
+    ui.ctx().request_repaint();
+}
+
 fn wallpaper_tile(ui: &mut egui::Ui, path: Option<&std::path::Path>, name: &str, size: f32, selected: bool) -> egui::Response {
     let (rect, resp) = ui.allocate_exact_size(egui::vec2(size, size), egui::Sense::click());
     let painter = ui.painter();

@@ -26,7 +26,7 @@ manual steps, for reference:
 2. Stripe: create a product with a one-time US$49 price (`setup.sh` does this; `update-price.sh <cents>` changes the price later, Stripe and Supabase in one go); set `STRIPE_SECRET_KEY`,
    `STRIPE_WEBHOOK_SECRET`, `STRIPE_PRICE_LIFETIME`.
 3. Resend: `RESEND_API_KEY`, `LICENSE_FROM_EMAIL`.
-4. `supabase db push && supabase functions deploy create-checkout stripe-webhook license-refresh free-export`
+4. `supabase db push && supabase functions deploy create-checkout stripe-webhook license-refresh free-export unsplash`
 5. Point `PURCHASE_URL` in `crates/sf-license` at your checkout page (or the `create-checkout` URL).
 
 ## Activation from the app
@@ -44,3 +44,26 @@ machine's hardware UUID (`IOPlatformUUID`; the raw UUID never leaves the Mac). T
 `free-export` with `{ device }` when the export dialog opens and `{ device, record: true }` after
 each unlicensed export, and takes the higher of the local and server counts, so deleting the app
 or its support folder does not restart the free exports. Offline, the local file alone counts.
+
+## Unsplash backgrounds
+
+Background → Unsplash searches photos through the `unsplash` function, so the Unsplash access
+key stays on the server (`UNSPLASH_ACCESS_KEY`; create an app at unsplash.com/developers).
+
+```
+supabase secrets set UNSPLASH_ACCESS_KEY=<access key>
+supabase db push
+supabase functions deploy unsplash
+```
+
+`{ query, page }` returns a page of landscape results (an empty query lists the Wallpapers
+topic). When a photo is picked the app sends `{ download: <download_location> }`, which
+registers the download with Unsplash as its API guidelines require and returns the image URL;
+the app saves the photo in the project's `assets/` (so it renders and exports offline) and
+credits the photographer in the sidebar with referral links. Search replies are cached for every user in the
+`unsplash_cache` table (migration `20261022000000_unsplash_cache.sql`): a search made in the last
+6 hours is answered without calling Unsplash (normalised, so case and spacing do not matter),
+a stale reply is served when Unsplash rate-limits or fails, and rows older than 7 days are
+pruned. Download tracking is never cached. Until the function is deployed the
+tab says the service is not available yet. A demo app on Unsplash allows 50 requests an hour;
+apply for production access before release.

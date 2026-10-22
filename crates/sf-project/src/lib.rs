@@ -23,6 +23,7 @@
 
 pub mod audio_clips;
 pub mod ids;
+pub mod music_clips;
 pub mod package;
 pub mod preset;
 pub mod recording;
@@ -33,6 +34,7 @@ pub mod transcript;
 pub use package::{ImportProgress, ProjectPackage, PACKAGE_EXTENSION, PRESET_EXTENSION, SCREEN_STUDIO_EXTENSION, SCREEN_STUDIO_PRESET_EXTENSION};
 pub use preset::Preset;
 pub use audio_clips::{AudioClip, AudioTrack, SceneAudioExt};
+pub use music_clips::{MusicClip, SceneMusicExt};
 pub use schema::v4::{self as v4, Project};
 
 #[derive(Debug, thiserror::Error)]

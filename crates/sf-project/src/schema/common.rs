@@ -75,6 +75,22 @@ impl Default for Gradient {
     }
 }
 
+impl Gradient {
+    /// Built-in gradients for the Background → Gradient picker: name and `(colour, at)` stops,
+    /// laid out top-left to bottom-right.
+    pub const PRESETS: &'static [(&'static str, &'static [(&'static str, f64)])] = &[
+        ("Indigo", &[("#4776e6", 0.0), ("#8e54e9", 1.0)]),
+        // soft mint at the top left through peach into salmon at the bottom right
+        ("Mint Peach", &[("#86d3bf", 0.0), ("#f3d0a6", 0.55), ("#ee8e85", 1.0)]),
+    ];
+
+    /// The preset named `name` as a diagonal gradient.
+    pub fn preset(name: &str) -> Option<Gradient> {
+        let (_, stops) = Self::PRESETS.iter().find(|(n, _)| *n == name)?;
+        Some(Gradient { start: Point::new(0.0, 0.0), end: Point::new(1.0, 1.0), stops: stops.iter().map(|(c, at)| GradientStop { color: (*c).into(), at: *at }).collect() })
+    }
+}
+
 /// Damped spring parameters (react-spring style). Screen Studio animates the virtual camera
 /// (zoom/pan) and the cursor with these.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -167,5 +183,22 @@ impl AspectRatio {
                 .map(|(l, _)| (*l).to_string())
                 .unwrap_or_else(|| format!("{r:.3}")),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn gradient_presets_are_valid() {
+        for (name, _) in Gradient::PRESETS {
+            let g = Gradient::preset(name).unwrap();
+            assert!(g.stops.len() >= 2 && g.stops.len() <= 8, "{name}: the renderer takes 2..=8 stops");
+            assert!(g.stops.windows(2).all(|w| w[0].at <= w[1].at), "{name}: stops in order");
+            assert!(g.stops.iter().all(|s| s.color.len() == 7 && s.color.starts_with('#')), "{name}: #rrggbb colours");
+        }
+        assert_eq!(Gradient::preset("Indigo").unwrap(), Gradient::default());
+        assert!(Gradient::preset("nope").is_none());
     }
 }

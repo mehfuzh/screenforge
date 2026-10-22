@@ -195,12 +195,27 @@ impl Session {
     /// Path of the project's background audio track, if any (project `assets/` first, then
     /// the bundled library).
     pub fn background_audio_path(&self) -> Option<std::path::PathBuf> {
-        let name = self.pkg.project.config.audio.background_audio_file_name.as_deref()?;
+        self.music_path(self.pkg.project.config.audio.background_audio_file_name.as_deref()?)
+    }
+
+    /// File of a music track by its project name: a file added to the project's `assets/`,
+    /// or a track of the bundled library (`<category>/<file>`).
+    pub fn music_path(&self, name: &str) -> Option<std::path::PathBuf> {
         let local = self.pkg.path.join("assets").join(name.rsplit('/').next().unwrap_or(name));
         if local.is_file() {
             return Some(local);
         }
         self.assets.background_audio(name)
+    }
+
+    /// Audio file of a voice-over (`<project>/voiceovers/<file_name>`).
+    pub fn voice_over_path(&self, file_name: &str) -> std::path::PathBuf {
+        self.pkg.path.join(sf_project::v4::VoiceOver::DIR).join(file_name)
+    }
+
+    /// Voice-overs of the scene on the output timeline (see `sf_engine::audio::voice_over_spans`).
+    pub fn voice_over_spans(&self) -> Vec<sf_engine::audio::VoiceOverSpan> {
+        sf_engine::audio::voice_over_spans(&self.pkg.project.scenes[0], &self.timeline)
     }
 
     /// Resolved zooms (source time) for timeline display.
@@ -538,6 +553,11 @@ impl Session {
     /// SubRip captions for the edited timeline (empty when there is no transcript).
     pub fn captions_srt(&self) -> String {
         self.captions.to_srt(&self.timeline)
+    }
+
+    /// WebVTT captions for the edited timeline (the same cues as [`Self::captions_srt`]).
+    pub fn captions_vtt(&self) -> String {
+        self.captions.to_vtt(&self.timeline)
     }
 
     /// Masks active at `source_ms`, drawn over the screen. Bounds are pixel rects in

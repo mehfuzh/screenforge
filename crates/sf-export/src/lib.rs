@@ -34,7 +34,8 @@ pub struct Progress {
 }
 
 /// Build the ffmpeg audio inputs reproducing the audio timeline (linked to the video slices,
-/// or the detached ScreenForge audio clips) for every microphone / system-audio session.
+/// or the detached ScreenForge audio clips) for every microphone / system-audio session, plus
+/// the voice-overs and the background music.
 pub fn audio_inputs(session: &Session) -> Vec<AudioMixInput> {
     use sf_project::audio_clips::AudioTrack;
     let cfg = &session.pkg.project.config;
@@ -72,10 +73,39 @@ pub fn audio_inputs(session: &Session) -> Vec<AudioMixInput> {
             });
         }
     }
-    if !cfg.audio.mute_background_audio && cfg.audio.background_audio_volume > 0.0 {
-        if let Some(path) = session.background_audio_path() {
-            inputs.push(AudioMixInput { path, volume: cfg.audio.background_audio_volume, delay_ms: 0.0, start_ms: None, end_ms: None, tempo: 1.0, loop_input: true, filter: None });
+    for vo in session.voice_over_spans() {
+        let path = session.voice_over_path(&vo.file_name);
+        if vo.muted || vo.volume <= 0.0 || !path.is_file() {
+            continue;
         }
+        let dur = vo.output_duration_ms();
+        inputs.push(AudioMixInput { path, volume: vo.volume, delay_ms: vo.output_start_ms, start_ms: Some(vo.file_offset_ms), end_ms: Some(vo.file_offset_ms + dur), tempo: 1.0, loop_input: false, filter: None });
+    }
+    // one looping input per music clip (each can have its own track and level), started at
+    // its place in the track and cut to its length (`atrim` after the loop, so a clip longer
+    // than the track keeps going)
+    let clips = sf_engine::lanes::music_clips(&session.pkg.project, &session.timeline);
+    let fades = sf_project::music_clips::effective_fades(&clips);
+    let mut track_ms: std::collections::HashMap<std::path::PathBuf, Option<f64>> = Default::default();
+    for (m, (fade_in, fade_out)) in clips.into_iter().zip(fades) {
+        let level = m.level(&cfg.audio);
+        let dur = m.duration_ms.min(session.duration_ms() - m.output_start_ms);
+        let Some(path) = m.track(&cfg.audio).and_then(|n| session.music_path(n)) else { continue };
+        if level <= 0.0 || dur <= 1.0 {
+            continue;
+        }
+        let len = *track_ms.entry(path.clone()).or_insert_with(|| sf_media::probe(&path).ok().and_then(|i| i.duration_ms()).filter(|d| *d > 0.0));
+        let offset = len.map(|t| m.file_offset_ms.rem_euclid(t)).unwrap_or(0.0);
+        // fades in the clip's own time (it starts at 0 after the trim); a fade-out runs to the
+        // clip's end even when the video cuts the clip short
+        let mut chain = format!("atrim=duration={:.3}", dur / 1000.0);
+        if fade_in > 0.0 {
+            chain.push_str(&format!(",afade=t=in:st=0:d={:.3}", fade_in / 1000.0));
+        }
+        if fade_out > 0.0 {
+            chain.push_str(&format!(",afade=t=out:st={:.3}:d={:.3}", ((m.duration_ms - fade_out) / 1000.0).max(0.0), fade_out / 1000.0));
+        }
+        inputs.push(AudioMixInput { path, volume: level, delay_ms: m.output_start_ms, start_ms: (offset > 0.0).then_some(offset), end_ms: None, tempo: 1.0, loop_input: true, filter: Some(chain) });
     }
     inputs
 }
