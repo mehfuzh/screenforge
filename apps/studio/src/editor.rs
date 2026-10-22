@@ -381,6 +381,15 @@ impl Editor {
 
     /// Start playback so a newly chosen background track is heard right away.
     pub fn preview_background_audio(&mut self) {
+        // music clips keep their place when the track changes: with none under the playhead,
+        // play from the next clip (or the first one) instead of silence
+        let clips = sf_engine::lanes::music_clips(&self.session.pkg.project, &self.session.timeline);
+        let t = self.playhead_ms;
+        let jump = (!clips.iter().any(|c| c.contains_output(t))).then(|| clips.iter().map(|c| c.output_start_ms).filter(|s| *s >= t).fold(None, |m: Option<f64>, s| Some(m.map_or(s, |m| m.min(s)))).or_else(|| clips.iter().map(|c| c.output_start_ms).reduce(f64::min))).flatten();
+        if let Some(start) = jump {
+            self.pause();
+            self.seek(start);
+        }
         if !self.playing {
             self.toggle_play();
         } else {
@@ -388,7 +397,10 @@ impl Editor {
         }
         let name = self.session.pkg.project.config.audio.background_audio_file_name.clone().unwrap_or_default();
         let label = sf_session::assets::background_audio_label(&name);
-        self.set_status(&format!("Background music: {label}"));
+        match jump {
+            Some(start) => self.set_status(&format!("Background music: {label} (its clip starts at {})", fmt_clock_short(start))),
+            None => self.set_status(&format!("Background music: {label}")),
+        }
     }
 
     /// Start recording a voice-over at the playhead: the video plays without sound (so the
