@@ -169,8 +169,8 @@ pub struct TimelineWidget {
     item_drag: Option<ItemDrag>,
     /// Cached waveform peaks per voice-over file (refreshed with `peaks_gen`).
     voice_peaks: std::collections::HashMap<String, Vec<f32>>,
-    /// Cached waveform peaks of the background music track and its length (ms).
-    music_peaks: Option<(Vec<f32>, f64)>,
+    /// Cached waveform peaks of each music track (by project name) and its length (ms).
+    music_peaks: std::collections::HashMap<String, (Vec<f32>, f64)>,
     voice_peaks_gen: u64,
     /// Output ms under the pointer when a context menu was opened.
     ctx_ms: f64,
@@ -184,7 +184,7 @@ pub struct TimelineWidget {
 
 impl Default for TimelineWidget {
     fn default() -> Self {
-        TimelineWidget { px_per_sec: 40.0, scroll_x: 0.0, drag: None, audio_drag: None, peaks: None, peaks_gen: u64::MAX, item_drag: None, voice_peaks: Default::default(), music_peaks: None, voice_peaks_gen: u64::MAX, ctx_ms: 0.0, snap_x: None, follow: true, was_playing: false }
+        TimelineWidget { px_per_sec: 40.0, scroll_x: 0.0, drag: None, audio_drag: None, peaks: None, peaks_gen: u64::MAX, item_drag: None, voice_peaks: Default::default(), music_peaks: Default::default(), voice_peaks_gen: u64::MAX, ctx_ms: 0.0, snap_x: None, follow: true, was_playing: false }
     }
 }
 
@@ -722,11 +722,8 @@ impl TimelineWidget {
         let gen = ed.audio.generation.load(std::sync::atomic::Ordering::Relaxed);
         if self.voice_peaks_gen != gen {
             self.voice_peaks.clear();
-            self.music_peaks = None;
+            self.music_peaks.clear();
             self.voice_peaks_gen = gen;
-        }
-        if self.music_peaks.is_none() {
-            self.music_peaks = ed.audio.music_peaks(4000);
         }
         let audio = ed.session.pkg.project.config.audio.clone();
         let occ = sf_engine::lanes::occupancy(&ed.session.pkg.project, &ed.session.timeline);
@@ -746,18 +743,21 @@ impl TimelineWidget {
             file_name: String,
             /// Music: the clip and the fades that apply to it.
             music: Option<(sf_project::MusicClip, (f64, f64))>,
+            /// Track label (music: the part's own track).
+            track_label: String,
         }
         let mut blocks: Vec<Block> = vec![];
         for v in ed.session.voice_over_spans() {
             let file_ms = ed.audio.voice_duration_ms(&v.file_name).unwrap_or(v.file_offset_ms + v.output_duration_ms()).max(1.0);
-            blocks.push(Block { key: key(Kind::Voice, &v.id), id: v.id.clone(), kind: Kind::Voice, start: v.output_start_ms, end: v.output_end_ms, offset: v.file_offset_ms, file_ms, muted: v.muted, volume: v.volume, file_name: v.file_name.clone(), music: None });
+            blocks.push(Block { key: key(Kind::Voice, &v.id), id: v.id.clone(), kind: Kind::Voice, start: v.output_start_ms, end: v.output_end_ms, offset: v.file_offset_ms, file_ms, muted: v.muted, volume: v.volume, file_name: v.file_name.clone(), music: None, track_label: String::new() });
         }
-        let music_name = audio.background_audio_file_name.as_deref().map(sf_session::assets::background_audio_label).unwrap_or_default();
         let music = sf_engine::lanes::music_clips(&ed.session.pkg.project, &ed.session.timeline);
         let fades = sf_project::music_clips::effective_fades(&music);
         for (m, f) in music.into_iter().zip(fades) {
             let end = m.output_end_ms().min(ed.duration_ms());
-            blocks.push(Block { key: key(Kind::Music, &m.id), id: m.id.clone(), kind: Kind::Music, start: m.output_start_ms, end, offset: m.file_offset_ms, file_ms: f64::INFINITY, muted: audio.mute_background_audio, volume: audio.background_audio_volume, file_name: String::new(), music: Some((m, f)) });
+            let track = m.track(&audio).unwrap_or_default().to_string();
+            let (muted, volume) = (m.muted || audio.mute_background_audio, m.volume.unwrap_or(audio.background_audio_volume));
+            blocks.push(Block { key: key(Kind::Music, &m.id), id: m.id.clone(), kind: Kind::Music, start: m.output_start_ms, end, offset: m.file_offset_ms, file_ms: f64::INFINITY, muted, volume, track_label: sf_session::assets::background_audio_label(&track), file_name: track, music: Some((m, f)) });
         }
 
         for b in blocks {
@@ -780,9 +780,14 @@ impl TimelineWidget {
                     self.voice_peaks.insert(b.file_name.clone(), p);
                 }
             }
+            if b.kind == Kind::Music && !self.music_peaks.contains_key(&b.file_name) {
+                if let Some(p) = ed.audio.music_peaks(&b.file_name, 4000) {
+                    self.music_peaks.insert(b.file_name.clone(), p);
+                }
+            }
             let wave = match b.kind {
                 Kind::Voice => self.voice_peaks.get(&b.file_name).map(|p| (p, b.file_ms, false)),
-                _ => self.music_peaks.as_ref().map(|(p, len)| (p, *len, true)),
+                _ => self.music_peaks.get(&b.file_name).map(|(p, len)| (p, *len, true)),
             };
             if let Some((peaks, file_ms, looping)) = wave.filter(|(p, len, _)| !p.is_empty() && *len > 0.0) {
                 // dB scale (-50..0 dB fills the block), like the microphone meter: on a linear
@@ -818,8 +823,8 @@ impl TimelineWidget {
                 let label = match (b.kind, b.muted) {
                     (Kind::Voice, true) => "Voice-over · muted".to_string(),
                     (Kind::Voice, false) => format!("Voice-over · {:.0}%", b.volume * 100.0),
-                    (_, true) => format!("Music · {music_name} · muted"),
-                    (_, false) => format!("Music · {music_name} · {:.0}%", b.volume * 100.0),
+                    (_, true) => format!("Music · {} · muted", b.track_label),
+                    (_, false) => format!("Music · {} · {:.0}%", b.track_label, b.volume * 100.0),
                 };
                 // above the waveform, like the voice-overs
                 painter.with_clip_rect(visible.shrink(2.0)).text(pos2(visible.left() + 10.0, block.top() + 8.0), egui::Align2::LEFT_CENTER, label, egui::FontId::proportional(11.0), pal.text);

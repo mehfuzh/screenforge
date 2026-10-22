@@ -23,23 +23,24 @@ struct Track {
     clip: Arc<AudioClip>,
 }
 
-struct Background {
-    clip: Arc<AudioClip>,
-    volume: f32,
-    muted: bool,
+/// A music clip as the mixer plays it: the clip, its effective fades, its track and level.
+struct MusicPlay {
+    clip: sf_project::MusicClip,
+    fades: (f64, f64),
+    track: String,
+    level: f32,
 }
 
 struct Shared {
     tracks: Vec<Track>,
-    background: Option<Background>,
     spans: Vec<AudioSpan>,
+    /// Decoded music tracks by project name (each music clip can have its own).
+    music_tracks: std::collections::HashMap<String, Arc<AudioClip>>,
     /// Decoded voice-overs by file name, and where they play.
     voice_clips: std::collections::HashMap<String, Arc<AudioClip>>,
     voice_spans: Vec<VoiceOverSpan>,
-    /// Where the background music plays (it loops inside each clip), and the fades that
-    /// apply to each clip.
-    music: Vec<sf_project::MusicClip>,
-    music_fades: Vec<(f64, f64)>,
+    /// Where the background music plays (it loops inside each clip).
+    music: Vec<MusicPlay>,
     playing: bool,
     /// End of the audio handed to the device so far (advances a whole buffer per callback).
     output_ms: f64,
@@ -49,9 +50,6 @@ struct Shared {
     callback_ms: f64,
     duration_ms: f64,
     master_volume: f32,
-    /// Background music level from the project (applied when a decode finishes too).
-    bg_volume: f32,
-    bg_muted: bool,
 }
 
 pub struct AudioPlayer {
@@ -71,7 +69,7 @@ pub struct AudioPlayer {
 
 impl AudioPlayer {
     pub fn new() -> Self {
-        let shared = Arc::new(Mutex::new(Shared { tracks: vec![], background: None, spans: vec![], voice_clips: Default::default(), voice_spans: vec![], music: vec![], music_fades: vec![], playing: false, output_ms: 0.0, callback_at: None, callback_ms: 0.0, duration_ms: 0.0, master_volume: 1.0, bg_volume: 0.05, bg_muted: false }));
+        let shared = Arc::new(Mutex::new(Shared { tracks: vec![], spans: vec![], music_tracks: Default::default(), voice_clips: Default::default(), voice_spans: vec![], music: vec![], playing: false, output_ms: 0.0, callback_at: None, callback_ms: 0.0, duration_ms: 0.0, master_volume: 1.0 }));
         let stream = Self::open_stream(shared.clone());
         if let Err(e) = &stream {
             tracing::warn!("audio output unavailable: {e}");
@@ -123,16 +121,13 @@ impl AudioPlayer {
                                     }
                                 }
                             }
-                            if let Some(bg) = &s.background {
-                                if !bg.muted && bg.clip.frames() > 0 {
-                                    for (m, fades) in s.music.iter().zip(&s.music_fades).filter(|(m, _)| m.contains_output(t_out)) {
-                                        let i = bg.clip.frame_at_ms(m.file_ms_at(t_out).max(0.0)) % bg.clip.frames();
-                                        let ch = bg.clip.channels as usize;
-                                        let vol = bg.volume * master * sf_project::music_clips::fade_gain(m, *fades, t_out) as f32;
-                                        l += bg.clip.samples[i * ch] * vol;
-                                        r += bg.clip.samples[i * ch + (ch - 1).min(1)] * vol;
-                                    }
-                                }
+                            for m in s.music.iter().filter(|m| m.level > 0.0 && m.clip.contains_output(t_out)) {
+                                let Some(track) = s.music_tracks.get(&m.track).filter(|t| t.frames() > 0) else { continue };
+                                let i = track.frame_at_ms(m.clip.file_ms_at(t_out).max(0.0)) % track.frames();
+                                let ch = track.channels as usize;
+                                let vol = m.level * master * sf_project::music_clips::fade_gain(&m.clip, m.fades, t_out) as f32;
+                                l += track.samples[i * ch] * vol;
+                                r += track.samples[i * ch + (ch - 1).min(1)] * vol;
                             }
                             s.output_ms += step_ms;
                         }
@@ -165,10 +160,10 @@ impl AudioPlayer {
             .collect();
         let audio_cfg = &session.pkg.project.config.audio;
         let mic_filter = sf_media::microphone_filter(&audio_cfg.microphone_audio_preset, audio_cfg.microphone_boost_db());
-        let background_path = session.background_audio_path();
         let (shared, generation, load_seq, pending) = (self.shared.clone(), self.generation.clone(), self.load_seq.clone(), self.pending.clone());
         self.update_timeline(session);
         self.load_voice_overs(session);
+        self.load_music(session);
         pending.fetch_add(1, Ordering::Relaxed);
         std::thread::spawn(move || {
             struct Done(Arc<std::sync::atomic::AtomicUsize>);
@@ -186,21 +181,12 @@ impl AudioPlayer {
                     Err(e) => tracing::warn!("audio decode failed for {}: {e}", path.display()),
                 }
             }
-            let background = background_path.and_then(|p| match sf_media::decode_audio(&p, RATE, 2) {
-                Ok(clip) => Some(Arc::new(clip)),
-                Err(e) => {
-                    tracing::warn!("background audio decode failed for {}: {e}", p.display());
-                    None
-                }
-            });
             let mut s = shared.lock();
             // a newer load started meanwhile: its result wins
             if load_seq.load(Ordering::Relaxed) != my_load {
                 return;
             }
             s.tracks = tracks;
-            let (volume, muted) = (s.bg_volume, s.bg_muted);
-            s.background = background.map(|clip| Background { clip, volume, muted });
             generation.fetch_add(1, Ordering::Relaxed);
         });
     }
@@ -234,6 +220,37 @@ impl AudioPlayer {
         });
     }
 
+    /// Decode the music tracks the music clips use that are not decoded yet (a newly chosen
+    /// track) on a background thread.
+    pub fn load_music(&self, session: &sf_session::Session) {
+        use std::sync::atomic::Ordering;
+        let audio = &session.pkg.project.config.audio;
+        let missing: Vec<(String, std::path::PathBuf)> = {
+            let s = self.shared.lock();
+            let mut names: Vec<String> = sf_engine::lanes::music_clips(&session.pkg.project, &session.timeline).iter().filter_map(|c| c.track(audio).map(str::to_string)).filter(|n| !s.music_tracks.contains_key(n)).collect();
+            names.sort_unstable();
+            names.dedup();
+            names.into_iter().filter_map(|n| session.music_path(&n).map(|p| (n, p))).collect()
+        };
+        if missing.is_empty() {
+            return;
+        }
+        let (shared, generation, pending) = (self.shared.clone(), self.generation.clone(), self.pending.clone());
+        pending.fetch_add(1, Ordering::Relaxed);
+        std::thread::spawn(move || {
+            for (name, path) in missing {
+                match sf_media::decode_audio(&path, RATE, 2) {
+                    Ok(clip) => {
+                        shared.lock().music_tracks.insert(name, Arc::new(clip));
+                    }
+                    Err(e) => tracing::warn!("music decode failed for {}: {e}", path.display()),
+                }
+            }
+            generation.fetch_add(1, Ordering::Relaxed);
+            pending.fetch_sub(1, Ordering::Relaxed);
+        });
+    }
+
     /// A `load` is still decoding.
     pub fn is_loading(&self) -> bool {
         self.pending.load(std::sync::atomic::Ordering::Relaxed) > 0
@@ -259,16 +276,21 @@ impl AudioPlayer {
         let mut s = self.shared.lock();
         s.spans = spans;
         s.voice_spans = session.voice_over_spans();
-        s.music = sf_engine::lanes::music_clips(&session.pkg.project, &session.timeline);
-        s.music_fades = sf_project::music_clips::effective_fades(&s.music);
         s.duration_ms = session.duration_ms();
-        let (volume, muted) = (cfg.audio.background_audio_volume as f32, cfg.audio.mute_background_audio);
-        s.bg_volume = volume;
-        s.bg_muted = muted;
-        if let Some(bg) = &mut s.background {
-            bg.volume = volume;
-            bg.muted = muted;
-        }
+        let music = sf_engine::lanes::music_clips(&session.pkg.project, &session.timeline);
+        let fades = sf_project::music_clips::effective_fades(&music);
+        s.music = music
+            .into_iter()
+            .zip(fades)
+            .filter_map(|(clip, fades)| {
+                let track = clip.track(&cfg.audio)?.to_string();
+                let level = clip.level(&cfg.audio) as f32;
+                Some(MusicPlay { clip, fades, track, level })
+            })
+            .collect();
+        drop(s);
+        // a part may have just been given a track that is not decoded yet
+        self.load_music(session);
     }
 
     /// Waveform peaks of a track over the whole recording (source time), `buckets` wide.
@@ -283,12 +305,12 @@ impl AudioPlayer {
         self.shared.lock().voice_clips.get(file_name).map(|c| c.peaks(buckets))
     }
 
-    /// Waveform peaks of the background music track, `buckets` across the whole track, and its
-    /// length (ms); `None` until it is decoded.
-    pub fn music_peaks(&self, buckets: usize) -> Option<(Vec<f32>, f64)> {
+    /// Waveform peaks of music track `name`, `buckets` across the whole track, and its length
+    /// (ms); `None` until it is decoded.
+    pub fn music_peaks(&self, name: &str, buckets: usize) -> Option<(Vec<f32>, f64)> {
         let s = self.shared.lock();
-        let bg = s.background.as_ref()?;
-        Some((bg.clip.peaks(buckets), bg.clip.duration_ms()))
+        let t = s.music_tracks.get(name)?;
+        Some((t.peaks(buckets), t.duration_ms()))
     }
 
     /// Length of a decoded voice-over file (ms).
@@ -335,7 +357,7 @@ impl AudioPlayer {
     /// Something to play drives the clock: recorded tracks or voice-overs.
     pub fn has_audio(&self) -> bool {
         let s = self.shared.lock();
-        !s.tracks.is_empty() || !s.voice_clips.is_empty()
+        !s.tracks.is_empty() || !s.voice_clips.is_empty() || !s.music_tracks.is_empty()
     }
 
     /// Master volume (0 while a voice-over is being recorded, so the mic does not pick it up).

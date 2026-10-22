@@ -1107,8 +1107,22 @@ fn audio_ui(ed: &mut Editor, ui: &mut egui::Ui) {
         n => format!("{n} voice-overs. Select one on the timeline to move, mute or change its volume."),
     });
     widgets::hint(ui, "In a call, record from a microphone the call is not using: a Bluetooth headset (AirPods) shared with a call records near silence. macOS also turns other apps down during a call, so play takes back after it.");
-    widgets::title(ui, "Background audio");
-    let current = ed.session.pkg.project.config.audio.background_audio_file_name.clone();
+    // with a music part selected, every control below changes that part only
+    let part = ed.selected_music.clone().and_then(|id| sf_engine::lanes::music_clips(&ed.session.pkg.project, &ed.session.timeline).into_iter().find(|c| c.id == id));
+    let audio_cfg = ed.session.pkg.project.config.audio.clone();
+    if let Some(c) = &part {
+        widgets::title(ui, "Background audio · selected part");
+        widgets::hint(ui, &format!("Changes apply to the music part at {} – {} only.", crate::editor::fmt_clock(c.output_start_ms), crate::editor::fmt_clock(c.output_end_ms())));
+        if widgets::secondary_button(ui, "Change all the music instead").clicked() {
+            ed.selected_music = None;
+        }
+    } else {
+        widgets::title(ui, "Background audio");
+    }
+    let current = match &part {
+        Some(c) => c.track(&audio_cfg).map(str::to_string),
+        None => audio_cfg.background_audio_file_name.clone(),
+    };
     let library = ed.session.assets.list_background_audio();
     if library.is_empty() {
         widgets::hint(ui, "No music library on this Mac yet. Add your own track with \"Add background audio…\" below.");
@@ -1116,9 +1130,13 @@ fn audio_ui(ed: &mut Editor, ui: &mut egui::Ui) {
     let mut categories: Vec<String> = library.iter().filter_map(|n| n.split('/').next().map(str::to_string)).collect();
     categories.dedup();
     let none_sel = current.is_none();
-    if ui.selectable_label(none_sel, "None").clicked() && !none_sel {
-        ed.remove_music();
+    if ui.selectable_label(none_sel, if part.is_some() { "None (delete this part)" } else { "None" }).clicked() && !none_sel {
+        match &part {
+            Some(_) => ed.delete_selected(),
+            None => ed.remove_music(),
+        }
     }
+    let mut picked: Option<String> = None;
     for cat in categories {
         let title = {
             let mut c = cat.chars();
@@ -1134,17 +1152,7 @@ fn audio_ui(ed: &mut Editor, ui: &mut egui::Ui) {
                 let label = sf_session::assets::background_audio_label(track);
                 let sel = current.as_deref().is_some_and(|c| sf_session::assets::background_audio_key(c) == sf_session::assets::background_audio_key(track));
                 if ui.selectable_label(sel, label).clicked() && !sel {
-                    let t = track.clone();
-                    ed.edit(move |p| {
-                        p.config.audio.background_audio_file_name = Some(t);
-                        p.config.audio.mute_background_audio = false;
-                        // Screen Studio's 5 % default is near-silent; start at an audible level
-                        if p.config.audio.background_audio_volume < 0.2 {
-                            p.config.audio.background_audio_volume = 0.3;
-                        }
-                    });
-                    ed.reload_audio();
-                    ed.preview_background_audio();
+                    picked = Some(track.clone());
                 }
             }
         });
@@ -1155,23 +1163,74 @@ fn audio_ui(ed: &mut Editor, ui: &mut egui::Ui) {
             let dest = ed.session.pkg.path.join("assets").join(&name);
             let _ = std::fs::create_dir_all(dest.parent().unwrap());
             if std::fs::copy(&p, &dest).is_ok() {
-                ed.edit(move |pr| {
-                    pr.config.audio.background_audio_file_name = Some(name);
-                    pr.config.audio.mute_background_audio = false;
-                    if pr.config.audio.background_audio_volume < 0.2 {
-                        pr.config.audio.background_audio_volume = 0.3;
-                    }
-                });
-                ed.reload_audio();
-                ed.preview_background_audio();
+                picked = Some(name);
             }
         }
     }
-    let mut mute_bg = ed.session.pkg.project.config.audio.mute_background_audio;
-    if widgets::toggle_row(ui, "Mute background audio", "", &mut mute_bg) {
-        ed.edit(move |p| p.config.audio.mute_background_audio = mute_bg);
+    if let Some(track) = picked {
+        set_music_track(ed, part.as_ref().map(|c| c.id.as_str()), track);
+        ed.preview_background_audio();
     }
-    cfg_slider(ed, ui, "Background audio volume", |p| p.config.audio.background_audio_volume, |p, v| p.config.audio.background_audio_volume = v, 0.0..=1.0, Some(0.05), "");
+    match &part {
+        Some(c) => {
+            let id = c.id.clone();
+            let mut mute = c.muted;
+            if widgets::toggle_row(ui, "Mute this part", "", &mut mute) {
+                ed.edit_music_clip(&id, move |m| m.muted = mute);
+            }
+            let (get_id, set_id) = (id.clone(), id.clone());
+            cfg_slider(ed, ui, "Volume of this part", move |p| part_of(p, &get_id).map(|m| m.volume.unwrap_or(p.config.audio.background_audio_volume)).unwrap_or(0.0), move |p, v| with_parts(p, |m| if m.id == set_id { m.volume = Some(v) }), 0.0..=1.0, None, "");
+        }
+        None => {
+            let mut mute_bg = audio_cfg.mute_background_audio;
+            if widgets::toggle_row(ui, "Mute background audio", "", &mut mute_bg) {
+                // all the music: parts muted on their own follow too
+                ed.edit(move |p| {
+                    p.config.audio.mute_background_audio = mute_bg;
+                    with_parts(p, |m| m.muted = false);
+                });
+            }
+            cfg_slider(ed, ui, "Background audio volume", |p| p.config.audio.background_audio_volume, |p, v| {
+                p.config.audio.background_audio_volume = v;
+                with_parts(p, |m| m.volume = None);
+            }, 0.0..=1.0, Some(0.05), "");
+        }
+    }
+}
+
+/// Music part `id` of a project, when the music is saved as parts.
+fn part_of(p: &sf_project::Project, id: &str) -> Option<sf_project::MusicClip> {
+    use sf_project::SceneMusicExt;
+    p.scenes[0].music_clips()?.into_iter().find(|m| m.id == id)
+}
+
+/// Change every music part of a project (no-op before the music is saved as parts).
+fn with_parts(p: &mut sf_project::Project, mut f: impl FnMut(&mut sf_project::MusicClip)) {
+    use sf_project::SceneMusicExt;
+    if let Some(mut clips) = p.scenes[0].music_clips() {
+        clips.iter_mut().for_each(&mut f);
+        p.scenes[0].set_music_clips(Some(clips));
+    }
+}
+
+/// Play `track` in music part `part`, or in all the music (dropping the parts' own tracks).
+fn set_music_track(ed: &mut Editor, part: Option<&str>, track: String) {
+    match part {
+        Some(id) => ed.edit_music_clip(id, move |m| {
+            m.file_name = Some(track);
+            m.muted = false;
+        }),
+        None => ed.edit(move |p| {
+            p.config.audio.background_audio_file_name = Some(track);
+            p.config.audio.mute_background_audio = false;
+            // Screen Studio's 5 % default is near-silent; start at an audible level
+            if p.config.audio.background_audio_volume < 0.2 {
+                p.config.audio.background_audio_volume = 0.3;
+            }
+            with_parts(p, |m| m.file_name = None);
+        }),
+    }
+    ed.reload_audio();
 }
 
 fn shortcuts_ui(ed: &mut Editor, ui: &mut egui::Ui) {

@@ -35,6 +35,14 @@ pub struct MusicClip {
     pub fade_in_ms: f64,
     #[serde(default = "default_fade")]
     pub fade_out_ms: f64,
+    /// This part's own track, volume and mute; `None` / false follow the project's
+    /// background audio settings.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub volume: Option<f64>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub muted: bool,
 }
 
 fn default_fade() -> f64 {
@@ -46,7 +54,21 @@ impl MusicClip {
     pub const DEFAULT_FADE_MS: f64 = 1000.0;
 
     pub fn new(output_start_ms: f64, duration_ms: f64) -> Self {
-        MusicClip { id: new_id(), output_start_ms, duration_ms, file_offset_ms: 0.0, layer: 0, fade_in_ms: Self::DEFAULT_FADE_MS, fade_out_ms: Self::DEFAULT_FADE_MS }
+        MusicClip { id: new_id(), output_start_ms, duration_ms, file_offset_ms: 0.0, layer: 0, fade_in_ms: Self::DEFAULT_FADE_MS, fade_out_ms: Self::DEFAULT_FADE_MS, file_name: None, volume: None, muted: false }
+    }
+
+    /// The track this clip plays: its own, or the project's background track.
+    pub fn track<'a>(&'a self, audio: &'a crate::v4::AudioConfig) -> Option<&'a str> {
+        self.file_name.as_deref().or(audio.background_audio_file_name.as_deref())
+    }
+
+    /// Level this clip plays at (0 when it or all the music is muted).
+    pub fn level(&self, audio: &crate::v4::AudioConfig) -> f64 {
+        if self.muted || audio.mute_background_audio {
+            0.0
+        } else {
+            self.volume.unwrap_or(audio.background_audio_volume)
+        }
     }
 
     pub fn output_end_ms(&self) -> f64 {

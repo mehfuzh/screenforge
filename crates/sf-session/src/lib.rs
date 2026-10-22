@@ -195,7 +195,12 @@ impl Session {
     /// Path of the project's background audio track, if any (project `assets/` first, then
     /// the bundled library).
     pub fn background_audio_path(&self) -> Option<std::path::PathBuf> {
-        let name = self.pkg.project.config.audio.background_audio_file_name.as_deref()?;
+        self.music_path(self.pkg.project.config.audio.background_audio_file_name.as_deref()?)
+    }
+
+    /// File of a music track by its project name: a file added to the project's `assets/`,
+    /// or a track of the bundled library (`<category>/<file>`).
+    pub fn music_path(&self, name: &str) -> Option<std::path::PathBuf> {
         let local = self.pkg.path.join("assets").join(name.rsplit('/').next().unwrap_or(name));
         if local.is_file() {
             return Some(local);
