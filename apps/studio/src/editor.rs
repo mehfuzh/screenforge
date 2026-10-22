@@ -357,6 +357,15 @@ impl Editor {
         self.reload_audio();
     }
 
+    /// Change one music clip through `edit` (the whole-video music becomes a clip first).
+    pub fn edit_music_clip(&mut self, id: &str, f: impl FnOnce(&mut sf_project::MusicClip)) {
+        use sf_project::SceneMusicExt;
+        let mut clips = sf_engine::lanes::music_clips(&self.session.pkg.project, &self.session.timeline);
+        let Some(c) = clips.iter_mut().find(|c| c.id == id) else { return };
+        f(c);
+        self.edit(move |p| p.scenes[0].set_music_clips(Some(clips)));
+    }
+
     /// Split music clip `id` at output time `t`; the right-hand part is selected.
     pub fn split_music(&mut self, id: &str, t: f64) {
         use sf_project::SceneMusicExt;

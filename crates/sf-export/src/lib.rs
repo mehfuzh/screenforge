@@ -86,10 +86,21 @@ pub fn audio_inputs(session: &Session) -> Vec<AudioMixInput> {
             // one looping input per music clip, started at its place in the track and cut to
             // its length (`atrim` after the loop, so a clip longer than the track keeps going)
             let track_ms = sf_media::probe(&path).ok().and_then(|i| i.duration_ms()).filter(|d| *d > 0.0);
-            for m in sf_engine::lanes::music_clips(&session.pkg.project, &session.timeline) {
+            let clips = sf_engine::lanes::music_clips(&session.pkg.project, &session.timeline);
+            let fades = sf_project::music_clips::effective_fades(&clips);
+            for (m, (fade_in, fade_out)) in clips.into_iter().zip(fades) {
                 let dur = m.duration_ms.min(session.duration_ms() - m.output_start_ms);
                 if dur <= 1.0 {
                     continue;
+                }
+                // fades in the clip's own time (it starts at 0 after the trim); a fade-out
+                // runs to the clip's end even when the video cuts the clip short
+                let mut chain = format!("atrim=duration={:.3}", dur / 1000.0);
+                if fade_in > 0.0 {
+                    chain.push_str(&format!(",afade=t=in:st=0:d={:.3}", fade_in / 1000.0));
+                }
+                if fade_out > 0.0 {
+                    chain.push_str(&format!(",afade=t=out:st={:.3}:d={:.3}", ((m.duration_ms - fade_out) / 1000.0).max(0.0), fade_out / 1000.0));
                 }
                 let offset = track_ms.map(|t| m.file_offset_ms.rem_euclid(t)).unwrap_or(0.0);
                 inputs.push(AudioMixInput {
@@ -100,7 +111,7 @@ pub fn audio_inputs(session: &Session) -> Vec<AudioMixInput> {
                     end_ms: None,
                     tempo: 1.0,
                     loop_input: true,
-                    filter: Some(format!("atrim=duration={:.3}", dur / 1000.0)),
+                    filter: Some(chain),
                 });
             }
         }

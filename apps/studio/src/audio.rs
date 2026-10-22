@@ -36,8 +36,10 @@ struct Shared {
     /// Decoded voice-overs by file name, and where they play.
     voice_clips: std::collections::HashMap<String, Arc<AudioClip>>,
     voice_spans: Vec<VoiceOverSpan>,
-    /// Where the background music plays (it loops inside each clip).
+    /// Where the background music plays (it loops inside each clip), and the fades that
+    /// apply to each clip.
     music: Vec<sf_project::MusicClip>,
+    music_fades: Vec<(f64, f64)>,
     playing: bool,
     /// End of the audio handed to the device so far (advances a whole buffer per callback).
     output_ms: f64,
@@ -69,7 +71,7 @@ pub struct AudioPlayer {
 
 impl AudioPlayer {
     pub fn new() -> Self {
-        let shared = Arc::new(Mutex::new(Shared { tracks: vec![], background: None, spans: vec![], voice_clips: Default::default(), voice_spans: vec![], music: vec![], playing: false, output_ms: 0.0, callback_at: None, callback_ms: 0.0, duration_ms: 0.0, master_volume: 1.0, bg_volume: 0.05, bg_muted: false }));
+        let shared = Arc::new(Mutex::new(Shared { tracks: vec![], background: None, spans: vec![], voice_clips: Default::default(), voice_spans: vec![], music: vec![], music_fades: vec![], playing: false, output_ms: 0.0, callback_at: None, callback_ms: 0.0, duration_ms: 0.0, master_volume: 1.0, bg_volume: 0.05, bg_muted: false }));
         let stream = Self::open_stream(shared.clone());
         if let Err(e) = &stream {
             tracing::warn!("audio output unavailable: {e}");
@@ -123,11 +125,12 @@ impl AudioPlayer {
                             }
                             if let Some(bg) = &s.background {
                                 if !bg.muted && bg.clip.frames() > 0 {
-                                    for m in s.music.iter().filter(|m| m.contains_output(t_out)) {
+                                    for (m, fades) in s.music.iter().zip(&s.music_fades).filter(|(m, _)| m.contains_output(t_out)) {
                                         let i = bg.clip.frame_at_ms(m.file_ms_at(t_out).max(0.0)) % bg.clip.frames();
                                         let ch = bg.clip.channels as usize;
-                                        l += bg.clip.samples[i * ch] * bg.volume * master;
-                                        r += bg.clip.samples[i * ch + (ch - 1).min(1)] * bg.volume * master;
+                                        let vol = bg.volume * master * sf_project::music_clips::fade_gain(m, *fades, t_out) as f32;
+                                        l += bg.clip.samples[i * ch] * vol;
+                                        r += bg.clip.samples[i * ch + (ch - 1).min(1)] * vol;
                                     }
                                 }
                             }
@@ -257,6 +260,7 @@ impl AudioPlayer {
         s.spans = spans;
         s.voice_spans = session.voice_over_spans();
         s.music = sf_engine::lanes::music_clips(&session.pkg.project, &session.timeline);
+        s.music_fades = sf_project::music_clips::effective_fades(&s.music);
         s.duration_ms = session.duration_ms();
         let (volume, muted) = (cfg.audio.background_audio_volume as f32, cfg.audio.mute_background_audio);
         s.bg_volume = volume;

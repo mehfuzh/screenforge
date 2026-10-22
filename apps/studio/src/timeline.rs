@@ -6,7 +6,7 @@
 //! Editing surface: clip edges trim (ripple), zoom items select/move/resize, context menus,
 //! snapping to the playhead and other item edges (hold Shift to disable).
 
-use egui::{pos2, vec2, Color32, CursorIcon, Rect, Sense, Stroke};
+use egui::{pos2, vec2, Color32, CursorIcon, Rect, RichText, Sense, Stroke};
 use sf_engine::timeline::{edit, Timeline};
 use sf_project::v4::Zoom;
 use sf_project::Project;
@@ -732,7 +732,7 @@ impl TimelineWidget {
         let occ = sf_engine::lanes::occupancy(&ed.session.pkg.project, &ed.session.timeline);
         let layer_of = |k: &str| occ.iter().find(|c| c.id == k).map(|c| c.layer).unwrap_or(0);
 
-        // one entry per block: (lane key, start, end, file offset, end-trim limit)
+        // one entry per block
         struct Block {
             key: String,
             id: String,
@@ -744,16 +744,20 @@ impl TimelineWidget {
             muted: bool,
             volume: f64,
             file_name: String,
+            /// Music: the clip and the fades that apply to it.
+            music: Option<(sf_project::MusicClip, (f64, f64))>,
         }
         let mut blocks: Vec<Block> = vec![];
         for v in ed.session.voice_over_spans() {
             let file_ms = ed.audio.voice_duration_ms(&v.file_name).unwrap_or(v.file_offset_ms + v.output_duration_ms()).max(1.0);
-            blocks.push(Block { key: key(Kind::Voice, &v.id), id: v.id.clone(), kind: Kind::Voice, start: v.output_start_ms, end: v.output_end_ms, offset: v.file_offset_ms, file_ms, muted: v.muted, volume: v.volume, file_name: v.file_name.clone() });
+            blocks.push(Block { key: key(Kind::Voice, &v.id), id: v.id.clone(), kind: Kind::Voice, start: v.output_start_ms, end: v.output_end_ms, offset: v.file_offset_ms, file_ms, muted: v.muted, volume: v.volume, file_name: v.file_name.clone(), music: None });
         }
         let music_name = audio.background_audio_file_name.as_deref().map(sf_session::assets::background_audio_label).unwrap_or_default();
-        for m in sf_engine::lanes::music_clips(&ed.session.pkg.project, &ed.session.timeline) {
+        let music = sf_engine::lanes::music_clips(&ed.session.pkg.project, &ed.session.timeline);
+        let fades = sf_project::music_clips::effective_fades(&music);
+        for (m, f) in music.into_iter().zip(fades) {
             let end = m.output_end_ms().min(ed.duration_ms());
-            blocks.push(Block { key: key(Kind::Music, &m.id), id: m.id.clone(), kind: Kind::Music, start: m.output_start_ms, end, offset: m.file_offset_ms, file_ms: f64::INFINITY, muted: audio.mute_background_audio, volume: audio.background_audio_volume, file_name: String::new() });
+            blocks.push(Block { key: key(Kind::Music, &m.id), id: m.id.clone(), kind: Kind::Music, start: m.output_start_ms, end, offset: m.file_offset_ms, file_ms: f64::INFINITY, muted: audio.mute_background_audio, volume: audio.background_audio_volume, file_name: String::new(), music: Some((m, f)) });
         }
 
         for b in blocks {
@@ -790,10 +794,24 @@ impl TimelineWidget {
                     let pos = b.offset + ms_of(x) - b.start;
                     let pos = if looping { pos.rem_euclid(file_ms) } else { pos };
                     let f = (pos / file_ms).clamp(0.0, 1.0);
-                    let peak = (peaks[((f * peaks.len() as f64) as usize).min(peaks.len() - 1)] * gain).max(1e-6);
+                    // music tapers through its fades
+                    let fade = b.music.as_ref().map(|(m, f)| sf_project::music_clips::fade_gain(m, *f, ms_of(x)) as f32).unwrap_or(1.0);
+                    let peak = (peaks[((f * peaks.len() as f64) as usize).min(peaks.len() - 1)] * gain * fade).max(1e-6);
                     let a = ((20.0 * peak.log10() + 50.0) / 50.0).clamp(0.04, 1.0);
                     painter.line_segment([pos2(x, mid - a * half), pos2(x, mid + a * half)], Stroke::new(1.5, color.gamma_multiply(0.8)));
                     x += 1.5;
+                }
+            }
+            // fade ramps: a line from the silent corner to full level
+            if let Some((m, (fin, fout))) = &b.music {
+                let ramp = Stroke::new(1.5, pal.text.gamma_multiply(0.7));
+                if *fin > 0.0 {
+                    let xe = x_of(m.output_start_ms + fin).min(block.right());
+                    painter.line_segment([pos2(block.left() + 2.0, block.bottom() - 2.0), pos2(xe, block.top() + 2.0)], ramp);
+                }
+                if *fout > 0.0 && m.output_end_ms() <= ed.duration_ms() + 1.0 {
+                    let xs = x_of(m.output_end_ms() - fout).max(block.left());
+                    painter.line_segment([pos2(xs, block.top() + 2.0), pos2(block.right() - 2.0, block.bottom() - 2.0)], ramp);
                 }
             }
             if visible.width() > 90.0 {
@@ -1389,6 +1407,22 @@ fn music_menu(ed: &mut Editor, ui: &mut egui::Ui, id: &str, at_ms: f64) {
     }
     layer_buttons(ed, ui, &sf_engine::lanes::key(sf_engine::lanes::Kind::Music, id));
     ui.separator();
+    if let Some(clip) = sf_engine::lanes::music_clips(&ed.session.pkg.project, &ed.session.timeline).into_iter().find(|m| m.id == id) {
+        const FADES: [(f64, &str); 5] = [(0.0, "Off"), (500.0, "0.5 s"), (1000.0, "1 s"), (2000.0, "2 s"), (3000.0, "3 s")];
+        for (out, title) in [(false, "Fade in"), (true, "Fade out")] {
+            let cur = if out { clip.fade_out_ms } else { clip.fade_in_ms };
+            ui.menu_button(title, |ui| {
+                for (ms, label) in FADES {
+                    if ui.selectable_label((cur - ms).abs() < 1.0, label).clicked() {
+                        ed.edit_music_clip(id, move |m| if out { m.fade_out_ms = ms } else { m.fade_in_ms = ms });
+                        ui.close();
+                    }
+                }
+            });
+        }
+        ui.label(RichText::new("Edges that touch another music clip do not fade.").size(11.0).color(theme::p().text_dim));
+        ui.separator();
+    }
     if ui.button(if a.mute_background_audio { "Unmute music" } else { "Mute music" }).clicked() {
         ed.edit(|p| p.config.audio.mute_background_audio = !p.config.audio.mute_background_audio);
         ed.reload_audio();
