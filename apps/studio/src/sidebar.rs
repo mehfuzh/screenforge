@@ -1357,13 +1357,16 @@ fn unsplash_ui(ed: &mut Editor, ui: &mut egui::Ui) {
         });
         ui.add_space(4.0);
     }
+    // the button first, right to left, so the field takes the rest of the row
     let searched = ui
-        .horizontal(|ui| {
-            let field = ui.add(egui::TextEdit::singleline(&mut ed.unsplash.query).hint_text("Search photos (empty: wallpapers)").desired_width(ui.available_width() - 76.0));
+        .allocate_ui_with_layout(egui::vec2(ui.available_width(), 38.0), egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            let button = widgets::secondary_button(ui, "Search").clicked();
+            let field = widgets::text_field(ui, &mut ed.unsplash.query, "Search photos");
             let enter = field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-            widgets::secondary_button(ui, "Search").clicked() || enter
+            button || enter
         })
         .inner;
+    widgets::hint(ui, "Leave it empty to browse Unsplash's wallpapers.");
     if searched {
         ed.unsplash.search(&ctx, 1);
     }
