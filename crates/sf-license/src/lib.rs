@@ -350,7 +350,7 @@ fn hex(bytes: &[u8]) -> String {
 /// the device has no identifier, in which case the local file alone counts.
 pub fn sync_free_exports() {
     let Some(device) = device_id() else { return };
-    let Ok(v) = call_function("free-export", serde_json::json!({ "device": device })) else { return };
+    let Ok(v) = call_function("free-export", serde_json::json!({ "device": device, "v": 2 })) else { return };
     if let Some(used) = v.get("used").and_then(|u| u.as_u64()) {
         reconcile_server_count(used as u32);
     }
@@ -370,7 +370,7 @@ pub fn record_free_export() -> std::io::Result<()> {
     write_local_free_exports(n)?;
     if let Some(device) = device_id() {
         std::thread::spawn(move || {
-            if let Ok(v) = call_function("free-export", serde_json::json!({ "device": device, "record": true })) {
+            if let Ok(v) = call_function("free-export", serde_json::json!({ "device": device, "record": true, "v": 2 })) {
                 if let Some(used) = v.get("used").and_then(|u| u.as_u64()) {
                     reconcile_server_count(used as u32);
                 }

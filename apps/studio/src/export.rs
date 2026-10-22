@@ -58,8 +58,19 @@ pub struct ExportDialog {
     started: Option<std::time::Instant>,
 }
 
+/// An empty dialog: no file reads, no network. `std::mem::take` puts one in place every frame
+/// while the real dialog is borrowed, so this must stay free; [`ExportDialog::new`] is the one
+/// that loads the license and talks to the backend.
 impl Default for ExportDialog {
     fn default() -> Self {
+        ExportDialog { open: false, license: sf_license::Status::Invalid("no key".into()), email: String::new(), activation: None, check_in: None, activation_msg: None, code_sent_to: None, code: String::new(), show_license: false, free_exports_synced: false, format: Format::Mp4, fps: 60.0, height: 1080, quality: QualityPreset::SocialMedia, codec: VideoCodec::H264, audio: true, job: None, progress: None, result: None, started: None }
+    }
+}
+
+impl ExportDialog {
+    /// The dialog for a newly opened editor: loads the saved license and starts the one quiet
+    /// check-in with the backend (or the free-export count sync without a license).
+    pub fn new() -> Self {
         let license_key = sf_license::load_saved().unwrap_or_default();
         let license = if license_key.is_empty() { sf_license::Status::Invalid("no key".into()) } else { sf_license::verify(&license_key) };
         let email = sf_license::load_email().unwrap_or_default();
@@ -78,7 +89,7 @@ impl Default for ExportDialog {
         if !license.is_valid() {
             std::thread::spawn(sf_license::sync_free_exports);
         }
-        ExportDialog { open: false, license, email, activation: None, check_in, activation_msg: None, code_sent_to: None, code: String::new(), show_license: false, free_exports_synced: false, format: Format::Mp4, fps: 60.0, height: 1080, quality: QualityPreset::SocialMedia, codec: VideoCodec::H264, audio: true, job: None, progress: None, result: None, started: None }
+        ExportDialog { license, email, check_in, ..Default::default() }
     }
 }
 

@@ -131,7 +131,7 @@ impl Editor {
             dirty: false,
             last_edit: None,
             timeline: TimelineWidget::default(),
-            export: ExportDialog::default(),
+            export: ExportDialog::new(),
             undo: vec![],
             redo: vec![],
             status: None,
