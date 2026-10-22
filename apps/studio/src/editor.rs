@@ -43,8 +43,17 @@ pub struct Editor {
     pub selected_voice_over: Option<String>,
     /// A voice-over is being recorded: the video plays muted from where it started.
     pub voice_rec: Option<crate::voice_over::VoiceRecorder>,
-    /// Microphone for voice-overs (device name); `None` records from the system default.
-    pub voice_mic: Option<String>,
+    /// Microphone for voice-overs; `None` records from the system default.
+    pub voice_mic: Option<sf_recording::discover::AudioDevice>,
+    /// Microphones in the voice-over menu, listed when it is first shown and again on opening it.
+    pub voice_mics: Option<Vec<sf_recording::discover::AudioDevice>>,
+    /// The voice-over bar is shown over the preview (microphone, Record / Stop).
+    pub voice_hud: bool,
+    /// Live level of the voice-over microphone while the bar waits to record.
+    voice_meter: Option<crate::mic_meter::MicMeter>,
+    /// Recent microphone levels for the bar's equalizer (one every 50 ms, oldest first).
+    voice_levels: std::collections::VecDeque<f32>,
+    voice_levels_at: Option<Instant>,
     /// Background → Unsplash search and downloads.
     pub unsplash: crate::unsplash::Browser,
     pub dirty: bool,
@@ -127,6 +136,11 @@ impl Editor {
             selected_voice_over: None,
             voice_rec: None,
             voice_mic: None,
+            voice_mics: None,
+            voice_hud: false,
+            voice_meter: None,
+            voice_levels: Default::default(),
+            voice_levels_at: None,
             unsplash: Default::default(),
             dirty: false,
             last_edit: None,
@@ -422,8 +436,15 @@ impl Editor {
             self.seek(0.0);
         }
         let src = self.session.timeline.output_to_source(self.playhead_ms).unwrap_or(0.0);
-        match crate::voice_over::VoiceRecorder::start(src, self.voice_mic.as_deref()) {
+        let name = match &self.voice_mic {
+            Some(m) => m.name.clone(),
+            None => crate::voice_over::default_label(self.voice_mics.get_or_insert_with(crate::voice_over::microphones)),
+        };
+        // the bar's level meter lets go of the microphone before the take opens it
+        self.voice_meter = None;
+        match crate::voice_over::VoiceRecorder::start(src, self.voice_mic.as_ref(), name) {
             Ok(rec) => {
+                self.voice_hud = true;
                 self.set_status(format!("Recording voice-over from {}", rec.device_name));
                 self.voice_rec = Some(rec);
                 self.audio.set_volume(0.0);
@@ -432,6 +453,27 @@ impl Editor {
             }
             Err(e) => self.set_status(format!("Could not start the microphone: {e}")),
         }
+    }
+
+    /// Microphone rows for the voice-over menus: the system default, then each microphone.
+    pub fn voice_mic_rows(&mut self, ui: &mut egui::Ui) {
+        let mics = self.voice_mics.get_or_insert_with(crate::voice_over::microphones).clone();
+        if ui.selectable_label(self.voice_mic.is_none(), crate::voice_over::default_label(&mics)).clicked() {
+            self.voice_mic = None;
+        }
+        // Linux lists the system default as its own entry: that is the row above
+        for m in mics.iter().filter(|m| m.id != "default") {
+            if ui.selectable_label(self.voice_mic.as_ref().is_some_and(|v| v.id == m.id), &m.name).clicked() {
+                self.voice_mic = Some(m.clone());
+            }
+        }
+    }
+
+    /// Show the voice-over bar over the preview, with the microphones listed again in case one
+    /// was plugged in.
+    pub fn open_voice_over_hud(&mut self) {
+        self.voice_hud = true;
+        self.voice_mics = Some(crate::voice_over::microphones());
     }
 
     /// Stop the voice-over recording and place the take on the timeline.
@@ -443,7 +485,7 @@ impl Editor {
         let dir = self.session.pkg.path.join(sf_project::v4::VoiceOver::DIR);
         match rec.finish(&dir) {
             Ok(Some(take)) => {
-                let silent = take.is_silent();
+                let silent = take.silent;
                 let vo = sf_project::v4::VoiceOver::microphone(start, take.duration_ms, take.file_name);
                 let id = vo.id.clone();
                 self.edit(move |p| p.scenes[0].voice_overs.push(vo));
@@ -451,7 +493,7 @@ impl Editor {
                 self.select_voice_over(id);
                 if silent {
                     // kept so it can be checked, but say why it will play back as nothing
-                    self.set_status(format!("Voice-over is silent: {device} sent no sound (muted, or in use by a call?). Choose another microphone in Audio."));
+                    self.set_status(format!("Voice-over is silent: {device} sent no voice (muted, input volume too low, or in use by a call?). Choose another microphone in Audio, or raise its input volume in the system sound settings."));
                 } else {
                     self.set_status("Added voice-over");
                 }
@@ -664,6 +706,9 @@ impl Editor {
                 self.stop_voice_over();
             }
             return;
+        }
+        if self.voice_hud && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
+            self.voice_hud = false;
         }
         let frame = 1000.0 / 60.0;
         let (mut split, mut del, mut undo, mut redo, mut save, mut export, mut prev_b, mut next_b, mut toggle) = (false, false, false, false, false, false, false, false, false);
@@ -1000,15 +1045,20 @@ impl Editor {
                 crate::masks::add_at_playhead(self);
             }
             let recording = self.voice_rec.is_some();
-            if widgets::rail_icon(&mut rail_ui, widgets::Icon::Mic, recording, if recording { "Stop voice-over (Space)" } else { "Record voice-over from playhead (R)" }).clicked() {
+            if widgets::rail_icon(&mut rail_ui, widgets::Icon::Mic, recording || self.voice_hud, if recording { "Stop voice-over (Space)" } else { "Voice-over (R)" }).clicked() {
                 if recording {
                     self.stop_voice_over();
+                } else if self.voice_hud {
+                    self.voice_hud = false;
                 } else {
-                    self.start_voice_over();
+                    self.open_voice_over_hud();
                 }
             }
-            if self.voice_rec.is_some() {
+            if self.voice_hud || self.voice_rec.is_some() {
                 self.voice_over_hud(ui, stage);
+            } else {
+                self.voice_meter = None;
+                self.voice_levels.clear();
             }
         });
 
@@ -1018,33 +1068,143 @@ impl Editor {
         go_home
     }
 
-    /// Floating bar over the top of the preview while a voice-over records: red dot, elapsed
-    /// time, input level and a Stop button.
+    /// Voice-over bar over the top of the preview. Waiting: the microphone's live level, a menu
+    /// to change it, Record and close. Recording: pulsing dot, elapsed time, level and Stop.
     fn voice_over_hud(&mut self, ui: &mut egui::Ui, stage: Rect) {
-        let Some(rec) = &self.voice_rec else { return };
         let pal = theme::p();
-        let (elapsed, level) = (rec.elapsed_ms(), rec.level());
-        // nothing heard after a couple of seconds: the mic is muted or held by a call
-        let no_sound = elapsed > 2000.0 && rec.is_silent();
-        let bar = Rect::from_center_size(pos2(stage.center().x, stage.top() + 30.0), vec2(if no_sound { 420.0 } else { 300.0 }, 44.0));
-        let p = ui.painter();
-        p.rect(bar, CornerRadius::same(10), pal.glass_solid, Stroke::new(1.0, pal.glass_border), egui::StrokeKind::Inside);
-        // the dot pulses once a second
-        let pulse = 0.55 + 0.45 * ((elapsed / 1000.0 * std::f64::consts::TAU).cos() as f32 * 0.5 + 0.5);
-        p.circle_filled(pos2(bar.left() + 20.0, bar.center().y), 6.0, pal.danger.gamma_multiply(pulse));
-        let (label, color) = if no_sound { (format!("{}  No sound from {}", fmt_clock_short(elapsed), rec.device_name), pal.danger) } else { (format!("Voice-over  {}", fmt_clock_short(elapsed)), pal.on_glass) };
-        let label_rect = Rect::from_min_max(pos2(bar.left() + 34.0, bar.top()), pos2(bar.right() - 112.0, bar.bottom()));
-        p.with_clip_rect(label_rect).text(pos2(label_rect.left(), bar.center().y), Align2::LEFT_CENTER, label, FontId::proportional(14.0), color);
-        widgets::paint_mic_level(p, Rect::from_center_size(pos2(bar.right() - 96.0, bar.center().y), vec2(20.0, 20.0)), level, pal.on_glass, pal.meter);
-        let stop = Rect::from_center_size(pos2(bar.right() - 44.0, bar.center().y), vec2(60.0, 28.0));
-        let resp = ui.interact(stop, ui.id().with("voice-over-stop"), Sense::click()).on_hover_text("Stop and keep the take (Space)");
-        let p = ui.painter();
-        p.rect_filled(stop, CornerRadius::same(2), if resp.hovered() { pal.danger } else { pal.danger.gamma_multiply(0.85) });
-        p.text(stop.center(), Align2::CENTER_CENTER, "Stop", FontId::proportional(13.0), pal.glass_button_fg);
-        if resp.clicked() {
-            self.stop_voice_over();
+        let font = FontId::proportional(13.0);
+        let recording = self.voice_rec.is_some();
+        if !recording {
+            // a meter on the chosen microphone shows it hears you before you record
+            let id = self.voice_mic.as_ref().map_or("default", |m| m.id.as_str()).to_string();
+            if self.voice_meter.as_ref().is_none_or(|m| m.device_name != id) {
+                self.voice_meter = crate::mic_meter::MicMeter::start(&id);
+            }
         }
-        ui.ctx().request_repaint();
+        let mic_name = match (&self.voice_rec, &self.voice_mic) {
+            (Some(rec), _) => rec.device_name.clone(),
+            (None, Some(m)) => m.name.clone(),
+            (None, None) => crate::voice_over::default_label(self.voice_mics.get_or_insert_with(crate::voice_over::microphones)),
+        };
+        let level = match &self.voice_rec {
+            Some(rec) => rec.level(),
+            None => self.voice_meter.as_ref().map_or(0.0, |m| m.level()),
+        };
+        if self.voice_levels_at.is_none_or(|t| t.elapsed().as_millis() >= 50) {
+            self.voice_levels_at = Some(Instant::now());
+            self.voice_levels.push_back(level);
+            if self.voice_levels.len() > 32 {
+                self.voice_levels.pop_front();
+            }
+        }
+        let elapsed = self.voice_rec.as_ref().map_or(0.0, |r| r.elapsed_ms());
+        // nothing heard after a couple of seconds: the mic is muted, too quiet or held by a call
+        let no_sound = elapsed > 2000.0 && self.voice_rec.as_ref().is_some_and(|r| r.is_silent());
+
+        // the bar can be dragged anywhere on the preview; where it was left is kept (as a
+        // fraction of the preview, so a resized window keeps it in the same spot) across runs
+        let pos_id = egui::Id::new("voice-over-hud-pos");
+        let size = vec2(512.0, 44.0);
+        let saved: Option<egui::Vec2> = ui.ctx().data_mut(|d| d.get_persisted(pos_id));
+        let centre = saved.map_or(pos2(stage.center().x, stage.top() + 30.0), |f| stage.min + f * stage.size());
+        let inside = |c: egui::Pos2| {
+            let (half, room) = (size / 2.0 + vec2(4.0, 4.0), stage.size() / 2.0);
+            let clamp = |v: f32, lo: f32, hi: f32| if lo < hi { v.clamp(lo, hi) } else { (lo + hi) / 2.0 };
+            pos2(clamp(c.x, stage.center().x - room.x + half.x, stage.center().x + room.x - half.x), clamp(c.y, stage.center().y - room.y + half.y, stage.center().y + room.y - half.y))
+        };
+        let mut bar = Rect::from_center_size(inside(centre), size);
+        // registered before the controls, so they stay clickable and the empty parts drag
+        let drag = ui.interact(bar, ui.id().with("voice-over-drag"), Sense::click_and_drag()).on_hover_text("Drag to move · double-click to put back");
+        if drag.dragged() {
+            bar = Rect::from_center_size(inside(bar.center() + drag.drag_delta()), size);
+            let f = (bar.center() - stage.min) / stage.size();
+            ui.ctx().data_mut(|d| d.insert_persisted(pos_id, f));
+        }
+        if drag.double_clicked() {
+            ui.ctx().data_mut(|d| d.remove::<egui::Vec2>(pos_id));
+        }
+        if drag.dragged() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+        } else if drag.hovered() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
+        }
+        ui.painter().rect(bar, CornerRadius::same(10), pal.glass_solid, Stroke::new(1.0, pal.glass_border), egui::StrokeKind::Inside);
+        let cy = bar.center().y;
+        // grip: two columns of dots on the left edge
+        for (dx, dy) in [(0.0, -5.0), (0.0, 0.0), (0.0, 5.0), (4.0, -5.0), (4.0, 0.0), (4.0, 5.0)] {
+            ui.painter().circle_filled(pos2(bar.left() + 10.0 + dx, cy + dy), 1.2, pal.text_dim);
+        }
+        let mut x = bar.left() + 24.0;
+        if recording {
+            // the dot pulses once a second
+            let pulse = 0.55 + 0.45 * ((elapsed / 1000.0 * std::f64::consts::TAU).cos() as f32 * 0.5 + 0.5);
+            ui.painter().circle_filled(pos2(x + 6.0, cy), 6.0, pal.danger.gamma_multiply(pulse));
+            ui.painter().text(pos2(x + 20.0, cy), Align2::LEFT_CENTER, fmt_clock_short(elapsed), FontId::monospace(13.0), pal.on_glass);
+            x += 68.0;
+        }
+        let levels: Vec<f32> = self.voice_levels.iter().copied().collect();
+        widgets::paint_level_bars(ui.painter(), Rect::from_min_size(pos2(x, cy - 11.0), vec2(70.0, 22.0)), &levels, pal.meter, theme::glass_alpha(60));
+        x += 80.0;
+
+        // right side: Record / Stop, and close while waiting
+        let close = Rect::from_center_size(pos2(bar.right() - 22.0, cy), vec2(28.0, 28.0));
+        let button = Rect::from_min_size(pos2(if recording { bar.right() - 92.0 } else { close.left() - 88.0 }, cy - 14.0), vec2(80.0, 28.0));
+
+        // middle: the microphone, a menu while waiting; its name or the warning while recording
+        let name_rect = Rect::from_min_max(pos2(x, cy - 14.0), pos2(button.left() - 8.0, cy + 14.0));
+        let fit = |text: String, max_width: f32, color: Color32| {
+            let mut job = egui::text::LayoutJob::simple_singleline(text, font.clone(), color);
+            job.wrap = egui::text::TextWrapping { max_width, max_rows: 1, break_anywhere: true, overflow_character: Some('…') };
+            ui.fonts_mut(|f| f.layout_job(job))
+        };
+        if recording {
+            let (text, color) = if no_sound { (format!("No sound from {mic_name}"), pal.danger) } else { (mic_name, pal.on_glass) };
+            let galley = fit(text, name_rect.width(), color);
+            ui.painter().galley(pos2(name_rect.left(), cy - galley.size().y / 2.0), galley, color);
+        } else {
+            let resp = ui.interact(name_rect, ui.id().with("voice-over-mic"), Sense::click()).on_hover_text("Microphone");
+            let open = egui::Popup::is_id_open(ui.ctx(), egui::Popup::default_response_id(&resp));
+            if resp.hovered() || open {
+                ui.painter().rect_filled(name_rect, CornerRadius::same(2), theme::glass_alpha(36));
+            }
+            let galley = fit(mic_name, name_rect.width() - 34.0, pal.on_glass);
+            ui.painter().galley(pos2(name_rect.left() + 8.0, cy - galley.size().y / 2.0), galley, pal.on_glass);
+            widgets::paint_icon(ui.painter(), Rect::from_center_size(pos2(name_rect.right() - 14.0, cy + 1.0), vec2(10.0, 10.0)), widgets::Icon::ChevronDown, pal.text_dim);
+            if resp.clicked() {
+                // listed again on opening (a microphone may have been plugged in)
+                self.voice_mics = Some(crate::voice_over::microphones());
+            }
+            crate::picker::bar_menu(&resp, egui::RectAlign::BOTTOM_START, |ui| {
+                ui.set_min_width(name_rect.width().max(260.0));
+                self.voice_mic_rows(ui);
+            });
+        }
+
+        let (tip, label) = if recording { ("Stop and keep the take (Space)", "Stop") } else { ("Record from the playhead (R)", "Record") };
+        let resp = ui.interact(button, ui.id().with("voice-over-record"), Sense::click()).on_hover_text(tip);
+        let p = ui.painter();
+        p.rect_filled(button, CornerRadius::same(2), theme::glass_alpha(if resp.hovered() { 48 } else { 28 }));
+        let icon = if recording { widgets::Icon::Stop } else { widgets::Icon::Record };
+        widgets::paint_icon(p, Rect::from_center_size(pos2(button.left() + 17.0, cy), vec2(16.0, 16.0)), icon, pal.danger);
+        p.text(pos2(button.left() + 31.0, cy), Align2::LEFT_CENTER, label, font.clone(), pal.on_glass);
+        if resp.clicked() {
+            if recording {
+                self.stop_voice_over();
+            } else {
+                self.start_voice_over();
+            }
+        }
+        if !recording {
+            let resp = ui.interact(close, ui.id().with("voice-over-close"), Sense::click()).on_hover_text("Close (Esc)");
+            if resp.hovered() {
+                ui.painter().rect_filled(close, CornerRadius::same(2), theme::glass_alpha(36));
+            }
+            widgets::paint_icon(ui.painter(), close.shrink(8.0), widgets::Icon::Close, pal.on_glass);
+            if resp.clicked() {
+                self.voice_hud = false;
+            }
+        }
+        ui.ctx().request_repaint_after(std::time::Duration::from_millis(50));
     }
 
     /// Name prompt for "Save preset as…" / "Rename preset", and the delete confirmation.

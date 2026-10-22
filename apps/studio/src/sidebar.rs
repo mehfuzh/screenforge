@@ -1080,36 +1080,6 @@ fn audio_ui(ed: &mut Editor, ui: &mut egui::Ui) {
         ed.edit(move |p| p.config.audio.mute_system_audio = mute_sys);
         ed.reload_audio();
     }
-    widgets::title(ui, "Voice-over");
-    let default_name = crate::voice_over::default_input_name().unwrap_or_else(|| "none found".into());
-    let mic_label = ed.voice_mic.clone().unwrap_or_else(|| format!("System default ({default_name})"));
-    ui.add_enabled_ui(ed.voice_rec.is_none(), |ui| {
-        egui::ComboBox::from_id_salt("voice-over-mic").selected_text(mic_label).width(ui.available_width()).show_ui(ui, |ui| {
-            if ui.selectable_label(ed.voice_mic.is_none(), format!("System default ({default_name})")).clicked() {
-                ed.voice_mic = None;
-            }
-            // listed while the menu is open only (enumerating devices is not free)
-            for name in crate::voice_over::input_devices() {
-                if ui.selectable_label(ed.voice_mic.as_deref() == Some(name.as_str()), &name).clicked() {
-                    ed.voice_mic = Some(name);
-                }
-            }
-        });
-    });
-    if ed.voice_rec.is_some() {
-        if widgets::accent_button(ui, "Stop recording").clicked() {
-            ed.stop_voice_over();
-        }
-    } else if widgets::secondary_button(ui, "Record voice-over at playhead").on_hover_text("R").clicked() {
-        ed.start_voice_over();
-    }
-    let n = ed.session.pkg.project.scenes[0].voice_overs.len();
-    widgets::hint(ui, &match n {
-        0 => "Narrate over the video: it plays without sound from the playhead while the microphone above records. Press Space or Stop when you are done.".to_string(),
-        1 => "1 voice-over. Select it on the timeline to move, mute or change its volume.".to_string(),
-        n => format!("{n} voice-overs. Select one on the timeline to move, mute or change its volume."),
-    });
-    widgets::hint(ui, "In a call, record from a microphone the call is not using: a Bluetooth headset (AirPods) shared with a call records near silence. macOS also turns other apps down during a call, so play takes back after it.");
     // with a music part selected, every control below changes that part only
     let part = ed.selected_music.clone().and_then(|id| sf_engine::lanes::music_clips(&ed.session.pkg.project, &ed.session.timeline).into_iter().find(|c| c.id == id));
     let audio_cfg = ed.session.pkg.project.config.audio.clone();

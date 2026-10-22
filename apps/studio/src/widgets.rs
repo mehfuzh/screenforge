@@ -280,6 +280,27 @@ pub enum Icon {
     Export,
     /// Window outline with a panel on its right edge (sidebar toggle).
     Sidebar,
+    /// Filled dot inside a ring (start recording).
+    Record,
+    /// Filled square (stop recording).
+    Stop,
+}
+
+/// Live level as an equalizer: the most recent `levels` (0..1, oldest first) as bars that
+/// grow from the middle, newest on the right.
+pub fn paint_level_bars(p: &egui::Painter, rect: Rect, levels: &[f32], color: Color32, quiet: Color32) {
+    const BARS: usize = 14;
+    let pitch = rect.width() / BARS as f32;
+    let w = (pitch * 0.6).max(2.0);
+    let recent = &levels[levels.len().saturating_sub(BARS)..];
+    for i in 0..BARS {
+        // bars without a level yet (just opened) sit flat on the left
+        let level = recent.len().checked_sub(BARS - i).map_or(0.0, |k| recent[k]).clamp(0.0, 1.0);
+        let h = (rect.height() * level).max(w);
+        let x = rect.left() + pitch * (i as f32 + 0.5);
+        let bar = Rect::from_center_size(pos2(x, rect.center().y), vec2(w, h));
+        p.rect_filled(bar, CornerRadius::same(1), if level > 0.05 { color } else { quiet });
+    }
 }
 
 /// Microphone icon whose capsule fills from the bottom with the live input `level` (0..1).
@@ -379,6 +400,13 @@ pub fn paint_icon(p: &egui::Painter, rect: Rect, icon: Icon, color: Color32) {
             p.add(egui::Shape::line(pts, s));
             line((0.0, 0.5), (0.0, 0.9));
             line((-0.35, 0.9), (0.35, 0.9));
+        }
+        Icon::Record => {
+            p.circle_stroke(c, 0.85 * r, s);
+            p.circle_filled(c, 0.5 * r, color);
+        }
+        Icon::Stop => {
+            p.rect_filled(rr(-0.6, -0.6, 0.6, 0.6), 1.0, color);
         }
         Icon::Pause => {
             p.rect_filled(rr(-0.6, -0.7, -0.2, 0.7), 1.0, color);

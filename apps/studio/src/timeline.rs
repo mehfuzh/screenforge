@@ -1034,8 +1034,8 @@ impl TimelineWidget {
             }
         }
         track.context_menu(|ui| {
-            if ui.button("Record voice-over at playhead").clicked() {
-                ed.start_voice_over();
+            if ui.button("Record voice-over at playhead…").clicked() {
+                ed.open_voice_over_hud();
                 ui.close();
             }
             if tracks.is_empty() {

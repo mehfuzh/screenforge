@@ -732,7 +732,7 @@ fn input_menu_level(ui: &mut Ui, icon: widgets::Icon, label: &str, active: bool,
 
 /// Popup menu styled like the bar: glass panel with 10 px corners, rows with 2 px corners, a
 /// faint highlight on hover and accent text (not a filled block) for the current choice.
-fn bar_menu(resp: &egui::Response, align: egui::RectAlign, add: impl FnOnce(&mut Ui)) {
+pub(crate) fn bar_menu(resp: &egui::Response, align: egui::RectAlign, add: impl FnOnce(&mut Ui)) {
     let pal = theme::p();
     let frame = egui::Frame::NONE
         .fill(pal.glass_solid)
