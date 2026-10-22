@@ -52,6 +52,7 @@ key stays on the server (`UNSPLASH_ACCESS_KEY`; create an app at unsplash.com/de
 
 ```
 supabase secrets set UNSPLASH_ACCESS_KEY=<access key>
+supabase db push
 supabase functions deploy unsplash
 ```
 
@@ -59,6 +60,10 @@ supabase functions deploy unsplash
 topic). When a photo is picked the app sends `{ download: <download_location> }`, which
 registers the download with Unsplash as its API guidelines require and returns the image URL;
 the app saves the photo in the project's `assets/` (so it renders and exports offline) and
-credits the photographer in the sidebar with referral links. Until the function is deployed the
+credits the photographer in the sidebar with referral links. Search replies are cached for every user in the
+`unsplash_cache` table (migration `20261022000000_unsplash_cache.sql`): a search made in the last
+6 hours is answered without calling Unsplash (normalised, so case and spacing do not matter),
+a stale reply is served when Unsplash rate-limits or fails, and rows older than 7 days are
+pruned. Download tracking is never cached. Until the function is deployed the
 tab says the service is not available yet. A demo app on Unsplash allows 50 requests an hour;
 apply for production access before release.
