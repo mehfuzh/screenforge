@@ -169,6 +169,8 @@ pub struct TimelineWidget {
     item_drag: Option<ItemDrag>,
     /// Cached waveform peaks per voice-over file (refreshed with `peaks_gen`).
     voice_peaks: std::collections::HashMap<String, Vec<f32>>,
+    /// Cached waveform peaks of the background music track and its length (ms).
+    music_peaks: Option<(Vec<f32>, f64)>,
     voice_peaks_gen: u64,
     /// Output ms under the pointer when a context menu was opened.
     ctx_ms: f64,
@@ -182,7 +184,7 @@ pub struct TimelineWidget {
 
 impl Default for TimelineWidget {
     fn default() -> Self {
-        TimelineWidget { px_per_sec: 40.0, scroll_x: 0.0, drag: None, audio_drag: None, peaks: None, peaks_gen: u64::MAX, item_drag: None, voice_peaks: Default::default(), voice_peaks_gen: u64::MAX, ctx_ms: 0.0, snap_x: None, follow: true, was_playing: false }
+        TimelineWidget { px_per_sec: 40.0, scroll_x: 0.0, drag: None, audio_drag: None, peaks: None, peaks_gen: u64::MAX, item_drag: None, voice_peaks: Default::default(), music_peaks: None, voice_peaks_gen: u64::MAX, ctx_ms: 0.0, snap_x: None, follow: true, was_playing: false }
     }
 }
 
@@ -720,7 +722,11 @@ impl TimelineWidget {
         let gen = ed.audio.generation.load(std::sync::atomic::Ordering::Relaxed);
         if self.voice_peaks_gen != gen {
             self.voice_peaks.clear();
+            self.music_peaks = None;
             self.voice_peaks_gen = gen;
+        }
+        if self.music_peaks.is_none() {
+            self.music_peaks = ed.audio.music_peaks(4000);
         }
         let audio = ed.session.pkg.project.config.audio.clone();
         let occ = sf_engine::lanes::occupancy(&ed.session.pkg.project, &ed.session.timeline);
@@ -764,25 +770,30 @@ impl TimelineWidget {
             };
             let color = if b.muted { base.gamma_multiply(0.4) } else { base };
             glass_block(&painter, block, 8.0, color, selected);
-            if b.kind == Kind::Voice {
-                if !self.voice_peaks.contains_key(&b.file_name) {
-                    if let Some(p) = ed.audio.voice_peaks(&b.file_name, 2000) {
-                        self.voice_peaks.insert(b.file_name.clone(), p);
-                    }
+            // waveform: the part of the file the block plays (the music wraps where it loops)
+            if b.kind == Kind::Voice && !self.voice_peaks.contains_key(&b.file_name) {
+                if let Some(p) = ed.audio.voice_peaks(&b.file_name, 2000) {
+                    self.voice_peaks.insert(b.file_name.clone(), p);
                 }
-                if let Some(peaks) = self.voice_peaks.get(&b.file_name).filter(|p| !p.is_empty()) {
-                    // dB scale (-50..0 dB fills the block), like the microphone meter: on a
-                    // linear scale normal speech is a thin line
-                    let gain = if b.muted { 0.0 } else { b.volume as f32 };
-                    let (mid, half) = (block.center().y + 4.0, block.height() / 2.0 - 6.0);
-                    let mut x = visible.left().max(block.left() + 3.0);
-                    while x < visible.right().min(block.right() - 3.0) {
-                        let f = ((b.offset + ms_of(x) - b.start) / b.file_ms).clamp(0.0, 1.0);
-                        let peak = (peaks[((f * peaks.len() as f64) as usize).min(peaks.len() - 1)] * gain).max(1e-6);
-                        let a = ((20.0 * peak.log10() + 50.0) / 50.0).clamp(0.04, 1.0);
-                        painter.line_segment([pos2(x, mid - a * half), pos2(x, mid + a * half)], Stroke::new(1.5, color.gamma_multiply(0.8)));
-                        x += 1.5;
-                    }
+            }
+            let wave = match b.kind {
+                Kind::Voice => self.voice_peaks.get(&b.file_name).map(|p| (p, b.file_ms, false)),
+                _ => self.music_peaks.as_ref().map(|(p, len)| (p, *len, true)),
+            };
+            if let Some((peaks, file_ms, looping)) = wave.filter(|(p, len, _)| !p.is_empty() && *len > 0.0) {
+                // dB scale (-50..0 dB fills the block), like the microphone meter: on a linear
+                // scale normal speech is a thin line
+                let gain = if b.muted { 0.0 } else { b.volume as f32 };
+                let (mid, half) = (block.center().y + 4.0, block.height() / 2.0 - 6.0);
+                let mut x = visible.left().max(block.left() + 3.0);
+                while x < visible.right().min(block.right() - 3.0) {
+                    let pos = b.offset + ms_of(x) - b.start;
+                    let pos = if looping { pos.rem_euclid(file_ms) } else { pos };
+                    let f = (pos / file_ms).clamp(0.0, 1.0);
+                    let peak = (peaks[((f * peaks.len() as f64) as usize).min(peaks.len() - 1)] * gain).max(1e-6);
+                    let a = ((20.0 * peak.log10() + 50.0) / 50.0).clamp(0.04, 1.0);
+                    painter.line_segment([pos2(x, mid - a * half), pos2(x, mid + a * half)], Stroke::new(1.5, color.gamma_multiply(0.8)));
+                    x += 1.5;
                 }
             }
             if visible.width() > 90.0 {
@@ -792,8 +803,8 @@ impl TimelineWidget {
                     (_, true) => format!("Music · {music_name} · muted"),
                     (_, false) => format!("Music · {music_name} · {:.0}%", b.volume * 100.0),
                 };
-                let (pos, size) = if b.kind == Kind::Voice { (pos2(visible.left() + 10.0, block.top() + 8.0), 11.0) } else { (pos2(visible.left() + 12.0, block.center().y), 13.0) };
-                painter.with_clip_rect(visible.shrink(2.0)).text(pos, egui::Align2::LEFT_CENTER, label, egui::FontId::proportional(size), pal.text);
+                // above the waveform, like the voice-overs
+                painter.with_clip_rect(visible.shrink(2.0)).text(pos2(visible.left() + 10.0, block.top() + 8.0), egui::Align2::LEFT_CENTER, label, egui::FontId::proportional(11.0), pal.text);
             }
             let select = |ed: &mut Editor| match b.kind {
                 Kind::Voice => ed.select_voice_over(b.id.clone()),

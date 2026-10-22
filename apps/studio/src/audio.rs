@@ -53,9 +53,13 @@ struct Shared {
 }
 
 pub struct AudioPlayer {
-    /// Bumped when a `load` starts and again when its decode lands, so cached waveforms know
-    /// to refresh (filter or track changes) and a superseded decode is dropped.
+    /// Bumped when a `load` starts and whenever a decode lands (tracks, music or a voice-over),
+    /// so cached waveforms know to refresh.
     pub generation: Arc<std::sync::atomic::AtomicU64>,
+    /// Bumped by every `load`: a decode whose number is no longer the latest is dropped. Kept
+    /// apart from `generation`, which voice-over decodes bump too: sharing one counter made a
+    /// voice-over that finished first discard the recording's and the music's decode.
+    load_seq: Arc<std::sync::atomic::AtomicU64>,
     /// Decodes still running (the editor keeps repainting so the waveform shows up).
     pending: Arc<std::sync::atomic::AtomicUsize>,
     _stream: Option<cpal::Stream>,
@@ -70,7 +74,7 @@ impl AudioPlayer {
         if let Err(e) = &stream {
             tracing::warn!("audio output unavailable: {e}");
         }
-        AudioPlayer { generation: Arc::new(std::sync::atomic::AtomicU64::new(0)), pending: Default::default(), available: stream.is_ok(), _stream: stream.ok(), shared }
+        AudioPlayer { generation: Arc::new(std::sync::atomic::AtomicU64::new(0)), load_seq: Arc::new(std::sync::atomic::AtomicU64::new(0)), pending: Default::default(), available: stream.is_ok(), _stream: stream.ok(), shared }
     }
 
     fn open_stream(shared: Arc<Mutex<Shared>>) -> anyhow::Result<cpal::Stream> {
@@ -147,7 +151,8 @@ impl AudioPlayer {
     /// filter take seconds); the previous tracks keep playing until the new ones land.
     pub fn load(&self, session: &sf_session::Session) {
         use std::sync::atomic::Ordering;
-        let my_gen = self.generation.fetch_add(1, Ordering::Relaxed) + 1;
+        let my_load = self.load_seq.fetch_add(1, Ordering::Relaxed) + 1;
+        self.generation.fetch_add(1, Ordering::Relaxed);
         let sources: Vec<(std::path::PathBuf, AudioTrack)> = session
             .source
             .microphone
@@ -158,7 +163,7 @@ impl AudioPlayer {
         let audio_cfg = &session.pkg.project.config.audio;
         let mic_filter = sf_media::microphone_filter(&audio_cfg.microphone_audio_preset, audio_cfg.microphone_boost_db());
         let background_path = session.background_audio_path();
-        let (shared, generation, pending) = (self.shared.clone(), self.generation.clone(), self.pending.clone());
+        let (shared, generation, load_seq, pending) = (self.shared.clone(), self.generation.clone(), self.load_seq.clone(), self.pending.clone());
         self.update_timeline(session);
         self.load_voice_overs(session);
         pending.fetch_add(1, Ordering::Relaxed);
@@ -187,7 +192,7 @@ impl AudioPlayer {
             });
             let mut s = shared.lock();
             // a newer load started meanwhile: its result wins
-            if generation.load(Ordering::Relaxed) != my_gen {
+            if load_seq.load(Ordering::Relaxed) != my_load {
                 return;
             }
             s.tracks = tracks;
@@ -272,6 +277,14 @@ impl AudioPlayer {
     /// Waveform peaks of a voice-over file, `buckets` across the whole take.
     pub fn voice_peaks(&self, file_name: &str, buckets: usize) -> Option<Vec<f32>> {
         self.shared.lock().voice_clips.get(file_name).map(|c| c.peaks(buckets))
+    }
+
+    /// Waveform peaks of the background music track, `buckets` across the whole track, and its
+    /// length (ms); `None` until it is decoded.
+    pub fn music_peaks(&self, buckets: usize) -> Option<(Vec<f32>, f64)> {
+        let s = self.shared.lock();
+        let bg = s.background.as_ref()?;
+        Some((bg.clip.peaks(buckets), bg.clip.duration_ms()))
     }
 
     /// Length of a decoded voice-over file (ms).
