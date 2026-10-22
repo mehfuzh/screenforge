@@ -6,13 +6,17 @@ ed.etc.sha512Sync = (...m) => sha512(ed.etc.concatBytes(...m));
 const b64url = (bytes: Uint8Array) => btoa(String.fromCharCode(...bytes)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 const fromB64url = (s: string) => Uint8Array.from(atob(s.replace(/-/g, "+").replace(/_/g, "/") + "=".repeat((4 - (s.length % 4)) % 4)), (c) => c.charCodeAt(0));
 
-export interface Payload { email: string; plan: "monthly" | "lifetime"; expires: string | null; issued: string }
+// `device` binds the key to one computer (SHA-256 hex of its hardware UUID); the app only
+// accepts a key bound to itself. Keys emailed at purchase have none.
+export interface Payload { email: string; plan: "monthly" | "lifetime"; expires: string | null; issued: string; device?: string }
 
 export async function signLicense(payload: Payload): Promise<string> {
   const secret = Deno.env.get("SF_LICENSE_SIGNING_KEY");
   if (!secret) throw new Error("SF_LICENSE_SIGNING_KEY not set");
   // serde_json field order must match the Rust Payload struct
-  const json = new TextEncoder().encode(JSON.stringify({ email: payload.email, plan: payload.plan, expires: payload.expires, issued: payload.issued }));
+  const fields: Record<string, unknown> = { email: payload.email, plan: payload.plan, expires: payload.expires, issued: payload.issued };
+  if (payload.device) fields.device = payload.device;
+  const json = new TextEncoder().encode(JSON.stringify(fields));
   const sig = await ed.signAsync(json, fromB64url(secret));
   return `SF1.${b64url(json)}.${b64url(sig)}`;
 }
@@ -28,8 +32,8 @@ export async function emailLicense(email: string, key: string, plan: string) {
     body: JSON.stringify({
       from: Deno.env.get("LICENSE_FROM_EMAIL") ?? "ScreenForge <licenses@screenforge.dev>",
       to: [email],
-      subject: "Your ScreenForge license key",
-      text: `Thanks for supporting ScreenForge!\n\nYour ${plan} license key:\n\n${key}\n\nOpen ScreenForge → Export, enter this email address and press Activate.${plan === "monthly" ? " Monthly keys renew automatically while the subscription is active." : " The key never expires."}\n`,
+      subject: "Your ScreenForge license",
+      text: `Thanks for supporting ScreenForge!\n\nTo activate: open ScreenForge → Export, enter this email address (${email}) and press Activate, then type the 6-digit code we email you. The license works on one computer at a time; activating another computer moves it there.${plan === "monthly" ? " Monthly keys renew automatically while the subscription is active." : " It never expires."}\n\nFor your records, the license key: ${key}\n`,
     }),
   });
 }

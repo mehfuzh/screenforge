@@ -26,18 +26,37 @@ manual steps, for reference:
 2. Stripe: create a product with a one-time US$49 price (`setup.sh` does this; `update-price.sh <cents>` changes the price later, Stripe and Supabase in one go); set `STRIPE_SECRET_KEY`,
    `STRIPE_WEBHOOK_SECRET`, `STRIPE_PRICE_LIFETIME`.
 3. Resend: `RESEND_API_KEY`, `LICENSE_FROM_EMAIL`.
-4. `supabase db push && supabase functions deploy create-checkout stripe-webhook license-refresh free-export unsplash`
+4. `supabase db push && supabase functions deploy create-checkout stripe-webhook license-refresh license-activate free-export unsplash`
 5. Point `PURCHASE_URL` in `crates/sf-license` at your checkout page (or the `create-checkout` URL).
 
 ## Activation from the app
 
 The export dialog has no key field. The user enters the email used at checkout and presses
-Activate: the app calls `license-refresh` with `{ email }`, verifies the returned key offline
-and stores it under `~/Library/Application Support/ScreenForge/`. "Buy"
-calls `create-checkout` with the email and opens the Stripe URL. An expired monthly key is
-refreshed automatically the next time the dialog opens. Set `SUPABASE_URL` and
+Activate. The app sends `{ email, device }` to `license-activate`, where `device` is a SHA-256 of
+the machine's hardware UUID (`sf_license::device_id`; the raw UUID never leaves the machine).
+
+- A license is active on **one computer at a time** (`license_activations`). That computer gets
+  its key straight away, signed for it (`device` in the key payload): the app rejects a key bound
+  to another computer, or to none, so a copied key file does not export elsewhere, even offline.
+- Any other computer: the function emails a 6-digit code to the address on the license and
+  returns `{ status: "code_sent" }`. The app asks for the code and sends `{ email, device, code }`;
+  the function checks it, **moves the license** to that computer and returns its key.
+- The app checks in quietly when the export dialog is created (`send: false`, never emails): a
+  computer whose license moved away removes its key; offline, nothing changes.
+- Codes are stored hashed (`license_codes`), expire after 15 minutes and allow 5 tries; an email
+  gets at most one code a minute and 5 an hour (`license_code_sends`).
+- A key is never returned for an email alone, and email lookups are exact: `%` and `_` cannot
+  act as wildcards.
+
+The key is verified offline and stored under `~/Library/Application Support/ScreenForge/`.
+"Buy" calls `create-checkout` with the email and opens the Stripe URL. The same check-in renews an
+expired monthly key. Keys from before device activation (and builds before 0.1.30, which only
+trust the embedded public key offline) are not bound to a computer: new builds ask to activate
+once; already-activated old builds keep working until updated, since they never ask the server. `license-refresh` only answers activated devices; builds before 0.1.30
+that call it with an email alone are asked to update. Set `SUPABASE_URL` and
 `SUPABASE_ANON_KEY` in `crates/sf-license/src/lib.rs` to the project's values (and deploy the
 functions with `--no-verify-jwt`, or keep JWT verification: the anon key is sent as a bearer token).
+
 The first three exports work without any license (`sf_license::FREE_EXPORTS`). The count is
 kept in a file next to the key **and** in the `free_exports` table, keyed by a SHA-256 of the
 machine's hardware UUID (`IOPlatformUUID`; the raw UUID never leaves the Mac). The app calls
