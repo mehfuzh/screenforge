@@ -907,10 +907,13 @@ fn captions_ui(ed: &mut Editor, ui: &mut egui::Ui) {
 
     // ── export ──
     ui.add_space(10.0);
-    if widgets::secondary_button(ui, "Export captions (.srt)…").clicked() {
+    if widgets::secondary_button(ui, "Export captions (.srt / .vtt)…").clicked() {
         let name = format!("{}.srt", ed.session.pkg.project.name);
-        if let Some(path) = rfd::FileDialog::new().set_file_name(&name).add_filter("SubRip", &["srt"]).save_file() {
-            let msg = match std::fs::write(&path, ed.session.captions_srt()) {
+        if let Some(path) = rfd::FileDialog::new().set_file_name(&name).add_filter("SubRip", &["srt"]).add_filter("WebVTT", &["vtt"]).save_file() {
+            // the format follows the extension chosen in the dialog
+            let vtt = path.extension().is_some_and(|e| e.eq_ignore_ascii_case("vtt"));
+            let text = if vtt { ed.session.captions_vtt() } else { ed.session.captions_srt() };
+            let msg = match std::fs::write(&path, text) {
                 Ok(()) => format!("Saved {}", path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()),
                 Err(e) => format!("Could not save captions: {e}"),
             };

@@ -192,9 +192,10 @@ fn srt_time(ms: f64) -> String {
     format!("{:02}:{:02}:{:02},{:03}", ms / 3_600_000, ms / 60_000 % 60, ms / 1000 % 60, ms % 1000)
 }
 
-/// SubRip text for the edited video: words in cut ranges are dropped, times follow the
-/// slices (speed changes included), and a line split by a cut becomes two cues.
-pub fn to_srt(lines: &[CaptionLine], timeline: &Timeline) -> String {
+/// Caption cues for the edited video `(start, end, words)` in output time: words in cut
+/// ranges are dropped, times follow the slices (speed changes included), and a line split by
+/// a cut becomes two cues.
+fn cues<'a>(lines: &'a [CaptionLine], timeline: &Timeline) -> Vec<(f64, f64, Vec<&'a str>)> {
     let mut cues: Vec<(f64, f64, Vec<&str>)> = vec![];
     for line in lines {
         let mut cue: Option<(f64, f64, Vec<&str>, usize)> = None;
@@ -221,10 +222,29 @@ pub fn to_srt(lines: &[CaptionLine], timeline: &Timeline) -> String {
             cues.push((c.0, hold_end, c.2));
         }
     }
+    for c in &mut cues {
+        if c.1 <= c.0 {
+            c.1 = c.0 + 1.0;
+        }
+    }
+    cues
+}
+
+/// SubRip (.srt) text for the edited video (see [`cues`]).
+pub fn to_srt(lines: &[CaptionLine], timeline: &Timeline) -> String {
     let mut out = String::new();
-    for (n, (start, end, words)) in cues.iter().enumerate() {
-        let end = if *end <= *start { start + 1.0 } else { *end };
-        out.push_str(&format!("{}\n{} --> {}\n{}\n\n", n + 1, srt_time(*start), srt_time(end), words.join(" ")));
+    for (n, (start, end, words)) in cues(lines, timeline).iter().enumerate() {
+        out.push_str(&format!("{}\n{} --> {}\n{}\n\n", n + 1, srt_time(*start), srt_time(*end), words.join(" ")));
+    }
+    out
+}
+
+/// WebVTT (.vtt) text for the edited video: the same cues as [`to_srt`].
+pub fn to_vtt(lines: &[CaptionLine], timeline: &Timeline) -> String {
+    let mut out = String::from("WEBVTT\n\n");
+    for (start, end, words) in cues(lines, timeline) {
+        // VTT separates the milliseconds with a dot
+        out.push_str(&format!("{} --> {}\n{}\n\n", srt_time(start).replace(',', "."), srt_time(end).replace(',', "."), words.join(" ")));
     }
     out
 }
@@ -286,6 +306,18 @@ mod tests {
         let slide = CaptionStyle { entrance: Entrance::SlideIn, ..style };
         assert!(frame_at(&lines, 1310.0, slide).unwrap().words[1].drop01 > 0.5);
         assert_eq!(frame_at(&lines, 1290.0 + ENTRANCE_MS + 20.0, slide).unwrap().words[1].drop01, 0.0);
+    }
+
+    #[test]
+    fn vtt_has_the_srt_cues() {
+        // keep 0–1 s, cut 1–2 s, keep 2–4 s
+        let w = words(&[(500.0, 900.0, "kept"), (1500.0, 1900.0, "cut"), (2100.0, 2500.0, "after")]);
+        let tl = Timeline::from_slices(&[Slice::new(0.0, 1000.0), Slice::new(2000.0, 4000.0)]);
+        let lines = build_lines(&w);
+        let vtt = to_vtt(&lines, &tl);
+        assert!(vtt.starts_with("WEBVTT\n\n00:00:00.500 --> "), "{vtt}");
+        assert!(!vtt.contains("cut") && vtt.contains("after"), "{vtt}");
+        assert_eq!(vtt.matches(" --> ").count(), to_srt(&lines, &tl).matches(" --> ").count());
     }
 
     #[test]

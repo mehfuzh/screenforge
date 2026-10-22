@@ -54,6 +54,10 @@ impl Captions {
         captions::to_srt(&self.lines, timeline)
     }
 
+    pub fn to_vtt(&self, timeline: &Timeline) -> String {
+        captions::to_vtt(&self.lines, timeline)
+    }
+
     /// Push the caption sprite for `source_ms` onto `layers` (output size `w`×`h` px).
     pub fn push_layer(&mut self, pkg: &ProjectPackage, gpu: &Gpu, source_ms: f64, w: u32, h: u32, layers: &mut Vec<Layer>) {
         let cfg = &pkg.project.config.captions;

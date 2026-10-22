@@ -555,6 +555,11 @@ impl Session {
         self.captions.to_srt(&self.timeline)
     }
 
+    /// WebVTT captions for the edited timeline (the same cues as [`Self::captions_srt`]).
+    pub fn captions_vtt(&self) -> String {
+        self.captions.to_vtt(&self.timeline)
+    }
+
     /// Masks active at `source_ms`, drawn over the screen. Bounds are pixel rects in
     /// cropped-recording space.
     fn push_masks(&self, layers: &mut Vec<Layer>, source_ms: f64, screen_px: Rect, corner_radius: f32) {

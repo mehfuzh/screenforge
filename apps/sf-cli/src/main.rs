@@ -91,7 +91,8 @@ enum Cmd {
         #[arg(long)]
         prompt: Option<String>,
     },
-    /// Write the captions as SubRip (.srt) for the edited timeline
+    /// Write the captions for the edited timeline: SubRip (.srt), or WebVTT when the output
+    /// ends in .vtt
     Srt {
         path: PathBuf,
         #[arg(short, long, default_value = "captions.srt")]
@@ -238,7 +239,8 @@ fn main() -> Result<()> {
             if session.captions.is_empty() {
                 anyhow::bail!("no transcript; run `sf transcribe` first");
             }
-            std::fs::write(&out, session.captions_srt())?;
+            let vtt = out.extension().is_some_and(|e| e.eq_ignore_ascii_case("vtt"));
+            std::fs::write(&out, if vtt { session.captions_vtt() } else { session.captions_srt() })?;
             println!("wrote {}", out.display());
             Ok(())
         }
