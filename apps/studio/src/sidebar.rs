@@ -1320,6 +1320,15 @@ fn cursor_tile(ui: &mut egui::Ui, preview: CursorPreview, label: &str, selected:
 }
 
 /// A square, centre-cropped wallpaper thumbnail.
+/// A text link that opens `url` in the default browser. eframe is built without egui's own
+/// URL handling, so `hyperlink_to` would do nothing; links go through `os::open` like the rest
+/// of the app.
+fn browser_link(ui: &mut egui::Ui, text: &str, url: &str) {
+    if ui.link(text).on_hover_text(url).clicked() {
+        crate::os::open(url);
+    }
+}
+
 /// Background → Unsplash: search, a grid of results, and the credit for the current photo.
 fn unsplash_ui(ed: &mut Editor, ui: &mut egui::Ui) {
     let ctx = ui.ctx().clone();
@@ -1343,7 +1352,7 @@ fn unsplash_ui(ed: &mut Editor, ui: &mut egui::Ui) {
             ui.label(RichText::new("Photo by").color(theme::p().text_dim));
             match (get("author"), get("authorUrl")) {
                 (Some(name), Some(url)) => {
-                    ui.hyperlink_to(name, crate::unsplash::referral(&url));
+                    browser_link(ui, &name, &crate::unsplash::referral(&url));
                 }
                 (Some(name), None) => {
                     ui.label(name);
@@ -1353,7 +1362,7 @@ fn unsplash_ui(ed: &mut Editor, ui: &mut egui::Ui) {
                 }
             }
             ui.label(RichText::new("on").color(theme::p().text_dim));
-            ui.hyperlink_to("Unsplash", crate::unsplash::referral(&get("photoUrl").unwrap_or_else(|| "https://unsplash.com/".into())));
+            browser_link(ui, "Unsplash", &crate::unsplash::referral(&get("photoUrl").unwrap_or_else(|| "https://unsplash.com/".into())));
         });
         ui.add_space(4.0);
     }
