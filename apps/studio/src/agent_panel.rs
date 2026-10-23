@@ -576,7 +576,7 @@ impl AgentPanel {
                 if let Some(n) = self.credits.as_ref().filter(|c| c["allowed"].as_bool() == Some(true)).and_then(|c| c["credits"].as_f64()).filter(|_| !local) {
                     let colour = if n <= 0.0 { pal.danger } else { pal.text_dim };
                     let chip = ui.add(egui::Button::new(RichText::new(credits_label(n)).size(12.0).color(colour)).fill(pal.card_2).corner_radius(CornerRadius::same(widgets::BUTTON_RADIUS))).on_hover_text("Agent credits: plan, Pro and top-ups");
-                    let frame = egui::Frame::menu(ui.style()).corner_radius(CornerRadius::same(6)).inner_margin(egui::Margin::same(8));
+                    let frame = egui::Frame::menu(ui.style()).fill(pal.card).corner_radius(CornerRadius::same(6)).inner_margin(egui::Margin::same(8));
                     egui::Popup::menu(&chip).frame(frame).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| self.credits_menu(ui));
                 }
             });
@@ -743,22 +743,23 @@ impl AgentPanel {
         painter.galley(egui::pos2(rect.left() + 9.0, rect.center().y - galley.size().y / 2.0), galley, fg);
         widgets::paint_icon(painter, egui::Rect::from_center_size(egui::pos2(rect.right() - 11.0, rect.center().y), vec2(8.0, 8.0)), widgets::Icon::ChevronDown, fg);
         let mut chosen = None;
-        let frame = egui::Frame::menu(ui.style()).corner_radius(CornerRadius::same(6)).inner_margin(egui::Margin::same(4));
+        // opaque: the theme's glass menus let the composer's text show through
+        let frame = egui::Frame::menu(ui.style()).fill(theme::p().card).corner_radius(CornerRadius::same(6)).inner_margin(egui::Margin::same(4));
         egui::Popup::menu(&resp).frame(frame).show(|ui| {
             ui.spacing_mut().item_spacing.y = 2.0;
             // how fast each model uses credits, next to Sonnet (from the list prices)
             let rate = |id: &str| {
                 let r = sf_agent::client::credit_rate(id);
                 if r > 1.01 {
-                    format!("uses credits {}× as fast", (r * 10.0).round() / 10.0)
+                    format!("{}× credits", (r * 10.0).round() / 10.0)
                 } else if r < 0.99 {
-                    format!("about {}× fewer credits", (1.0 / r).round())
+                    format!("{}× fewer credits", (1.0 / r).round())
                 } else {
-                    "standard credits".to_string()
+                    "1× credits".to_string()
                 }
             };
             let rows = [(sf_agent::client::AUTO, "Auto", "Sonnet 5.5, the best value".to_string())].into_iter().chain(MODELS.iter().map(|m| {
-                let what = if m.id.contains("haiku") { "Quickest" } else if m.id.contains("opus") { "Most capable" } else { "Fast, for everyday edits" };
+                let what = if m.id.contains("haiku") { "Quickest" } else if m.id.contains("opus") { "Most capable" } else { "Everyday edits" };
                 (m.id, m.label.trim_start_matches("Claude "), format!("{what} · {}", rate(m.id)))
             }));
             for (id, name, hint) in rows {
@@ -814,19 +815,21 @@ fn working_dots(ui: &mut egui::Ui) {
 /// A row of the model menu, like the presets menu's rows: name and a dim hint, a quiet fill on
 /// hover, and a check on the chosen one.
 fn model_row(ui: &mut egui::Ui, name: &str, hint: &str, selected: bool) -> egui::Response {
-    const W: f32 = 236.0;
+    const W: f32 = 250.0;
+    /// Room on the right for the check mark; text stops before it.
+    const CHECK_W: f32 = 30.0;
     let pal = theme::p();
     let (rect, resp) = ui.allocate_exact_size(vec2(W, 40.0), egui::Sense::click());
     let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
-    let painter = ui.painter();
     if resp.hovered() {
-        painter.rect_filled(rect, CornerRadius::same(widgets::BUTTON_RADIUS), pal.card_2);
+        ui.painter().rect_filled(rect, CornerRadius::same(widgets::BUTTON_RADIUS), pal.card_2);
     }
     let x = rect.left() + 10.0;
-    painter.text(egui::pos2(x, rect.top() + 12.0), egui::Align2::LEFT_CENTER, name, egui::FontId::proportional(14.0), pal.text);
-    painter.text(egui::pos2(x, rect.top() + 28.0), egui::Align2::LEFT_CENTER, hint, egui::FontId::proportional(11.5), pal.text_faint);
+    let text = ui.painter().with_clip_rect(egui::Rect::from_min_max(rect.min, egui::pos2(rect.right() - CHECK_W, rect.bottom())));
+    text.text(egui::pos2(x, rect.top() + 12.0), egui::Align2::LEFT_CENTER, name, egui::FontId::proportional(14.0), pal.text);
+    text.text(egui::pos2(x, rect.top() + 28.0), egui::Align2::LEFT_CENTER, hint, egui::FontId::proportional(11.5), pal.text_faint);
     if selected {
-        widgets::paint_icon(painter, egui::Rect::from_center_size(egui::pos2(rect.right() - 16.0, rect.center().y), vec2(12.0, 12.0)), widgets::Icon::Check, pal.accent_hover);
+        widgets::paint_icon(ui.painter(), egui::Rect::from_center_size(egui::pos2(rect.right() - CHECK_W / 2.0, rect.center().y), vec2(12.0, 12.0)), widgets::Icon::Check, pal.accent_hover);
     }
     resp
 }
