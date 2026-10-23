@@ -421,7 +421,8 @@ impl AgentPanel {
                             });
                         }
                         self.sign_in = None;
-                        self.after_account_change("Signed in.".into());
+                        // the credits chip shows it worked: the panel starts as usual
+                        self.after_account_change(None);
                     }
                     Err(e) => s.error = Some(e),
                 }
@@ -432,8 +433,8 @@ impl AgentPanel {
             match r {
                 // a billing portal link
                 Ok(Some(url)) => crate::os::open(&url),
-                Ok(None) => self.after_account_change("Signed out.".into()),
-                Err(e) if e.starts_with("Signed out") => self.after_account_change(e),
+                Ok(None) => self.after_account_change(Some("Signed out.".into())),
+                Err(e) if e.starts_with("Signed out") => self.after_account_change(Some(e)),
                 Err(e) => self.log.push(Entry::Error(e)),
             }
         }
@@ -470,12 +471,12 @@ impl AgentPanel {
     }
 
     /// The license on this computer changed: check the plan again and tell the export dialog.
-    fn after_account_change(&mut self, note: String) {
+    fn after_account_change(&mut self, note: Option<String>) {
         self.credits = None;
         self.credits_error = None;
         self.conversation = Conversation::default();
         self.log.clear();
-        self.notice = Some(note);
+        self.notice = note;
         self.license_changed = true;
         self.fetch_credits();
     }
