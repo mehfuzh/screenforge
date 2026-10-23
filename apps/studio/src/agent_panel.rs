@@ -638,27 +638,51 @@ impl AgentPanel {
                     ui.add(egui::Label::new(RichText::new(line).size(13.0).color(pal.text_dim)).wrap());
                 });
             }
-            ui.add_space(10.0);
-            if sf_license::load_email().is_none() {
-                ui.label(RichText::new("Email for checkout").size(12.5).color(pal.text_dim));
-                widgets::text_field(ui, &mut self.email, "you@example.com");
+            ui.add_space(12.0);
+            // one email for both, as in Export: Upgrade opens checkout, Activate signs in
+            ui.label(RichText::new("Email used at checkout").size(12.5).color(pal.text_dim));
+            ui.add_space(2.0);
+            widgets::text_field(ui, &mut self.email, "you@example.com");
+            let typed = self.email.trim().to_string();
+            let awaiting = self.sign_in.as_ref().is_some_and(|s| s.code_sent && s.email.trim().eq_ignore_ascii_case(&typed));
+            if awaiting {
                 ui.add_space(6.0);
+                ui.label(RichText::new("Code from the email").size(12.5).color(pal.text_dim));
+                ui.add_space(2.0);
+                if let Some(s) = self.sign_in.as_mut() {
+                    widgets::text_field(ui, &mut s.code, "123456");
+                }
             }
+            ui.add_space(8.0);
+            let busy = self.sign_in.as_ref().is_some_and(|s| s.rx.is_some());
+            let (mut activate, mut confirm) = (false, false);
             ui.horizontal_wrapped(|ui| {
+                if awaiting {
+                    confirm = ui.add_enabled_ui(!busy, |ui| widgets::secondary_button(ui, if busy { "Checking…" } else { "Confirm" })).inner.clicked();
+                    activate = ui.add_enabled_ui(!busy, |ui| widgets::secondary_button(ui, "Send again")).inner.clicked();
+                } else {
+                    activate = ui.add_enabled_ui(!busy && typed.contains('@'), |ui| widgets::secondary_button(ui, if busy { "Activating…" } else { "Activate" })).inner.clicked();
+                }
                 if widgets::accent_button(ui, "Upgrade to Pro · $20/month").clicked() {
                     self.buy("pro");
                 }
-                if widgets::secondary_button(ui, "Check again").on_hover_text("After subscribing and activating Pro on this computer").clicked() {
-                    self.credits = None;
-                    self.fetch_credits();
-                }
             });
-            ui.add_space(12.0);
-            if self.sign_in.is_some() {
-                self.sign_in_ui(ui);
-            } else if ui.link("Already on Pro? Sign in").clicked() {
-                self.open_sign_in(None);
+            if activate {
+                // a fresh sign-in for the typed email (asks for a code unless already activated)
+                self.sign_in = Some(SignIn { email: typed.clone(), ..Default::default() });
+                self.sign_in_step();
+            } else if confirm {
+                self.sign_in_step();
             }
+            if let Some(e) = self.sign_in.as_ref().and_then(|s| s.error.clone()) {
+                ui.add_space(4.0);
+                ui.add(egui::Label::new(RichText::new(e).size(12.5).color(pal.danger)).wrap());
+            } else if awaiting {
+                ui.add_space(4.0);
+                ui.add(egui::Label::new(RichText::new(format!("We emailed a 6-digit code to {typed}.")).size(12.5).color(pal.accent_hover)).wrap());
+            }
+            ui.add_space(6.0);
+            widgets::hint(ui, "Already subscribed? Press Activate: we email you a code to confirm this computer. After paying, do the same to start using Pro here.");
         });
         // checkout notes and errors from the buttons above
         for e in self.log.iter().rev().take(1) {
