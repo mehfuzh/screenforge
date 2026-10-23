@@ -230,6 +230,8 @@ pub struct AgentPanel {
     /// Credit balance and what can be bought (the backend's `credits` summary); hosted only.
     credits: Option<Value>,
     credits_rx: Option<mpsc::Receiver<Result<Value, String>>>,
+    /// The plan could not be checked (offline): shown with Try again.
+    credits_error: Option<String>,
     /// Email for checkout when the computer has no license email saved.
     email: String,
     /// A checkout being opened: its URL, or why it failed.
@@ -307,9 +309,14 @@ impl AgentPanel {
             match rx.try_recv() {
                 Ok(Ok(v)) => {
                     self.credits = Some(v);
+                    self.credits_error = None;
                     self.credits_rx = None;
                 }
-                Ok(Err(_)) | Err(mpsc::TryRecvError::Disconnected) => self.credits_rx = None,
+                Ok(Err(e)) => {
+                    self.credits_error = Some(e);
+                    self.credits_rx = None;
+                }
+                Err(mpsc::TryRecvError::Disconnected) => self.credits_rx = None,
                 Err(mpsc::TryRecvError::Empty) => {}
             }
         }
@@ -551,7 +558,7 @@ impl AgentPanel {
     pub fn ui(&mut self, ed: &mut Editor, ui: &mut egui::Ui) {
         let pal = theme::p();
         self.poll_billing();
-        if self.credits.is_none() && self.local == Some(false) {
+        if self.credits.is_none() && self.credits_error.is_none() && self.local == Some(false) {
             self.fetch_credits();
         }
         if self.credits_rx.is_some() || self.checkout_rx.is_some() {
@@ -582,10 +589,32 @@ impl AgentPanel {
             });
         });
 
-        // hosted and not on Pro: no chat, the upgrade card instead
-        if self.local == Some(false) && self.credits.as_ref().is_some_and(|c| c["allowed"].as_bool() == Some(false)) {
-            self.locked_ui(ui);
-            return;
+        // hosted: the chat only once the plan allows it; the upgrade card without Pro
+        if self.local == Some(false) {
+            match &self.credits {
+                Some(c) if c["allowed"].as_bool() == Some(false) => {
+                    self.locked_ui(ui);
+                    return;
+                }
+                Some(_) => {}
+                None => {
+                    ui.add_space(24.0);
+                    if let Some(e) = self.credits_error.clone() {
+                        widgets::hint(ui, &format!("Could not check your plan: {e}"));
+                        ui.add_space(8.0);
+                        if widgets::secondary_button(ui, "Try again").clicked() {
+                            self.credits_error = None;
+                            self.fetch_credits();
+                        }
+                    } else {
+                        ui.horizontal(|ui| {
+                            ui.spinner();
+                            ui.label(RichText::new("Checking your plan…").size(13.0).color(pal.text_dim));
+                        });
+                    }
+                    return;
+                }
+            }
         }
 
         // the composer's height from the last frame (it grows with the text)

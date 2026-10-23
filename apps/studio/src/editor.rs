@@ -160,7 +160,9 @@ impl Editor {
                 Ok("camera-style") => Section::CameraStyle,
                 Ok("agent") => Section::Agent,
                 Ok("device") => Section::DeviceFrame,
-                _ => Section::General,
+                Ok("general") => Section::General,
+                // the agent is the first thing to see (it offers the upgrade without Pro)
+                _ => Section::Agent,
             },
             sidebar_open: true,
             audio,
