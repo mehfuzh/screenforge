@@ -187,6 +187,19 @@ impl Host for StudioHost {
     }
 }
 
+/// Signing in (or switching account) with the emailed code, as Export → Activate does.
+#[derive(Default)]
+struct SignIn {
+    email: String,
+    code: String,
+    /// The code was emailed: the form asks for it.
+    code_sent: bool,
+    rx: Option<mpsc::Receiver<Result<bool, String>>>,
+    /// The email signed in before, released once the new one is confirmed (switching).
+    previous: Option<String>,
+    error: Option<String>,
+}
+
 enum Entry {
     User(String),
     Assistant(String),
@@ -236,6 +249,12 @@ pub struct AgentPanel {
     email: String,
     /// A checkout being opened: its URL, or why it failed.
     checkout_rx: Option<mpsc::Receiver<Result<String, String>>>,
+    /// The sign-in form, while it is open.
+    sign_in: Option<SignIn>,
+    /// Sign out or the billing portal, running in the background.
+    account_rx: Option<mpsc::Receiver<Result<Option<String>, String>>>,
+    /// The license on this computer changed: the export dialog re-reads it.
+    license_changed: bool,
 }
 
 /// Same edit state, ignoring `data` (the autosave writes the playhead position there).
@@ -303,8 +322,67 @@ impl AgentPanel {
         self.checkout_rx = Some(rx);
     }
 
+    /// Start signing in (`previous`: the account being switched away from).
+    fn open_sign_in(&mut self, previous: Option<String>) {
+        self.sign_in = Some(SignIn { email: if previous.is_some() { String::new() } else { self.email.clone() }, previous, ..Default::default() });
+    }
+
+    /// Ask for the code, or check it.
+    fn sign_in_step(&mut self) {
+        let Some(s) = self.sign_in.as_mut() else { return };
+        let (email, code, sent) = (s.email.trim().to_string(), s.code.clone(), s.code_sent);
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            // Ok(true): signed in; Ok(false): the code was emailed
+            let r = if sent {
+                sf_license::confirm_code(&email, &code).and_then(|st| if st.is_valid() { Ok(true) } else { Err(format!("That license is not valid here: {st:?}")) })
+            } else {
+                match sf_license::activate(&email, true) {
+                    Ok(sf_license::Activation::Done(st)) if st.is_valid() => Ok(true),
+                    Ok(sf_license::Activation::Done(st)) => Err(format!("That license is not valid here: {st:?}")),
+                    Ok(_) => Ok(false),
+                    Err(e) if e == "no license" => Err("No ScreenForge license for that email. Upgrade to Pro first, or use the email you subscribed with.".into()),
+                    Err(e) => Err(e),
+                }
+            };
+            let _ = tx.send(r);
+        });
+        s.error = None;
+        s.rx = Some(rx);
+    }
+
     /// Credits and checkout replies that arrived since the last frame.
     fn poll_billing(&mut self) {
+        if let Some(s) = self.sign_in.as_mut() {
+            if let Some(Ok(r)) = s.rx.as_ref().map(|rx| rx.try_recv()) {
+                s.rx = None;
+                match r {
+                    Ok(false) => s.code_sent = true,
+                    Ok(true) => {
+                        // switching: release the account signed in before on the server
+                        let new = s.email.trim().to_lowercase();
+                        if let (Some(old), Some(device)) = (s.previous.clone().filter(|o| o.to_lowercase() != new), sf_license::device_id()) {
+                            std::thread::spawn(move || {
+                                let _ = sf_license::call_backend("license-deactivate", json!({ "email": old, "device": device }));
+                            });
+                        }
+                        self.sign_in = None;
+                        self.after_account_change("Signed in.".into());
+                    }
+                    Err(e) => s.error = Some(e),
+                }
+            }
+        }
+        if let Some(Ok(r)) = self.account_rx.as_ref().map(|rx| rx.try_recv()) {
+            self.account_rx = None;
+            match r {
+                // a billing portal link
+                Ok(Some(url)) => crate::os::open(&url),
+                Ok(None) => self.after_account_change("Signed out.".into()),
+                Err(e) if e.starts_with("Signed out") => self.after_account_change(e),
+                Err(e) => self.log.push(Entry::Error(e)),
+            }
+        }
         if let Some(rx) = &self.credits_rx {
             match rx.try_recv() {
                 Ok(Ok(v)) => {
@@ -337,6 +415,102 @@ impl AgentPanel {
         }
     }
 
+    /// The license on this computer changed: check the plan again and tell the export dialog.
+    fn after_account_change(&mut self, note: String) {
+        self.credits = None;
+        self.credits_error = None;
+        self.conversation = Conversation::default();
+        self.log.clear();
+        self.log.push(Entry::Note(note));
+        self.license_changed = true;
+        self.fetch_credits();
+    }
+
+    fn sign_out(&mut self) {
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(sf_license::sign_out().map(|_| None));
+        });
+        self.account_rx = Some(rx);
+    }
+
+    fn manage_subscription(&mut self) {
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(sf_license::billing_portal_url().map(Some));
+        });
+        self.account_rx = Some(rx);
+    }
+
+    /// Email, then the emailed code; Cancel closes it.
+    fn sign_in_ui(&mut self, ui: &mut egui::Ui) {
+        let pal = theme::p();
+        let Some(s) = self.sign_in.as_mut() else { return };
+        let busy = s.rx.is_some();
+        let mut step = false;
+        let mut cancel = false;
+        if !s.code_sent {
+            ui.label(RichText::new(if s.previous.is_some() { "Switch to the account with this email" } else { "Sign in with the email you subscribed with" }).size(12.5).color(pal.text_dim));
+            widgets::text_field(ui, &mut s.email, "you@example.com");
+        } else {
+            ui.label(RichText::new(format!("Enter the 6-digit code we emailed to {}", s.email.trim())).size(12.5).color(pal.text_dim));
+            widgets::text_field(ui, &mut s.code, "123456");
+        }
+        ui.add_space(6.0);
+        ui.horizontal(|ui| {
+            let label = match (busy, s.code_sent) {
+                (true, _) => "Checking…",
+                (false, false) => "Email me a code",
+                (false, true) => "Sign in",
+            };
+            if ui.add_enabled_ui(!busy, |ui| widgets::accent_button(ui, label)).inner.clicked() {
+                step = true;
+            }
+            if widgets::secondary_button(ui, "Cancel").clicked() {
+                cancel = true;
+            }
+        });
+        if let Some(e) = &s.error {
+            ui.add(egui::Label::new(RichText::new(e).size(12.5).color(pal.danger)).wrap());
+        }
+        if cancel {
+            self.sign_in = None;
+        } else if step {
+            self.sign_in_step();
+        }
+    }
+
+    /// Who is signed in, and Switch account / Sign out / Manage subscription.
+    fn account_ui(&mut self, ui: &mut egui::Ui) {
+        let pal = theme::p();
+        if self.sign_in.is_some() {
+            self.sign_in_ui(ui);
+            return;
+        }
+        let pro = self.credits.as_ref().is_some_and(|c| c["pro"].as_bool() == Some(true));
+        match sf_license::load_email() {
+            Some(email) => {
+                ui.label(RichText::new(format!("Signed in as {email}{}", if pro { " · Pro" } else { "" })).size(12.5).color(pal.text_dim));
+                ui.horizontal_wrapped(|ui| {
+                    if pro && ui.link("Manage subscription").clicked() {
+                        self.manage_subscription();
+                    }
+                    if ui.link("Switch account").clicked() {
+                        self.open_sign_in(Some(email.clone()));
+                    }
+                    if ui.link("Sign out").clicked() {
+                        self.sign_out();
+                    }
+                });
+            }
+            None => {
+                if ui.link("Sign in").on_hover_text("Already on Pro? Sign in with the email you subscribed with").clicked() {
+                    self.open_sign_in(None);
+                }
+            }
+        }
+    }
+
     /// Plan, balance, Pro and the top-up packs.
     fn credits_menu(&mut self, ui: &mut egui::Ui) {
         let pal = theme::p();
@@ -353,6 +527,8 @@ impl AgentPanel {
         } else {
             format!("Free trial · {} left", credits_label(num("trial")))
         };
+        self.account_ui(ui);
+        ui.separator();
         ui.label(RichText::new(status).size(12.5).color(pal.text_dim));
         ui.label(RichText::new("1 credit is about one cent of Claude usage.").size(11.5).color(pal.text_faint));
         ui.separator();
@@ -411,8 +587,12 @@ impl AgentPanel {
                     self.fetch_credits();
                 }
             });
-            ui.add_space(8.0);
-            widgets::hint(ui, "Already on Pro? Open Export, enter the email you subscribed with and press Activate.");
+            ui.add_space(12.0);
+            if self.sign_in.is_some() {
+                self.sign_in_ui(ui);
+            } else if ui.link("Already on Pro? Sign in").clicked() {
+                self.open_sign_in(None);
+            }
         });
         // checkout notes and errors from the buttons above
         for e in self.log.iter().rev().take(1) {
@@ -558,10 +738,13 @@ impl AgentPanel {
     pub fn ui(&mut self, ed: &mut Editor, ui: &mut egui::Ui) {
         let pal = theme::p();
         self.poll_billing();
+        if std::mem::take(&mut self.license_changed) {
+            ed.export.license = sf_license::load_saved().map(|k| sf_license::verify(&k)).unwrap_or_else(|| sf_license::Status::Invalid("no key".into()));
+        }
         if self.credits.is_none() && self.credits_error.is_none() && self.local == Some(false) {
             self.fetch_credits();
         }
-        if self.credits_rx.is_some() || self.checkout_rx.is_some() {
+        if self.credits_rx.is_some() || self.checkout_rx.is_some() || self.account_rx.is_some() || self.sign_in.as_ref().is_some_and(|s| s.rx.is_some()) {
             ui.ctx().request_repaint_after(std::time::Duration::from_millis(200));
         }
         ui.add_space(8.0);

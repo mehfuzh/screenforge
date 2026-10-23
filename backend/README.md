@@ -119,3 +119,18 @@ supabase functions deploy agent
   file (the repository's, which is git-ignored), the app calls the Claude API directly and the
   panel says "local key". Release builds always go through the backend.
 
+## Signing in and out, and billing
+
+The agent panel's credits menu shows the license email this computer is signed in with, and
+offers **Switch account**, **Sign out** and, for Pro, **Manage subscription**:
+
+- Signing in is the same emailed 6-digit code as Export → Activate (`license-activate`).
+  Switching keeps the old account until the new one is confirmed, then releases it.
+- `license-deactivate` `{ email, device }` removes this computer's activation: it stops using
+  that account's credits and the license is free to activate elsewhere. The app deletes its key
+  and email too (`sf_license::sign_out`).
+- `billing-portal` `{ email, device }` → `{ url }` opens Stripe's customer portal (cancel at the
+  end of the period, change the card, invoices) for a computer activated for that email only.
+  It uses the account's default portal configuration (`PORTAL_RETURN_URL` sets where "Return"
+  goes; default the pricing page).
+
