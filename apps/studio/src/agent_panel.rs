@@ -255,6 +255,8 @@ pub struct AgentPanel {
     account_rx: Option<mpsc::Receiver<Result<Option<String>, String>>>,
     /// The license on this computer changed: the export dialog re-reads it.
     license_changed: bool,
+    /// "Signed in." and the like: shown above the suggestions until the first message.
+    notice: Option<String>,
 }
 
 /// Same edit state, ignoring `data` (the autosave writes the playhead position there).
@@ -473,7 +475,7 @@ impl AgentPanel {
         self.credits_error = None;
         self.conversation = Conversation::default();
         self.log.clear();
-        self.log.push(Entry::Note(note));
+        self.notice = Some(note);
         self.license_changed = true;
         self.fetch_credits();
     }
@@ -684,6 +686,10 @@ impl AgentPanel {
             ui.add_space(6.0);
             widgets::hint(ui, "Already subscribed? Press Activate: we email you a code to confirm this computer. After paying, do the same to start using Pro here.");
         });
+        if let Some(n) = &self.notice {
+            ui.add_space(8.0);
+            ui.label(RichText::new(n).size(13.0).color(pal.text_dim));
+        }
         // checkout notes and errors from the buttons above
         for e in self.log.iter().rev().take(1) {
             match e {
@@ -725,6 +731,7 @@ impl AgentPanel {
             }
         };
         self.input.clear();
+        self.notice = None;
         self.log.push(Entry::User(text.clone()));
         let workspace = Workspace {
             project: ed.session.pkg.project.clone(),
@@ -897,6 +904,9 @@ impl AgentPanel {
         egui::ScrollArea::vertical().id_salt("agent_log").max_height(log_h).auto_shrink([false, false]).stick_to_bottom(true).show(ui, |ui| {
             ui.spacing_mut().item_spacing.y = 8.0;
             if self.log.is_empty() {
+                if let Some(n) = &self.notice {
+                    ui.label(RichText::new(n).size(12.5).color(pal.accent_hover));
+                }
                 widgets::hint(ui, "Ask for an edit in your own words. The agent reads the timeline and the transcript, makes the change, and you see it on the timeline as it works. ⌘Z undoes a whole answer.");
                 ui.add_space(4.0);
                 for s in SUGGESTIONS {
