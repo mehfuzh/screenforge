@@ -111,7 +111,10 @@ supabase functions deploy agent
   and `AGENT_TOTAL_DAILY_USD` for everyone together (default 20); `0` turns a cap off (the
   per-device cap is off in production since 23 October 2026). Device ids are not secret,
   so the per-device cap alone does not stop abuse; the total cap is the backstop.
-- Local builds skip the backend: with `ANTHROPIC_API_KEY` in the environment or in a `.env`
+- The agent is part of Pro: the `agent` function refuses other computers (`pro_required`), and
+  packs are sold only to Pro emails. `AGENT_STAFF_EMAILS` (comma separated) lets the team use it
+  without Pro.
+- Debug builds skip the backend: with `ANTHROPIC_API_KEY` in the environment or in a `.env`
   file (the repository's, which is git-ignored), the app calls the Claude API directly and the
-  panel says "local key".
+  panel says "local key". Release builds always go through the backend.
 

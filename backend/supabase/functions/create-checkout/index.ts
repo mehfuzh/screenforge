@@ -1,7 +1,7 @@
 import { serve } from "https://deno.land/std@0.190.0/http/server.ts";
 import Stripe from "https://esm.sh/stripe@18.5.0";
-import { cleanEmail, db, newestLicense } from "../_shared/activation.ts";
-import { PACKS } from "../_shared/credits.ts";
+import { cleanEmail, db } from "../_shared/activation.ts";
+import { PACKS, proOrStaff } from "../_shared/credits.ts";
 
 const cors = { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type" };
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { ...cors, "Content-Type": "application/json" } });
@@ -10,8 +10,9 @@ const json = (body: unknown, status = 200) => new Response(JSON.stringify(body),
 //   lifetime   US$49 once: the export license.
 //   pro        US$20 a month: export (a monthly key, issued by stripe-webhook) and 1,000 agent
 //              credits each billing period (granted on every paid invoice).
-//   topup_NN   a pack of agent credits (_shared/credits.ts PACKS), for an email that already
-//              has a license: computers spend credits through the license they are activated for.
+//   topup_NN   a pack of agent credits (_shared/credits.ts PACKS), for a Pro subscriber's email:
+//              the agent is a Pro feature, and computers spend the credits of the license they
+//              are activated for.
 // Older apps still ask for "monthly" (the retired US$10 plan): refused, and they fall back to
 // opening the pricing page; existing subscriptions keep renewing through stripe-webhook.
 serve(async (req) => {
@@ -55,7 +56,7 @@ serve(async (req) => {
   if (pack) {
     const address = cleanEmail(email);
     if (!address) return json({ error: "Enter the email of your ScreenForge license." }, 400);
-    if (!(await newestLicense(db(), address))) return json({ error: "Credits are added to a ScreenForge license (Pro or lifetime). Buy one first, or use the email you bought it with." }, 403);
+    if (!(await proOrStaff(db(), address))) return json({ error: "Credit packs top up Pro. Upgrade to Pro first, or use the email of your Pro subscription." }, 403);
     const price = Deno.env.get(pack.priceEnv);
     if (!price) return json({ error: "Credit packs are not on sale yet." }, 503);
     const session = await stripe.checkout.sessions.create({

@@ -71,6 +71,7 @@ serve(async (req) => {
   if (DEVICE_DAILY_USD > 0 && Number(spent?.device_usd ?? 0) >= DEVICE_DAILY_USD) return fail("Today's agent allowance on this computer is used up. It starts again tomorrow.", 402);
   if (TOTAL_DAILY_USD > 0 && Number(spent?.total_usd ?? 0) >= TOTAL_DAILY_USD) return fail("The agent is very busy today. Please try again tomorrow.", 503);
   const payer = await payerFor(db, device);
+  if (!payer.allowed) return json({ error: { message: `The AI agent is part of Pro: US$20/month for ${MONTHLY_CREDITS.toLocaleString("en-US")} agent credits a month and unlimited export. Upgrade from the agent panel; already on Pro? Activate it with your email in Export.`, code: "pro_required" }, sf_credits: summary(payer) }, 402);
   if (remaining(payer) <= 0) return json({ error: { message: outOfCredits(payer), code: "no_credits" }, sf_credits: summary(payer) }, 402);
 
   // the agent's own tools only: server tools (web search, code execution) bill extra

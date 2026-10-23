@@ -27,9 +27,19 @@ fn settings_path() -> Option<std::path::PathBuf> {
     sf_license::key_file().map(|p| p.with_file_name("agent.json"))
 }
 
-/// A local key (`.env` or the environment) when there is one, else the ScreenForge backend.
+/// A developer's local key (`.env` or the environment), in debug builds only: released builds
+/// always go through the ScreenForge backend, where the agent is part of Pro.
+fn local_key() -> Option<String> {
+    if cfg!(debug_assertions) {
+        sf_agent::client::local_key()
+    } else {
+        None
+    }
+}
+
+/// A local key when there is one (debug builds), else the ScreenForge backend.
 fn route() -> Result<Route, String> {
-    if let Some(api_key) = sf_agent::client::local_key() {
+    if let Some(api_key) = local_key() {
         return Ok(Route::Direct { api_key });
     }
     let device = sf_license::device_id().ok_or("ScreenForge cannot identify this computer, so the agent is not available.")?;
@@ -259,6 +269,7 @@ impl AgentPanel {
         let Some(c) = self.credits.clone() else { return };
         let num = |k: &str| c[k].as_f64().unwrap_or(0.0);
         let licensed = c["account"].is_string();
+        let allowed = c["allowed"].as_bool() == Some(true);
         ui.set_width(260.0);
         ui.spacing_mut().item_spacing.y = 4.0;
         let status = if c["pro"].as_bool() == Some(true) {
@@ -282,7 +293,7 @@ impl AgentPanel {
                 ui.close();
             }
         }
-        if licensed {
+        if allowed && licensed {
             for p in c["packs"].as_array().cloned().unwrap_or_default() {
                 let (plan, credits, usd) = (p["plan"].as_str().unwrap_or(""), p["credits"].as_u64().unwrap_or(0), p["usd"].as_u64().unwrap_or(0));
                 if model_row(ui, &format!("{credits} credits · ${usd}"), "Top-up, never expires", false).clicked() {
@@ -291,7 +302,57 @@ impl AgentPanel {
                 }
             }
         } else {
-            ui.label(RichText::new("Credit packs are for license holders (Pro or lifetime).").size(11.5).color(pal.text_faint));
+            ui.label(RichText::new("Credit packs top up Pro.").size(11.5).color(pal.text_faint));
+        }
+    }
+
+    /// The agent is part of Pro: shown instead of the chat on a computer without it.
+    fn locked_ui(&mut self, ui: &mut egui::Ui) {
+        let pal = theme::p();
+        let monthly = self.credits.as_ref().and_then(|c| c["monthlyCredits"].as_u64()).unwrap_or(1000);
+        ui.add_space(16.0);
+        egui::Frame::NONE.fill(pal.card_2).corner_radius(CornerRadius::same(theme::RADIUS_SM)).inner_margin(egui::Margin::same(16)).show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.label(RichText::new("The AI agent is part of Pro").size(16.0).color(pal.text));
+            ui.add_space(6.0);
+            for line in ["Ask for edits in plain words, or Auto edit the whole video".to_string(), format!("{monthly} agent credits every month, top-ups anytime"), "Unlimited export".to_string()] {
+                ui.horizontal(|ui| {
+                    let (dot, _) = ui.allocate_exact_size(vec2(10.0, 16.0), egui::Sense::hover());
+                    ui.painter().circle_filled(dot.center(), 2.5, pal.accent_hover);
+                    ui.add(egui::Label::new(RichText::new(line).size(13.0).color(pal.text_dim)).wrap());
+                });
+            }
+            ui.add_space(10.0);
+            if sf_license::load_email().is_none() {
+                ui.label(RichText::new("Email for checkout").size(12.5).color(pal.text_dim));
+                widgets::text_field(ui, &mut self.email, "you@example.com");
+                ui.add_space(6.0);
+            }
+            ui.horizontal_wrapped(|ui| {
+                if widgets::accent_button(ui, "Upgrade to Pro · $20/month").clicked() {
+                    self.buy("pro");
+                }
+                if widgets::secondary_button(ui, "Check again").on_hover_text("After subscribing and activating Pro on this computer").clicked() {
+                    self.credits = None;
+                    self.fetch_credits();
+                }
+            });
+            ui.add_space(8.0);
+            widgets::hint(ui, "Already on Pro? Open Export, enter the email you subscribed with and press Activate.");
+        });
+        // checkout notes and errors from the buttons above
+        for e in self.log.iter().rev().take(1) {
+            match e {
+                Entry::Error(t) => {
+                    ui.add_space(8.0);
+                    ui.add(egui::Label::new(RichText::new(t).size(13.0).color(pal.danger)).wrap());
+                }
+                Entry::Note(t) => {
+                    ui.add_space(8.0);
+                    ui.add(egui::Label::new(RichText::new(t).size(13.0).color(pal.text_dim)).wrap());
+                }
+                _ => {}
+            }
         }
     }
 
@@ -429,7 +490,7 @@ impl AgentPanel {
             let (mark, _) = ui.allocate_exact_size(vec2(20.0, 20.0), egui::Sense::hover());
             widgets::paint_icon(ui.painter(), mark, widgets::Icon::Agent, pal.text);
             ui.label(RichText::new("Agent").size(16.0).color(pal.text));
-            let local = *self.local.get_or_insert_with(|| sf_agent::client::local_key().is_some());
+            let local = *self.local.get_or_insert_with(|| local_key().is_some());
             if local {
                 ui.label(RichText::new("local key").size(11.0).color(pal.text_faint)).on_hover_text("ANTHROPIC_API_KEY from the environment or .env: requests go straight to Claude, not through the ScreenForge server.");
             }
@@ -440,7 +501,7 @@ impl AgentPanel {
                     self.log.clear();
                     self.usage = Usage::default();
                 }
-                if let Some(n) = self.credits.as_ref().and_then(|c| c["credits"].as_f64()).filter(|_| !local) {
+                if let Some(n) = self.credits.as_ref().filter(|c| c["allowed"].as_bool() == Some(true)).and_then(|c| c["credits"].as_f64()).filter(|_| !local) {
                     let colour = if n <= 0.0 { pal.danger } else { pal.text_dim };
                     let chip = ui.add(egui::Button::new(RichText::new(credits_label(n)).size(12.0).color(colour)).fill(pal.card_2).corner_radius(CornerRadius::same(widgets::BUTTON_RADIUS))).on_hover_text("Agent credits: plan, Pro and top-ups");
                     let frame = egui::Frame::menu(ui.style()).corner_radius(CornerRadius::same(6)).inner_margin(egui::Margin::same(8));
@@ -448,6 +509,12 @@ impl AgentPanel {
                 }
             });
         });
+
+        // hosted and not on Pro: no chat, the upgrade card instead
+        if self.local == Some(false) && self.credits.as_ref().is_some_and(|c| c["allowed"].as_bool() == Some(false)) {
+            self.locked_ui(ui);
+            return;
+        }
 
         // the composer's height from the last frame (it grows with the text)
         let composer_h = if self.composer_h > 0.0 { self.composer_h } else { 110.0 } + 8.0;
@@ -494,7 +561,7 @@ impl AgentPanel {
             }
             let out = self.job.is_none() && self.credits.as_ref().and_then(|c| c["credits"].as_f64()).is_some_and(|n| n <= 0.0);
             if out && self.local != Some(true) {
-                let licensed = self.credits.as_ref().is_some_and(|c| c["account"].is_string());
+                let licensed = self.credits.as_ref().is_some_and(|c| c["account"].is_string() && c["allowed"].as_bool() == Some(true));
                 let pro = self.credits.as_ref().is_some_and(|c| c["pro"].as_bool() == Some(true));
                 ui.horizontal_wrapped(|ui| {
                     if !pro && widgets::accent_button(ui, "Upgrade to Pro · $20/month").clicked() {
