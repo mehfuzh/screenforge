@@ -978,7 +978,7 @@ impl AgentPanel {
         let focused = ui.memory(|m| m.has_focus(id));
         // Enter sends, Shift+Enter starts a new line
         let mut send = focused && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter));
-        let hint = if self.job.is_some() { "The agent is working… (you can type the next request)" } else { "Ask for an edit, e.g. cut the first 5 seconds" };
+        let hint = if self.job.is_some() { "The agent is working… (you can type the next request)" } else { "Type your prompt here, e.g. cut the first 5 seconds" };
         egui::Frame::NONE
             .fill(pal.card_2)
             .stroke(Stroke::new(1.0, if focused { pal.text_faint } else { pal.border }))
