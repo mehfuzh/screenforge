@@ -231,7 +231,7 @@
   @media (max-width: 560px) { .grid { grid-template-columns: minmax(0, 1fr); } }
 
   /* pricing: one card */
-  .plans { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 56px; margin-top: 44px; align-items: stretch; }
+  .plans { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 28px; margin-top: 44px; align-items: stretch; }
   .plans > * { display: flex; flex-direction: column; }
   .plans > * .foot { margin-top: auto; padding-top: 14px; }
   @media (max-width: 860px) { .plans { grid-template-columns: minmax(0, 1fr); gap: 36px; } }
@@ -362,6 +362,9 @@
 
   /* pricing: the two-option license card and the buy forms */
   .plan.lite { border-color: var(--line-2); }
+  .plan.pro { border-color: var(--jade); box-shadow: 0 0 0 1px var(--jade); }
+  .plan .name .tag { margin-left: 8px; vertical-align: middle; }
+  @media (max-width: 1080px) { .plans { grid-template-columns: minmax(0, 1fr); gap: 32px; } }
   .plan.lite .name { color: var(--jade); }
   .opt { padding-top: 22px; margin-top: 22px; border-top: 1px solid var(--line); }
   .opt:first-of-type { padding-top: 0; margin-top: 0; border-top: 0; }
@@ -437,7 +440,7 @@ gtag('config', 'G-ZYRJDJ736V');
 <main class="doc wide">
   <div class="eyebrow">Pricing</div>
   <h1>Pricing that fits <em>how you work.</em></h1>
-  <p class="stamp">US$49 once · no subscription · verified offline · 24-hour refund</p>
+  <p class="stamp">free to record and edit · Pro US$20/month with the AI agent · Creator US$49 once · 24-hour refund</p>
 
   <div class="plans" style="margin-top:0">
     <div class="plan lite">
@@ -448,10 +451,31 @@ gtag('config', 'G-ZYRJDJ736V');
         <li>Record a display, a window or an area</li>
         <li>Automatic zooms, captions and the independent audio track</li>
         <li>Your first three exports, in every format</li>
+        <li>50 credits to try the AI agent</li>
         <li>Apache-2.0 source on <a href="https://github.com/mehfuzh/screenforge">GitHub</a></li>
       </ul>
       <a class="alt os-dl" href="download.html#mac" style="width:100%;justify-content:center"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1.5v8.3l2.7-2.7 1 1L8 11.8 4.3 8.1l1-1L8 9.8V1.5zM2.5 12h11v1.5h-11z"/></svg> <span class="os-label">Download for macOS</span></a>
       <p class="foot">Everything on the timeline works without paying. The fourth export from the official build is where the key comes in.</p>
+    </div>
+
+    <div class="plan pro">
+      <div class="name">Pro <span class="tag">AI agent</span></div>
+      <div class="opt">
+        <div class="fig">US$20<small>/month</small></div>
+        <div class="per">cancel anytime · credits refill every month</div>
+        <form class="form" data-plan="pro" novalidate>
+          <button class="buy" type="submit">Get Pro</button>
+        </form>
+        <p class="err" role="alert"></p>
+      </div>
+      <ul style="margin-top:24px">
+        <li>The AI editing agent: ask for edits in plain words, or Auto edit the whole video</li>
+        <li>1,000 agent credits every month</li>
+        <li>Top up anytime: credit packs never expire</li>
+        <li>Unlimited export, like Creator</li>
+        <li>Email support from a person, usually the same day</li>
+      </ul>
+      <p class="foot">Stripe takes the payment and asks for your email there. The key arrives by email; activate it in ScreenForge with the same email, and the credits show in the agent panel.</p>
     </div>
 
     <div class="plan">
@@ -475,6 +499,23 @@ gtag('config', 'G-ZYRJDJ736V');
     </div>
   </div>
 
+  <section class="studio" id="credits">
+    <div>
+      <div class="name">Agent credits</div>
+      <p>The AI agent runs on Claude. Each request uses credits for what it costs: one credit is about one cent of Claude usage, and a typical edit takes a few. Pro includes 1,000 a month; when they run out, or on Creator, add a pack. Packs never expire and are used after the monthly credits.</p>
+      <p>Buy packs in ScreenForge, from the credits menu in the agent panel, for the email of your license.</p>
+    </div>
+    <div class="perks">
+      <ul>
+        <li>500 credits: US$10</li>
+        <li>1,250 credits: US$25</li>
+        <li>2,500 credits: US$50</li>
+        <li>Monthly credits refill on your billing date and do not carry over</li>
+        <li>Your own Claude key in a local build skips credits entirely</li>
+      </ul>
+    </div>
+  </section>
+
   <section class="studio" id="studios">
     <div>
       <div class="name">Studios &amp; teams</div>
@@ -494,6 +535,10 @@ gtag('config', 'G-ZYRJDJ736V');
 
   <h2>Questions</h2>
   <div class="faq">
+    <div>
+      <h3>What does the AI agent cost?</h3>
+      <p>What Claude charges for it, in credits: a short edit takes a few credits, an Auto edit of a long video more. Pro includes 1,000 credits a month, enough for daily editing; packs top it up and never expire. The agent panel shows your balance and what each conversation used.</p>
+    </div>
     <div>
       <h3>How is the key checked?</h3>
       <p>On your computer. The app verifies the key's signature locally, so exporting works offline. When it is online it briefly checks in with the license server, so a license moved to another computer stops working on the old one.</p>
