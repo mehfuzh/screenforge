@@ -79,7 +79,9 @@ pub fn audio_inputs(session: &Session) -> Vec<AudioMixInput> {
             continue;
         }
         let dur = vo.output_duration_ms();
-        inputs.push(AudioMixInput { path, volume: vo.volume, delay_ms: vo.output_start_ms, start_ms: Some(vo.file_offset_ms), end_ms: Some(vo.file_offset_ms + dur), tempo: 1.0, loop_input: false, filter: None });
+        // a voice-over is a microphone take: the microphone's audio mode, then its own boost
+        let filter = sf_media::microphone_filter(&cfg.audio.microphone_audio_preset, cfg.audio.voice_over_boost_db());
+        inputs.push(AudioMixInput { path, volume: vo.volume, delay_ms: vo.output_start_ms, start_ms: Some(vo.file_offset_ms), end_ms: Some(vo.file_offset_ms + dur), tempo: 1.0, loop_input: false, filter });
     }
     // one looping input per music clip (each can have its own track and level), started at
     // its place in the track and cut to its length (`atrim` after the loop, so a clip longer

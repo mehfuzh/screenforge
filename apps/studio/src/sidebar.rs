@@ -996,6 +996,21 @@ pub fn audio_item_ui(ed: &mut Editor, ui: &mut egui::Ui) {
     widgets::hint(ui, "Clips on one layer never overlap; clips on different layers can, and play together. Drag a clip down onto the empty lane to start a new layer (⌥↑ / ⌥↓).");
 }
 
+/// Boost for every voice-over (they are quieter than the recording's microphone as a rule):
+/// in the voice-over inspector and the Audio page.
+fn voice_over_boost_ui(ed: &mut Editor, ui: &mut egui::Ui) {
+    widgets::title(ui, "Voice-over boost");
+    const BOOSTS_DB: [f64; 4] = [0.0, 6.0, 12.0, 18.0];
+    let boost = ed.session.pkg.project.config.audio.voice_over_boost_db();
+    let idx = BOOSTS_DB.iter().position(|b| (b - boost).abs() < 0.5).unwrap_or(usize::MAX);
+    if let Some(i) = widgets::pills(ui, idx, &["Off", "+6 dB", "+12 dB", "+18 dB"]) {
+        let db = BOOSTS_DB[i];
+        ed.edit(move |p| p.config.audio.voice_over_boost_db = (db > 0.0).then_some(db));
+        ed.reload_audio();
+    }
+    widgets::hint(ui, "Raises every voice-over, with a limiter so loud words do not clip. Voice-overs also get the microphone's audio mode (noise reduction, podcast). Applied in preview and export.");
+}
+
 fn voice_over_item_ui(ed: &mut Editor, ui: &mut egui::Ui) {
     let Some(id) = ed.selected_voice_over.clone() else { return };
     let Some(span) = ed.session.voice_over_spans().into_iter().find(|v| v.id == id) else {
@@ -1017,6 +1032,7 @@ fn voice_over_item_ui(ed: &mut Editor, ui: &mut egui::Ui) {
     if widgets::toggle_row(ui, "Mute", "", &mut muted) {
         ed.edit_voice_over(&id, move |v| v.is_disabled = muted);
     }
+    voice_over_boost_ui(ed, ui);
     ui.horizontal_wrapped(|ui| {
         if ui.add_enabled(span.contains_output(ed.playhead_ms), egui::Button::new("Split at playhead")).on_hover_text("S").clicked() {
             let t = ed.playhead_ms;
@@ -1077,6 +1093,7 @@ fn audio_ui(ed: &mut Editor, ui: &mut egui::Ui) {
         ed.reload_audio();
     }
     widgets::hint(ui, "Raises a quiet microphone after the audio mode, with a limiter so loud moments do not clip. Try +6 dB first; the volume slider above is for fine tuning.");
+    voice_over_boost_ui(ed, ui);
     widgets::title(ui, "System audio");
     if ed.session.source.system_audio.is_empty() {
         widgets::hint(ui, "No system audio recorded");

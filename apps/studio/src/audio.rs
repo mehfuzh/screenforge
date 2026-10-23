@@ -38,6 +38,8 @@ struct Shared {
     music_tracks: std::collections::HashMap<String, Arc<AudioClip>>,
     /// Decoded voice-overs by file name, and where they play.
     voice_clips: std::collections::HashMap<String, Arc<AudioClip>>,
+    /// The filter `voice_clips` were decoded with (audio mode and voice-over boost).
+    voice_filter: Option<String>,
     voice_spans: Vec<VoiceOverSpan>,
     /// Where the background music plays (it loops inside each clip).
     music: Vec<MusicPlay>,
@@ -69,7 +71,7 @@ pub struct AudioPlayer {
 
 impl AudioPlayer {
     pub fn new() -> Self {
-        let shared = Arc::new(Mutex::new(Shared { tracks: vec![], spans: vec![], music_tracks: Default::default(), voice_clips: Default::default(), voice_spans: vec![], music: vec![], playing: false, output_ms: 0.0, callback_at: None, callback_ms: 0.0, duration_ms: 0.0, master_volume: 1.0 }));
+        let shared = Arc::new(Mutex::new(Shared { tracks: vec![], spans: vec![], music_tracks: Default::default(), voice_clips: Default::default(), voice_filter: None, voice_spans: vec![], music: vec![], playing: false, output_ms: 0.0, callback_at: None, callback_ms: 0.0, duration_ms: 0.0, master_volume: 1.0 }));
         let stream = Self::open_stream(shared.clone());
         if let Err(e) = &stream {
             tracing::warn!("audio output unavailable: {e}");
@@ -194,8 +196,15 @@ impl AudioPlayer {
     /// Decode the voice-overs not decoded yet (a new take) on a background thread.
     pub fn load_voice_overs(&self, session: &sf_session::Session) {
         use std::sync::atomic::Ordering;
+        let cfg = &session.pkg.project.config.audio;
+        let filter = sf_media::microphone_filter(&cfg.microphone_audio_preset, cfg.voice_over_boost_db());
         let missing: Vec<(String, std::path::PathBuf)> = {
-            let s = self.shared.lock();
+            let mut s = self.shared.lock();
+            // the boost or the audio mode changed: decode every take again
+            if s.voice_filter != filter {
+                s.voice_clips.clear();
+                s.voice_filter = filter.clone();
+            }
             let mut names: Vec<String> = session.pkg.project.scenes[0].voice_overs.iter().map(|v| v.file_name.clone()).filter(|n| !n.is_empty() && !s.voice_clips.contains_key(n)).collect();
             names.sort_unstable();
             names.dedup();
@@ -208,7 +217,7 @@ impl AudioPlayer {
         pending.fetch_add(1, Ordering::Relaxed);
         std::thread::spawn(move || {
             for (name, path) in missing {
-                match sf_media::decode_audio(&path, RATE, 2) {
+                match sf_media::decode_audio_filtered(&path, RATE, 2, filter.as_deref()) {
                     Ok(clip) => {
                         shared.lock().voice_clips.insert(name, Arc::new(clip));
                     }
