@@ -463,7 +463,7 @@ fn icon_glyph(p: &egui::Painter, r: egui::Rect, icon: crate::widgets::Icon, size
 /// stop); `glyph` paints its label. Hover and press deepen the glass tint like the toolbar.
 fn tape_key(ui: &mut Ui, rect: egui::Rect, id: &str, face: Option<Color32>, glyph: impl FnOnce(&egui::Painter, egui::Rect), tooltip: &str) -> egui::Response {
     let pal = theme::p();
-    let resp = ui.interact(rect, ui.id().with(("tape-key", id)), egui::Sense::click());
+    let resp = ui.interact(rect, ui.id().with(("tape-key", id)), egui::Sense::click()).on_hover_cursor(egui::CursorIcon::PointingHand);
     let p = ui.painter();
     let fill = match face {
         Some(c) if resp.is_pointer_button_down_on() => c.gamma_multiply(0.8),

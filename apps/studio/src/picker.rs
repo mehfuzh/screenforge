@@ -363,6 +363,7 @@ impl Picker {
 
         // close
         let (r, resp) = ui.allocate_exact_size(vec2(30.0, 30.0), Sense::click());
+        let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
         ui.painter().circle_filled(r.center(), 13.0, pal.glass_button);
         widgets::paint_icon(ui.painter(), egui::Rect::from_center_size(r.center(), vec2(11.0, 11.0)), widgets::Icon::Close, pal.glass_button_fg);
         if resp.clicked() {
@@ -723,6 +724,7 @@ fn divider(ui: &mut Ui) {
 
 fn mode_button(ui: &mut Ui, icon: widgets::Icon, label: &str, selected: bool) -> egui::Response {
     let (rect, resp) = ui.allocate_exact_size(vec2(66.0, 46.0), Sense::click());
+    let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
     let p = ui.painter();
     if resp.hovered() || selected {
         p.rect_filled(rect, CornerRadius::same(2), theme::glass_alpha(if selected { 44 } else { 24 }));
@@ -749,6 +751,7 @@ fn input_menu_level(ui: &mut Ui, icon: widgets::Icon, label: &str, active: bool,
     let text_w = galley.size().x;
     let w = 12.0 + 16.0 + 8.0 + text_w + 6.0 + 10.0 + 10.0;
     let (rect, resp) = ui.allocate_exact_size(vec2(w, 34.0), Sense::click());
+    let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
     let p = ui.painter();
     let open = egui::Popup::is_id_open(ui.ctx(), egui::Popup::default_response_id(&resp));
     if resp.hovered() || open {
@@ -809,10 +812,11 @@ fn project_card(ui: &mut Ui, path: &std::path::Path, tex: Option<&egui::TextureH
     let name = path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
     let size = CARD_SIZE;
     let (rect, resp) = ui.allocate_exact_size(size, Sense::click());
+    let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
     let thumb = egui::Rect::from_min_size(rect.min, vec2(size.x, 110.0));
     // trash button in the thumbnail's top-right corner, only while the card is hovered
     let trash_rect = egui::Rect::from_min_size(pos2(thumb.right() - 30.0, thumb.top() + 6.0), vec2(24.0, 24.0));
-    let trash = ui.interact(trash_rect, resp.id.with("trash"), Sense::click());
+    let trash = ui.interact(trash_rect, resp.id.with("trash"), Sense::click()).on_hover_cursor(egui::CursorIcon::PointingHand);
     let card_hovered = resp.hovered() || trash.hovered();
     let p = ui.painter();
     if card_hovered {
@@ -871,6 +875,7 @@ fn open_button(ui: &mut Ui) -> egui::Response {
     let pal = theme::p();
     let galley = ui.painter().layout_no_wrap("Open".into(), egui::FontId::proportional(13.0), Color32::PLACEHOLDER);
     let (rect, resp) = ui.allocate_exact_size(egui::vec2(galley.size().x + 44.0, 28.0), egui::Sense::click());
+    let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
     let fg = if resp.hovered() { pal.glass_button_fg } else { pal.on_glass };
     if resp.hovered() {
         ui.painter().rect_filled(rect, CornerRadius::same(2), pal.glass_button);

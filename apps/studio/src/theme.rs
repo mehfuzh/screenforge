@@ -338,6 +338,8 @@ pub fn apply(ctx: &egui::Context) {
     v.window_shadow = egui::epaint::Shadow { offset: [0, 8], blur: 32, spread: 0, color: Color32::from_black_alpha(if dark { 120 } else { 50 }) };
     v.popup_shadow = egui::epaint::Shadow { offset: [0, 4], blur: 14, spread: 0, color: Color32::from_black_alpha(if dark { 90 } else { 40 }) };
     v.menu_corner_radius = CornerRadius::same(8);
+    // buttons and menu items show the pointing hand (the custom icon buttons set it themselves)
+    v.interact_cursor = Some(egui::CursorIcon::PointingHand);
     for w in [&mut v.widgets.inactive, &mut v.widgets.hovered, &mut v.widgets.active, &mut v.widgets.open, &mut v.widgets.noninteractive] {
         w.corner_radius = CornerRadius::same(RADIUS_SM);
         w.expansion = 0.0;

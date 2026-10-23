@@ -1528,9 +1528,12 @@ impl Editor {
             self.seek(0.0);
         }
         let (pr, presp) = mid.allocate_exact_size(vec2(36.0, 36.0), Sense::click());
+        let presp = presp.on_hover_cursor(egui::CursorIcon::PointingHand);
         let p = mid.painter();
         p.circle_stroke(pr.center(), 16.0, Stroke::new(1.5, theme::p().text));
-        p.text(pr.center() + vec2(if self.playing { 0.0 } else { 1.0 }, 0.0), Align2::CENTER_CENTER, if self.playing { "⏸" } else { "▶" }, FontId::proportional(14.0), theme::p().text);
+        // the play triangle sits a touch right of centre so it looks centred
+        let icon = if self.playing { widgets::Icon::Pause } else { widgets::Icon::Play };
+        widgets::paint_icon(p, Rect::from_center_size(pr.center() + vec2(if self.playing { 0.0 } else { 1.0 }, 0.0), vec2(13.0, 13.0)), icon, theme::p().text);
         if presp.clicked() {
             self.toggle_play();
         }
@@ -1607,8 +1610,8 @@ fn preset_row(ui: &mut egui::Ui, name: &str, width: f32) -> PresetRowAction {
     let icon = 14.0;
     let delete_rect = Rect::from_center_size(pos2(rect.right() - 14.0, rect.center().y), vec2(icon + 8.0, icon + 8.0));
     let rename_rect = delete_rect.translate(vec2(-(icon + 12.0), 0.0));
-    let delete = ui.interact(delete_rect, row.id.with("delete"), Sense::click());
-    let rename = ui.interact(rename_rect, row.id.with("rename"), Sense::click());
+    let delete = ui.interact(delete_rect, row.id.with("delete"), Sense::click()).on_hover_cursor(egui::CursorIcon::PointingHand);
+    let rename = ui.interact(rename_rect, row.id.with("rename"), Sense::click()).on_hover_cursor(egui::CursorIcon::PointingHand);
     let hovered = row.hovered() || delete.hovered() || rename.hovered();
     if hovered {
         ui.painter().rect_filled(rect, CornerRadius::same(4), pal.card_2);

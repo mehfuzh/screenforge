@@ -167,6 +167,7 @@ pub fn accent_button(ui: &mut Ui, text: &str) -> Response {
 /// quiet card fill at rest, accent only while hovered or pressed so it doesn't shout.
 pub fn accent_icon_button(ui: &mut Ui, icon: Icon, tip: &str) -> Response {
     let (rect, resp) = ui.allocate_exact_size(vec2(BUTTON_H + 4.0, BUTTON_H), Sense::click());
+    let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
     let pal = theme::p();
     let (fill, fg) = if !ui.is_enabled() {
         (pal.card_3, pal.text_dim)
@@ -576,6 +577,7 @@ pub fn paint_icon(p: &egui::Painter, rect: Rect, icon: Icon, color: Color32) {
 /// Icon-only button (quiet).
 pub fn icon_button(ui: &mut Ui, icon: Icon, size: f32, tooltip: &str) -> Response {
     let (rect, resp) = ui.allocate_exact_size(vec2(size + 12.0, size + 8.0), Sense::click());
+    let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
     if resp.hovered() {
         ui.painter().rect_filled(rect, CornerRadius::same(7), theme::p().card_2);
     }
@@ -587,6 +589,7 @@ pub fn icon_button(ui: &mut Ui, icon: Icon, size: f32, tooltip: &str) -> Respons
 /// Rail button drawn with a vector icon.
 pub fn rail_icon(ui: &mut Ui, icon: Icon, selected: bool, tooltip: &str) -> Response {
     let (rect, resp) = ui.allocate_exact_size(vec2(40.0, 40.0), Sense::click());
+    let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
     let painter = ui.painter();
     if selected || resp.hovered() {
         painter.rect_filled(rect, CornerRadius::same(9), if selected { theme::p().card_3 } else { theme::p().card_2 });
@@ -605,6 +608,7 @@ pub fn icon_text_button(ui: &mut Ui, icon: Option<Icon>, text: &str, chevron: bo
     let galley = ui.painter().layout_no_wrap(text.to_string(), font, theme::p().text);
     let w = galley.size().x + 24.0 + if icon.is_some() { 22.0 } else { 0.0 } + if chevron { 18.0 } else { 0.0 };
     let (rect, resp) = ui.allocate_exact_size(vec2(w, 32.0), Sense::click());
+    let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
     let p = ui.painter();
     if resp.hovered() {
         p.rect_filled(rect, CornerRadius::same(8), theme::p().card_2);
