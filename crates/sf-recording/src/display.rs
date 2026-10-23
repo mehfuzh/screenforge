@@ -71,6 +71,7 @@ pub fn plan(cfg: &RecordingConfig, discovery: &Discovery) -> Result<DisplayPlan>
                 .ok_or_else(|| Error::InvalidConfig("no display".into()))?;
             (d, Some(w.bounds))
         }
+        CaptureTarget::Device { .. } => return Err(Error::InvalidConfig("a device recording is sized by the device, not planned".into())),
         CaptureTarget::PortalWindow => {
             return Err(Error::InvalidConfig("the window is picked in the screen-sharing dialog (see window_stream_plan)".into()))
         }
@@ -640,9 +641,15 @@ mod imp {
         }
     }
 
-    /// ScreenCaptureKit stream plus the HLS writer.
+    /// Where the frames come from.
+    enum Source {
+        Screen(SCStream),
+        Device(crate::device::DeviceCapture),
+    }
+
+    /// ScreenCaptureKit stream (or a connected device's screen) plus the HLS writer.
     pub struct DisplayRecorder {
-        stream: SCStream,
+        source: Source,
         store: Arc<FrameStore>,
         tx: Sender<Cmd>,
         repeater: Option<JoinHandle<()>>,
@@ -749,7 +756,56 @@ mod imp {
                 .name("sf-frame-repeater".into())
                 .spawn(move || rep.run())
                 .map_err(|source| Error::Io { path: "thread".into(), source })?;
-            Ok(DisplayRecorder { stream, store, tx, repeater: Some(repeater), error, plan, encoder })
+            Ok(DisplayRecorder { source: Source::Screen(stream), store, tx, repeater: Some(repeater), error, plan, encoder })
+        }
+
+        /// Record a connected iPhone or iPad's screen ([`crate::CaptureTarget::Device`]). Its
+        /// frames feed the same repeater; the plan is the device's screen size (points = pixels).
+        pub fn start_device(cfg: &RecordingConfig, id: &str, log: RecLog) -> Result<Self> {
+            let capture = crate::device::DeviceCapture::start(id)?;
+            let store = capture.store();
+            let (w, h) = (store.width as u32, store.height as u32);
+            // H.264 needs even sizes: pad an odd edge by a pixel
+            let (ew, eh) = (w + w % 2, h + h % 2);
+            let filter = (ew != w || eh != h).then(|| format!("pad={ew}:{eh}"));
+            let plan = DisplayPlan {
+                display_id: 0,
+                crop: None,
+                bounds: sf_project::schema::common::Rect { x: 0.0, y: 0.0, width: ew as f64, height: eh as f64 },
+                scale: 1.0,
+                width_px: ew,
+                height_px: eh,
+                recording_scale: 1.0,
+                refresh_rate: 60.0,
+            };
+            let encoder = super::video_encoder();
+            let bitrate = target_bitrate(ew, eh, cfg.video_quality);
+            log.notice(COMPONENT, format!("Device capture started. device={:?} encoder={encoder} bitrate={bitrate} size={w}x{h}", capture.name));
+            let (tx, rx) = unbounded();
+            let rep = Repeater {
+                rx,
+                store: store.clone(),
+                log: log.clone(),
+                component: COMPONENT,
+                fps: cfg.fps.max(1),
+                input: RawInput { pix_fmt: "bgra", width: w, height: h, filter },
+                channel: super::DISPLAY_CHANNEL.into(),
+                bitrate,
+                encoder,
+            };
+            let repeater = std::thread::Builder::new()
+                .name("sf-frame-repeater".into())
+                .spawn(move || rep.run())
+                .map_err(|source| Error::Io { path: "thread".into(), source })?;
+            Ok(DisplayRecorder { source: Source::Device(capture), store, tx, repeater: Some(repeater), error: Arc::new(Mutex::new(None)), plan, encoder })
+        }
+
+        /// The connected device being recorded, if this is a device recording.
+        pub fn device_name(&self) -> Option<&str> {
+            match &self.source {
+                Source::Device(d) => Some(&d.name),
+                Source::Screen(_) => None,
+            }
         }
 
         /// Spawn ffmpeg for session `index` and start feeding frames.
@@ -782,7 +838,12 @@ mod imp {
             if let Some(t) = self.repeater.take() {
                 let _ = t.join();
             }
-            let _ = self.stream.stop_capture();
+            match &self.source {
+                Source::Screen(s) => {
+                    let _ = s.stop_capture();
+                }
+                Source::Device(d) => d.stop(),
+            }
         }
     }
 

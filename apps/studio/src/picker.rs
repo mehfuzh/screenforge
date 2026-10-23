@@ -52,6 +52,8 @@ pub struct DisplayEntry {
 #[allow(dead_code)]
 pub struct Inputs {
     pub cameras: Vec<InputDevice>,
+    /// iPhones and iPads connected by cable.
+    pub phones: Vec<InputDevice>,
     pub microphones: Vec<InputDevice>,
     pub displays: Vec<DisplayEntry>,
     pub windows: Vec<WindowEntry>,
@@ -62,6 +64,7 @@ impl Inputs {
     /// Take the device lists (cameras, microphones, windows) from a background discovery.
     pub fn merge_devices(&mut self, d: Inputs) {
         self.cameras = d.cameras;
+        self.phones = d.phones;
         self.microphones = d.microphones;
         self.windows = d.windows;
     }
@@ -146,6 +149,8 @@ pub struct RecordRequest {
     pub countdown_ms: u64,
     /// Capture cursor + keystrokes (needs Input Monitoring; set by the permission check).
     pub capture_input: bool,
+    /// Device mode: the iPhone or iPad to record (`sf_recording::device::DeviceInfo::id`).
+    pub device: Option<String>,
 }
 
 /// Thumbnails decoded on a background thread (the QuickLook previews are full-size PNGs).
@@ -278,6 +283,11 @@ impl Picker {
     /// appears without waiting for device listing (cameras run ffmpeg).
     pub fn load_inputs(&mut self) {
         self.inputs = crate::recorder::display_inputs();
+        self.load_device_inputs();
+    }
+
+    /// List cameras, microphones, windows and connected iPhones/iPads on a background thread.
+    fn load_device_inputs(&mut self) {
         let (tx, rx) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
             let _ = tx.send(crate::recorder::device_inputs());
@@ -362,7 +372,30 @@ impl Picker {
 
         for (mode, icon, label) in [(Mode::Display, widgets::Icon::Display, "Display"), (Mode::Window, widgets::Icon::Window, "Window"), (Mode::Area, widgets::Icon::Area, "Area"), (Mode::Device, widgets::Icon::Device, "Device")] {
             if mode == Mode::Device {
-                widgets::roadmap(ui, |ui| mode_button(ui, icon, label, false));
+                let tip = "Record an iPhone or iPad connected by cable";
+                let b = mode_button(ui, icon, label, self.mode == Some(mode)).on_hover_text(tip);
+                // several devices: choose one from a menu; one: record it; none: say how
+                if self.inputs.phones.len() > 1 {
+                    let phones = self.inputs.phones.clone();
+                    egui::Popup::menu(&b).show(|ui| {
+                        for p in &phones {
+                            if ui.button(&p.name).clicked() {
+                                action = Some(self.record_device(p));
+                            }
+                        }
+                    });
+                } else if b.clicked() {
+                    match self.inputs.phones.first().cloned() {
+                        Some(p) => action = Some(self.record_device(&p)),
+                        None => {
+                            self.set_status("Connect an iPhone or iPad with a cable, unlock it and tap Trust, then click Device again");
+                            // list again: the device appears once connected and trusted
+                            if self.devices_rx.is_none() {
+                                self.load_device_inputs();
+                            }
+                        }
+                    }
+                }
                 continue;
             }
             let b = mode_button(ui, icon, label, self.mode == Some(mode));
@@ -661,7 +694,15 @@ impl Picker {
             system_audio: self.system_audio,
             countdown_ms: self.countdown_ms,
             capture_input: true,
+            device: None,
         }
+    }
+
+    fn record_device(&mut self, phone: &InputDevice) -> PickerAction {
+        self.mode = Some(Mode::Device);
+        let mut req = self.request(Mode::Device, None, None);
+        req.device = Some(phone.id.clone());
+        PickerAction::StartRecording(req)
     }
 
     fn start(&mut self, mode: Mode) -> Option<PickerAction> {

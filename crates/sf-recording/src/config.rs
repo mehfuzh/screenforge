@@ -21,6 +21,10 @@ pub enum CaptureTarget {
     /// recording starts (Wayland lets no application list or locate other windows). Records
     /// that window's own stream; positions in the recording are relative to the window.
     PortalWindow,
+    /// macOS: an iPhone or iPad connected by cable ([`crate::device::DeviceInfo::id`]). Its
+    /// screen is the `display` channel, sized like the device's screen; there are no input logs
+    /// (the device has no Mac pointer or keyboard).
+    Device { id: String },
 }
 
 /// Everything the UI decides before pressing record.

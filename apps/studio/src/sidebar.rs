@@ -225,16 +225,12 @@ pub enum Section {
     Audio,
     Shortcuts,
     Animations,
+    Agent,
     DeviceFrame,
 }
 
 impl Section {
-    pub const ALL: [Section; 9] = [Section::General, Section::Cursor, Section::CameraLayout, Section::CameraStyle, Section::Captions, Section::Audio, Section::Shortcuts, Section::Animations, Section::DeviceFrame];
-
-    /// Pages whose feature is not rendered yet: shown greyed out in the rail.
-    pub fn is_roadmap(self) -> bool {
-        matches!(self, Section::DeviceFrame)
-    }
+    pub const ALL: [Section; 10] = [Section::Agent, Section::General, Section::Cursor, Section::CameraLayout, Section::CameraStyle, Section::Captions, Section::Audio, Section::Shortcuts, Section::Animations, Section::DeviceFrame];
 
     pub fn icon(self) -> widgets::Icon {
         match self {
@@ -246,6 +242,7 @@ impl Section {
             Section::Audio => widgets::Icon::Audio,
             Section::Shortcuts => widgets::Icon::Keyboard,
             Section::Animations => widgets::Icon::Animations,
+            Section::Agent => widgets::Icon::Agent,
             Section::DeviceFrame => widgets::Icon::DeviceFrame,
         }
     }
@@ -260,6 +257,7 @@ impl Section {
             Section::Audio => "Audio",
             Section::Shortcuts => "Keyboard Shortcuts",
             Section::Animations => "Animations",
+            Section::Agent => "Agent (⌘L)",
             Section::DeviceFrame => "Device frame",
         }
     }
@@ -283,6 +281,13 @@ fn cfg_slider(ed: &mut Editor, ui: &mut egui::Ui, label: &str, get: impl Fn(&sf_
 }
 
 pub fn ui(ed: &mut Editor, ui: &mut egui::Ui, section: Section) {
+    // the chat keeps its own scrolling log and a message field pinned to the bottom
+    if section == Section::Agent {
+        let mut agent = std::mem::take(&mut ed.agent);
+        agent.ui(ed, ui);
+        ed.agent = agent;
+        return;
+    }
     // a solid scroll bar takes its own column, so full-width controls (sliders, segmented
     // rows) stop short of it instead of running underneath egui's floating bar
     let mut scroll = egui::style::ScrollStyle::solid();
@@ -321,6 +326,7 @@ pub fn ui(ed: &mut Editor, ui: &mut egui::Ui, section: Section) {
             Section::Audio => audio_ui(ed, ui),
             Section::Shortcuts => shortcuts_ui(ed, ui),
             Section::Animations => animations_ui(ed, ui),
+            Section::Agent => {}
             Section::DeviceFrame => device_ui(ed, ui),
         }
         ui.add_space(24.0);
@@ -1271,10 +1277,31 @@ fn animations_ui(ed: &mut Editor, ui: &mut egui::Ui) {
 }
 
 fn device_ui(ed: &mut Editor, ui: &mut egui::Ui) {
+    use sf_engine::device::{Finish, Frame, FINISHES, KINDS};
     widgets::title(ui, "Device frame");
-    widgets::hint(ui, "Device frames are on the roadmap: mockups are not rendered yet.");
-    let mut on = ed.session.pkg.project.config.device.enable_mockup;
-    widgets::roadmap(ui, |ui| widgets::toggle_row(ui, "Use device mockup", "Mockups apply to iPhone/iPad recordings.", &mut on));
+    widgets::hint(ui, "Show the recording inside a phone or tablet. The frame takes the recording's shape, so it looks right with a phone or tablet recording (the iOS Simulator, iPhone Mirroring, an Android emulator). Tall recordings stand upright; wide ones lie on their side.");
+    let dev = &ed.session.pkg.project.config.device;
+    let current = dev.frame_key.as_deref().filter(|_| dev.enable_mockup).and_then(Frame::parse);
+    let mut labels = vec!["None"];
+    labels.extend(KINDS.iter().map(|k| k.2));
+    let idx = current.and_then(|f| KINDS.iter().position(|k| k.0 == f.kind)).map_or(0, |i| i + 1);
+    if let Some(i) = widgets::segmented(ui, idx, &labels) {
+        let key = (i > 0).then(|| Frame { kind: KINDS[i - 1].0, finish: current.map_or(Finish::Black, |f| f.finish) }.key());
+        ed.edit(move |p| {
+            p.config.device.enable_mockup = true;
+            p.config.device.frame_key = key;
+        });
+    }
+    if let Some(f) = current {
+        widgets::title(ui, "Finish");
+        let names: Vec<&str> = FINISHES.iter().map(|x| x.2).collect();
+        let at = FINISHES.iter().position(|x| x.0 == f.finish).unwrap_or(0);
+        if let Some(i) = widgets::segmented(ui, at, &names) {
+            let key = Frame { finish: FINISHES[i].0, ..f }.key();
+            ed.edit(move |p| p.config.device.frame_key = Some(key));
+        }
+        widgets::hint(ui, "The frame replaces the screen's rounded corners and inset; its shadow follows Shadow in General.");
+    }
     widgets::title(ui, "Project");
     let p = &ed.session.pkg;
     widgets::hint(ui, &p.path.display().to_string());

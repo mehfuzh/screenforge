@@ -65,7 +65,7 @@ fi
 supabase db push
 
 echo "→ Supabase: functions"
-supabase functions deploy create-checkout license-refresh license-activate free-export unsplash --project-ref "$REF"
+supabase functions deploy create-checkout license-refresh license-activate free-export unsplash agent --project-ref "$REF"
 supabase functions deploy stripe-webhook --no-verify-jwt --project-ref "$REF"
 
 echo "→ Supabase: secrets"
@@ -78,6 +78,11 @@ supabase secrets set --project-ref "$REF" \
   LICENSE_FROM_EMAIL="ScreenForge <license@screenforge.studio>" \
   CHECKOUT_SUCCESS_URL="$SITE/success.html" \
   CHECKOUT_CANCEL_URL="$SITE/pricing.html"
+# the agent panel's Claude key (set it once by hand if it is not in the environment:
+# supabase secrets set ANTHROPIC_API_KEY=… --project-ref "$REF")
+if [ -n "${ANTHROPIC_API_KEY:-}" ]; then
+  supabase secrets set --project-ref "$REF" ANTHROPIC_API_KEY="$ANTHROPIC_API_KEY"
+fi
 
 echo "→ Smoke test: license-refresh for an unknown email should answer 404"
 ANON=$(supabase projects api-keys --project-ref "$REF" -o json | jq -r '.[] | select(.name == "anon") | .api_key')

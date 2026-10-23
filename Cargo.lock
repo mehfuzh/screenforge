@@ -4402,6 +4402,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "sf-agent"
+version = "0.1.31"
+dependencies = [
+ "serde",
+ "serde_json",
+ "sf-engine",
+ "sf-project",
+ "ureq",
+]
+
+[[package]]
 name = "sf-cli"
 version = "0.1.31"
 dependencies = [
@@ -4830,6 +4841,7 @@ dependencies = [
  "rfd",
  "serde",
  "serde_json",
+ "sf-agent",
  "sf-engine",
  "sf-export",
  "sf-license",

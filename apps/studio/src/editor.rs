@@ -86,6 +86,8 @@ pub struct Editor {
     pub crop: Option<crate::crop::CropEditor>,
     /// "Save preset as…", "Rename preset" or "Delete preset" dialog.
     preset_dialog: Option<PresetDialog>,
+    /// Agent page of the sidebar: chat that edits the project.
+    pub agent: crate::agent_panel::AgentPanel,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -156,6 +158,8 @@ impl Editor {
                 Ok("shortcuts") => Section::Shortcuts,
                 Ok("camera-layout") => Section::CameraLayout,
                 Ok("camera-style") => Section::CameraStyle,
+                Ok("agent") => Section::Agent,
+                Ok("device") => Section::DeviceFrame,
                 _ => Section::General,
             },
             sidebar_open: true,
@@ -170,6 +174,7 @@ impl Editor {
             // SF_START_CROP opens the crop tool straight away (for screenshots)
             crop: std::env::var_os("SF_START_CROP").map(|_| crop::CropEditor::new(session_crop)),
             preset_dialog: None,
+            agent: Default::default(),
         }
     }
 
@@ -212,6 +217,13 @@ impl Editor {
         }
         self.session.pkg.project = snapshot;
         self.edit(move |p| *p = current);
+    }
+
+    /// Replace the project with the agent's edit while its turn runs: no undo entry (the
+    /// turn becomes one with `commit_live_edit` when it ends).
+    pub fn apply_agent_project(&mut self, project: sf_project::Project) {
+        self.session.pkg.project = project;
+        self.after_edit();
     }
 
     /// Select a mask (and nothing else).
@@ -697,7 +709,9 @@ impl Editor {
 
     fn shortcuts(&mut self, ctx: &egui::Context) {
         // the export dialog is modal: its own keys (Esc) are handled in ExportDialog::poll
-        if ctx.memory(|m| m.focused().is_some()) || self.export.open || self.export.is_busy() {
+        // only typing in a text field (agent message, title, search) holds the keys back: a
+        // clicked button or slider also takes focus, and must not swallow Space and the rest
+        if ctx.egui_wants_keyboard_input() || self.export.open || self.export.is_busy() {
             return;
         }
         // while a voice-over records, Space and Esc stop it and nothing else edits the project
@@ -716,7 +730,9 @@ impl Editor {
         let mut section: Option<Section> = None;
         let mut layer_delta = 0i32;
         let mut record = false;
+        let mut agent = false;
         ctx.input_mut(|i| {
+            agent = i.consume_key(egui::Modifiers::COMMAND, egui::Key::L);
             if i.consume_key(egui::Modifiers::ALT, egui::Key::ArrowDown) { layer_delta = 1; }
             if i.consume_key(egui::Modifiers::ALT, egui::Key::ArrowUp) { layer_delta = -1; }
             toggle = i.consume_key(egui::Modifiers::NONE, egui::Key::Space);
@@ -763,6 +779,11 @@ impl Editor {
         if let Some(s) = section {
             self.section = s;
             self.sidebar_open = true;
+        }
+        if agent {
+            self.section = Section::Agent;
+            self.sidebar_open = true;
+            self.agent.focus_input = true;
         }
         if !self.playing {
             self.audio.seek(self.playhead_ms);
@@ -859,6 +880,9 @@ impl Editor {
         let mut go_home = false;
         self.tick(ctx);
         self.shortcuts(ctx);
+        let mut agent = std::mem::take(&mut self.agent);
+        agent.poll(self);
+        self.agent = agent;
         if self.transcribe.poll() {
             self.captions_changed();
         }
@@ -941,7 +965,7 @@ impl Editor {
                         }
                     }
                     ui.add_space(6.0);
-                    widgets::icon_button(ui, widgets::Icon::Command, 16.0, "Shortcuts: Space play · S split · R record voice-over · ⌥↑↓ audio layer · ⌫ delete · ⌘Z undo · ⌘S save · ⌘⇧E export · [ ] jump cuts · ⌘1…⌘0 sidebar · ⌘\\ toggle sidebar");
+                    widgets::icon_button(ui, widgets::Icon::Command, 16.0, "Shortcuts: Space play · S split · R record voice-over · ⌥↑↓ audio layer · ⌫ delete · ⌘Z undo · ⌘S save · ⌘⇧E export · [ ] jump cuts · ⌘1…⌘0 sidebar · ⌘L agent · ⌘\\ toggle sidebar");
                     if let Some((s, t)) = &self.status {
                         if t.elapsed().as_secs() < 4 {
                             ui.label(RichText::new(s).color(theme::p().text_dim));
@@ -959,10 +983,6 @@ impl Editor {
                     ui.add_space(8.0);
                     ui.spacing_mut().item_spacing.y = 6.0;
                     for s in Section::ALL {
-                        if s.is_roadmap() {
-                            widgets::roadmap(ui, |ui| widgets::rail_icon(ui, s.icon(), false, s.title()));
-                            continue;
-                        }
                         if widgets::rail_icon(ui, s.icon(), self.section == s, s.title()).clicked() {
                             self.section = s;
                         }

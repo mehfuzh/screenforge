@@ -26,7 +26,7 @@ manual steps, for reference:
 2. Stripe: create a product with a one-time US$49 price (`setup.sh` does this; `update-price.sh <cents>` changes the price later, Stripe and Supabase in one go); set `STRIPE_SECRET_KEY`,
    `STRIPE_WEBHOOK_SECRET`, `STRIPE_PRICE_LIFETIME`.
 3. Resend: `RESEND_API_KEY`, `LICENSE_FROM_EMAIL`.
-4. `supabase db push && supabase functions deploy create-checkout stripe-webhook license-refresh license-activate free-export unsplash`
+4. `supabase db push && supabase functions deploy create-checkout stripe-webhook license-refresh license-activate free-export unsplash agent`
 5. Point `PURCHASE_URL` in `crates/sf-license` at your checkout page (or the `create-checkout` URL).
 
 ## Activation from the app
@@ -86,3 +86,32 @@ a stale reply is served when Unsplash rate-limits or fails, and rows older than 
 pruned. Download tracking is never cached. Until the function is deployed the
 tab says the service is not available yet. A demo app on Unsplash allows 50 requests an hour;
 apply for production access before release.
+
+## Agent (Claude)
+
+The editor's Agent panel edits projects with Claude. The app runs the agent loop and its tools
+(`crates/sf-agent`) and sends each Messages API request to the `agent` function as
+`{ device, request }`; the function adds the Anthropic key, which only exists as a Supabase
+secret, and returns Claude's message unchanged.
+
+```
+supabase secrets set ANTHROPIC_API_KEY=<key from the Claude Platform>
+supabase db push            # agent_usage table (migration 20261022020000_agent_usage.sql)
+supabase functions deploy agent
+```
+
+- Only what the agent needs is forwarded: the models the app uses (`MODELS`: Claude Sonnet
+  5.5 and Claude Haiku 5.5 from its menu, and Claude Opus 5.5, which its Auto choice uses for
+  complex requests; kept in step with `crates/sf-agent/src/client.rs`), its own tools (no
+  server tools such as web search), `max_tokens` up to 16,000. Sonnet and Opus requests get
+  `fallbacks: "default"`; a reply from a fallback model is priced at that model's rates.
+- Each reply's tokens are priced at list price and added to `agent_usage` for the device and
+  UTC day. The anon key is public, so spending is capped until agent credits are sold:
+  `AGENT_DEVICE_DAILY_USD` per device (default 0.50, then HTTP 402 with a message the app shows)
+  and `AGENT_TOTAL_DAILY_USD` for everyone together (default 20); `0` turns a cap off (the
+  per-device cap is off in production since 23 October 2026). Device ids are not secret,
+  so the per-device cap alone does not stop abuse; the total cap is the backstop.
+- Local builds skip the backend: with `ANTHROPIC_API_KEY` in the environment or in a `.env`
+  file (the repository's, which is git-ignored), the app calls the Claude API directly and the
+  panel says "local key".
+

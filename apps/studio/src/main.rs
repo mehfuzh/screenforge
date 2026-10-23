@@ -1,5 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod agent_panel;
 mod app;
 mod area_select;
 mod window_select;

@@ -45,7 +45,7 @@ fn fixture_with(auto_zooms: bool, speech: Option<&str>) -> Fixture {
     write_media(&rec, speech);
     write_input_logs(&rec);
     write_metadata(&rec);
-    let opts = CreateOptions { name: "E2E".into(), projects_folder: root.join("projects"), default_config: None, create_automatic_zooms: auto_zooms, markers_ms: vec![500.0] };
+    let opts = CreateOptions { name: "E2E".into(), projects_folder: root.join("projects"), default_config: None, create_automatic_zooms: auto_zooms, markers_ms: vec![500.0], device_mockup: false };
     let pkg = create_project_from_recording(&rec, opts).expect("create project");
     Fixture { project: pkg.path.clone(), root, _dir: dir }
 }

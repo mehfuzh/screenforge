@@ -33,6 +33,9 @@ pub struct Photo {
     #[serde(default)]
     pub photo_url: Option<String>,
     pub download_location: String,
+    /// What the photo shows (Unsplash's alt text), when the server sends it.
+    #[serde(default)]
+    pub description: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -194,8 +197,14 @@ impl Browser {
     }
 }
 
+/// One page of results for `query`, blocking (the agent runs on its own thread).
+pub fn search_blocking(query: &str) -> Result<Vec<Photo>, String> {
+    let v = sf_license::call_backend("unsplash", serde_json::json!({ "query": query.trim(), "page": 1 }))?;
+    serde_json::from_value::<SearchReply>(v).map(|r| r.results).map_err(|e| format!("unexpected reply: {e}"))
+}
+
 /// Register the download with Unsplash, then fetch the image into `assets_dir`.
-fn download_photo(photo: Photo, assets_dir: &Path, progress: &AtomicU32, ctx: &egui::Context) -> Result<Applied, String> {
+pub fn download_photo(photo: Photo, assets_dir: &Path, progress: &AtomicU32, ctx: &egui::Context) -> Result<Applied, String> {
     let v = sf_license::call_backend("unsplash", serde_json::json!({ "download": photo.download_location }))?;
     // the download endpoint hands back the original; ask the CDN for a 4K-wide JPEG instead
     let url = v.get("url").and_then(|u| u.as_str()).map(|u| format!("{u}{}w=3840&fm=jpg&q=85", if u.contains('?') { "&" } else { "?" })).unwrap_or_else(|| photo.full.clone());

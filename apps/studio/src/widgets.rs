@@ -284,6 +284,12 @@ pub enum Icon {
     Record,
     /// Filled square (stop recording).
     Stop,
+    /// Infinity sign (the editing agent, as Cursor marks its Agent mode).
+    Agent,
+    /// Arrow pointing up (send a message).
+    ArrowUp,
+    /// Check mark (the chosen item in a menu).
+    Check,
 }
 
 /// Live level as an equalizer: the most recent `levels` (0..1, oldest first) as bars that
@@ -407,6 +413,26 @@ pub fn paint_icon(p: &egui::Painter, rect: Rect, icon: Icon, color: Color32) {
         }
         Icon::Stop => {
             p.rect_filled(rr(-0.6, -0.6, 0.6, 0.6), 1.0, color);
+        }
+        Icon::Check => {
+            line((-0.75, 0.05), (-0.25, 0.55));
+            line((-0.25, 0.55), (0.75, -0.55));
+        }
+        Icon::ArrowUp => {
+            line((0.0, 0.75), (0.0, -0.75));
+            line((-0.55, -0.2), (0.0, -0.75));
+            line((0.0, -0.75), (0.55, -0.2));
+        }
+        Icon::Agent => {
+            // lemniscate of Bernoulli: x = cos t / (1 + sin² t), y = sin t cos t / (1 + sin² t)
+            let pts: Vec<egui::Pos2> = (0..48)
+                .map(|i| {
+                    let t = i as f32 / 48.0 * std::f32::consts::TAU;
+                    let d = 1.0 + t.sin() * t.sin();
+                    pos2(c.x + 0.95 * r * t.cos() / d, c.y + 1.15 * r * t.sin() * t.cos() / d)
+                })
+                .collect();
+            p.add(egui::Shape::closed_line(pts, Stroke::new(1.8, color)));
         }
         Icon::Pause => {
             p.rect_filled(rr(-0.6, -0.7, -0.2, 0.7), 1.0, color);

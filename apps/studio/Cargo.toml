@@ -19,6 +19,7 @@ sf-render.workspace = true
 sf-session.workspace = true
 sf-export.workspace = true
 sf-license.workspace = true
+sf-agent.workspace = true
 sf-recording.workspace = true
 sf-transcribe.workspace = true
 eframe.workspace = true
