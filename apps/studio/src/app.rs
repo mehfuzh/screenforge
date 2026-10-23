@@ -137,7 +137,7 @@ impl App {
         let mut picker = Picker::default();
         picker.load_inputs();
         let perm_setup = (crate::permissions::PermissionsSetup::needed() || std::env::var_os("SF_SHOW_PERMISSIONS").is_some()).then(crate::permissions::PermissionsSetup::start);
-        let app = App { gpu, screen: Screen::Picker(picker), error: None, prefs, window_mode: WindowMode::Picker, picker_height: crate::picker::BAR_WINDOW_H, placed_once: false, tray: None, tray_tried: false, area_select: None, window_select: None, titlebar_fix: 0, perm_setup, confirm_close: None, quitting: false, fresh_open: None, last_size: None, last_pointer: None, #[cfg(target_os = "linux")] input_region: crate::os::InputRegion::new(cc), #[cfg(target_os = "windows")] window_shape: crate::os::WindowShape::new(cc), pending_open: std::env::args().nth(1).map(PathBuf::from).filter(|p| p.is_dir() || p.extension().is_some_and(|e| e == sf_project::PACKAGE_EXTENSION || e == sf_project::SCREEN_STUDIO_EXTENSION)) };
+        let app = App { gpu, screen: Screen::Picker(picker), error: None, prefs, window_mode: WindowMode::Picker, picker_height: crate::picker::BAR_WINDOW_H, placed_once: false, tray: None, tray_tried: false, area_select: None, window_select: None, titlebar_fix: 0, perm_setup, confirm_close: None, quitting: false, fresh_open: None, last_size: None, last_pointer: None, #[cfg(target_os = "linux")] input_region: crate::os::InputRegion::new(cc), #[cfg(target_os = "windows")] window_shape: crate::os::WindowShape::new(cc), pending_open: std::env::args().nth(1).map(PathBuf::from).filter(|p| p.is_dir() || sf_recording::import::is_video(p) || p.extension().is_some_and(|e| e == sf_project::PACKAGE_EXTENSION || e == sf_project::SCREEN_STUDIO_EXTENSION)) };
         crate::open_docs::set_context(&cc.egui_ctx);
         // a project on the command line opens on the first frame (`pending_open`)
         app
@@ -324,8 +324,8 @@ impl App {
         std::thread::Builder::new()
             .name("open-project".into())
             .spawn(move || {
-                // a `.screenstudio` package is imported to a `.screenforge` one before it opens
-                let loaded = sf_session::create::package_to_open(&load_path, &import).and_then(|p| Editor::load_session(&p, gpu));
+                // a `.screenstudio` package or a video file becomes a `.screenforge` package first
+                let loaded = open_or_import(&load_path, &import).and_then(|p| Editor::load_session(&p, gpu));
                 let _ = tx.send(loaded);
                 repaint.request_repaint();
             })
@@ -414,6 +414,26 @@ fn project_dialog() -> rfd::FileDialog {
 
 /// Placeholder while a project loads: its name and a spinner, centred on the editor background.
 /// While a Screen Studio project is copied in, an import dialog with progress and Cancel instead.
+/// The package to open for `path`: a project as it is, a Screen Studio project copied in, or a
+/// video file (`.mov`, `.mp4`, `.m4v`) made into a new project (progress in ms of video).
+fn open_or_import(path: &std::path::Path, progress: &sf_project::ImportProgress) -> anyhow::Result<PathBuf> {
+    use std::sync::atomic::Ordering;
+    if !sf_recording::import::is_video(path) {
+        return sf_session::create::package_to_open(path, progress);
+    }
+    let probe = sf_recording::import::probe(path)?;
+    progress.total.store(probe.duration_ms.max(1.0) as u64, Ordering::Relaxed);
+    let name = path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| "Video".into());
+    let dir = crate::recorder::recordings_folder().join(format!("Import {} {}", name, chrono::Local::now().format("%Y-%m-%d %H.%M.%S")));
+    sf_recording::import::import_video(path, &dir, |ms| progress.done.store(ms as u64, Ordering::Relaxed), &progress.cancel)?;
+    // a tall, phone-shaped video starts in a phone frame, like a Device recording
+    let tall = probe.height as f64 >= probe.width as f64 * 1.6;
+    let opts = sf_session::create::CreateOptions { name, projects_folder: sf_session::create::default_projects_folder(), default_config: None, create_automatic_zooms: false, markers_ms: vec![], device_mockup: tall };
+    let pkg = sf_session::create::create_project_from_recording(&dir, opts)?;
+    sf_session::preview::write_quicklook_preview_async(&pkg.path);
+    Ok(pkg.path)
+}
+
 fn opening_ui(ui: &mut egui::Ui, path: &std::path::Path, progress: &sf_project::ImportProgress) {
     use std::sync::atomic::Ordering;
     let pal = crate::theme::p();
@@ -442,6 +462,9 @@ fn import_dialog(ui: &mut egui::Ui, path: &std::path::Path, progress: &sf_projec
     let started_id = egui::Id::new(("import_started", path));
     let started = ctx.data_mut(|d| *d.get_temp_mut_or_insert_with(started_id, std::time::Instant::now));
     let gb = |b: u64| b as f64 / 1e9;
+    // a video reports ms of video converted, a project bytes copied
+    let video = sf_recording::import::is_video(path);
+    let clock = |ms: u64| short_duration(ms as f64 / 1000.0);
 
     let frame = egui::Frame::NONE.fill(pal.bg).stroke(egui::Stroke::new(1.0, pal.border)).corner_radius(crate::theme::RADIUS).inner_margin(egui::Margin::symmetric(22, 20)).shadow(ctx.global_style().visuals.window_shadow);
     egui::Modal::new(egui::Id::new("import_progress")).frame(frame).show(&ctx, |ui| {
@@ -455,7 +478,7 @@ fn import_dialog(ui: &mut egui::Ui, path: &std::path::Path, progress: &sf_projec
             widgets::paint_icon(ui.painter(), egui::Rect::from_center_size(tile.center(), vec2(18.0, 18.0)), Icon::Folder, pal.accent);
             ui.vertical(|ui| {
                 ui.add_space(2.0);
-                ui.label(RichText::new("Importing project").size(15.0).strong().color(pal.text));
+                ui.label(RichText::new(if video { "Importing video" } else { "Importing project" }).size(15.0).strong().color(pal.text));
                 ui.add_space(3.0);
                 let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
                 ui.add(egui::Label::new(RichText::new(name).size(12.5).color(pal.text_dim)).truncate());
@@ -474,7 +497,8 @@ fn import_dialog(ui: &mut egui::Ui, path: &std::path::Path, progress: &sf_projec
         ui.add_space(10.0);
 
         ui.horizontal(|ui| {
-            ui.label(RichText::new(format!("{:.2} of {:.2} GB", gb(done), gb(total))).size(12.5).color(pal.text_dim));
+            let amount = if video { format!("{} of {}", clock(done), clock(total)) } else { format!("{:.2} of {:.2} GB", gb(done), gb(total)) };
+            ui.label(RichText::new(amount).size(12.5).color(pal.text_dim));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 let el = started.elapsed().as_secs_f64();
                 let eta = if cancelling { "Cancelling…".to_string() } else if frac > 0.02 && el > 1.0 { format!("About {}", short_duration(el / frac - el)) } else { "Estimating…".to_string() };
@@ -489,7 +513,7 @@ fn import_dialog(ui: &mut egui::Ui, path: &std::path::Path, progress: &sf_projec
         ui.horizontal(|ui| {
             ui.vertical(|ui| {
                 ui.set_max_width(ui.available_width() - 100.0);
-                widgets::hint(ui, "Your original project stays as it is. The copy is saved to ScreenForge Projects.");
+                widgets::hint(ui, if video { "Your video stays as it is. The new project is saved to ScreenForge Projects." } else { "Your original project stays as it is. The copy is saved to ScreenForge Projects." });
             });
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 let cancel = ui.add_enabled_ui(!cancelling, |ui| widgets::secondary_button(ui, "Cancel").on_hover_text("Esc")).inner;
@@ -504,6 +528,21 @@ fn import_dialog(ui: &mut egui::Ui, path: &std::path::Path, progress: &sf_projec
 }
 
 /// "12s left", "3 min left".
+/// While files are dragged over the window: what dropping them does.
+fn drop_hint(ctx: &egui::Context) {
+    let hovered: Vec<PathBuf> = ctx.input(|i| i.raw.hovered_files.iter().filter_map(|f| f.path.clone()).collect());
+    if hovered.is_empty() {
+        return;
+    }
+    let pal = crate::theme::p();
+    let text = if hovered.iter().any(|p| sf_recording::import::is_video(p)) { "Drop the video to make a project" } else { "Drop to open the project" };
+    let rect = ctx.content_rect();
+    let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::new("drop_hint")));
+    painter.rect_filled(rect, 0.0, pal.bg.gamma_multiply(0.82));
+    painter.rect_stroke(rect.shrink(10.0), egui::CornerRadius::same(crate::theme::RADIUS), egui::Stroke::new(2.0, pal.accent), egui::StrokeKind::Inside);
+    painter.text(rect.center(), egui::Align2::CENTER_CENTER, text, egui::FontId::proportional(16.0), pal.text);
+}
+
 fn short_duration(secs: f64) -> String {
     if secs < 60.0 {
         format!("{:.0}s left", secs.max(1.0))
@@ -586,6 +625,7 @@ impl eframe::App for App {
                 open_request = Some(f.path().to_path_buf());
             }
         });
+        drop_hint(ctx);
 
         if !self.placed_once && matches!(self.screen, Screen::Picker(_)) {
             self.placed_once = true;

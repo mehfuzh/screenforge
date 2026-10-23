@@ -46,6 +46,7 @@ pub mod device;
 pub mod discover;
 pub mod display;
 pub mod ffmpeg;
+pub mod import;
 pub mod input;
 pub mod log;
 pub mod metadata;
