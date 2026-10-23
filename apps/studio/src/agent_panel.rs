@@ -503,7 +503,6 @@ impl AgentPanel {
                     job.applied = ed.session.pkg.project.clone();
                 }
                 Ok(Msg::Event(Event::Seek(t))) => ed.seek(t),
-                Ok(Msg::Event(Event::Model(m))) => self.log.push(Entry::Step { text: format!("Auto: {}", sf_agent::client::label(m).trim_start_matches("Claude ")), failed: false }),
                 Ok(Msg::Event(Event::Action(Action::OpenExport))) => ed.export.open = true,
                 Ok(Msg::Event(Event::Action(Action::Transcribe { language }))) => {
                     if !ed.transcribe.is_running() {
@@ -747,12 +746,23 @@ impl AgentPanel {
         let frame = egui::Frame::menu(ui.style()).corner_radius(CornerRadius::same(6)).inner_margin(egui::Margin::same(4));
         egui::Popup::menu(&resp).frame(frame).show(|ui| {
             ui.spacing_mut().item_spacing.y = 2.0;
-            let rows = [(sf_agent::client::AUTO, "Auto", "Sonnet, or Opus for big edits")].into_iter().chain(MODELS.iter().map(|m| {
-                let hint = if m.id.contains("haiku") { "Quickest and cheapest" } else { "Fast, for everyday edits" };
-                (m.id, m.label.trim_start_matches("Claude "), hint)
+            // how fast each model uses credits, next to Sonnet (from the list prices)
+            let rate = |id: &str| {
+                let r = sf_agent::client::credit_rate(id);
+                if r > 1.01 {
+                    format!("uses credits {}× as fast", (r * 10.0).round() / 10.0)
+                } else if r < 0.99 {
+                    format!("about {}× fewer credits", (1.0 / r).round())
+                } else {
+                    "standard credits".to_string()
+                }
+            };
+            let rows = [(sf_agent::client::AUTO, "Auto", "Sonnet 5.5, the best value".to_string())].into_iter().chain(MODELS.iter().map(|m| {
+                let what = if m.id.contains("haiku") { "Quickest" } else if m.id.contains("opus") { "Most capable" } else { "Fast, for everyday edits" };
+                (m.id, m.label.trim_start_matches("Claude "), format!("{what} · {}", rate(m.id)))
             }));
             for (id, name, hint) in rows {
-                if model_row(ui, name, hint, id == current).clicked() {
+                if model_row(ui, name, &hint, id == current).clicked() {
                     chosen = Some(id);
                     ui.close();
                 }

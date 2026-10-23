@@ -29,22 +29,22 @@ pub struct Model {
 
 const SONNET: Model = Model { id: "claude-sonnet-5-5", label: "Claude Sonnet 5.5", input: 2.0, output: 10.0, cache_read: 0.20, fallbacks: true };
 const HAIKU: Model = Model { id: "claude-haiku-5-5", label: "Claude Haiku 5.5", input: 0.10, output: 0.50, cache_read: 0.01, fallbacks: false };
-/// Only through Auto, for complex requests.
+/// The most capable; credits go twice as fast as with Sonnet.
 const OPUS: Model = Model { id: "claude-opus-5-5", label: "Claude Opus 5.5", input: 4.0, output: 20.0, cache_read: 0.20, fallbacks: true };
 /// Never asked for, but a declined request can be answered by it through the server-side
 /// fallback: priced so its usage is not counted as free.
 const FABLE: Model = Model { id: "claude-fable-5-1", label: "Claude Fable 5.1", input: 10.0, output: 50.0, cache_read: 0.25, fallbacks: true };
 
-/// The models the panel lists after Auto. The backend's `MODELS` (functions/agent/index.ts)
-/// also allows Opus, which Auto uses.
-pub const MODELS: &[Model] = &[SONNET, HAIKU];
+/// The models the panel lists after Auto (keep in step with `MODELS` in
+/// backend/supabase/functions/agent/index.ts).
+pub const MODELS: &[Model] = &[SONNET, OPUS, HAIKU];
 const PRICED: &[Model] = &[SONNET, HAIKU, OPUS, FABLE];
 
-/// The panel's first choice: Sonnet, or Opus for a complex request ([`is_complex`]).
+/// The panel's first choice: always Sonnet, the best value for editing.
 pub const AUTO: &str = "auto";
 pub const DEFAULT_MODEL: &str = AUTO;
 
-/// A model the agent may call (offered, or picked by Auto).
+/// A model the agent may call.
 pub fn model(id: &str) -> Option<&'static Model> {
     PRICED.iter().filter(|m| m.id != FABLE.id).find(|m| m.id == id)
 }
@@ -54,18 +54,9 @@ pub fn label(id: &str) -> &str {
     PRICED.iter().find(|m| m.id == id).map_or(id, |m| m.label)
 }
 
-/// Whether Auto should give `request` to Opus: edits across the whole video (auto edit, every
-/// pause, all the zooms), several changes in one request, or a long one. A cheap rule, so
-/// choosing costs nothing and adds no wait.
-pub fn is_complex(request: &str) -> bool {
-    let r = request.to_lowercase();
-    const WHOLE: [&str; 13] = ["auto edit", "auto-edit", "whole video", "entire video", "everything", "every ", "all the ", "all of ", "throughout", "tighten", "pauses", "filler", "silences"];
-    if WHOLE.iter().any(|w| r.contains(w)) {
-        return true;
-    }
-    // several requests in one: "cut the intro, speed up the middle and add music"
-    let parts = r.split([',', ';', '\n']).flat_map(|p| p.split(" and ")).filter(|p| p.split_whitespace().count() >= 2).count();
-    parts >= 3 || r.split_whitespace().count() > 45
+/// How fast `id` uses credits next to Sonnet, by output price: Opus 2.0, Haiku 0.05.
+pub fn credit_rate(id: &str) -> f64 {
+    model(id).map_or(1.0, |m| m.output / SONNET.output)
 }
 
 /// How requests reach Claude.
@@ -142,13 +133,9 @@ impl Settings {
         }
     }
 
-    /// The model for `request`: the chosen one, or Auto's pick.
-    pub fn pick(&self, request: &str) -> &'static str {
-        match MODELS.iter().find(|x| x.id == self.choice()) {
-            Some(m) => m.id,
-            None if is_complex(request) => OPUS.id,
-            None => SONNET.id,
-        }
+    /// The model to call: the chosen one, or Sonnet for Auto.
+    pub fn pick(&self) -> &'static str {
+        MODELS.iter().find(|x| x.id == self.choice()).map_or(SONNET.id, |m| m.id)
     }
 }
 
@@ -258,7 +245,7 @@ mod tests {
         let fallback = Usage::from_response(&json!({ "model": "claude-opus-5-5", "usage": { "output_tokens": 1_000_000 } }));
         assert!((fallback.cost_usd - 20.0).abs() < 1e-9);
         assert!(model("claude-fable-5-1").is_none(), "Fable is never asked for");
-        assert!(MODELS.iter().all(|m| m.id != "claude-opus-5-5"), "Opus is only reached through Auto");
+        assert!(MODELS.iter().all(|m| m.id != "claude-fable-5-1"));
         let unknown = Usage::from_response(&json!({ "model": "x", "usage": { "input_tokens": 5 } }));
         assert_eq!((unknown.input_tokens, unknown.cost_usd), (5, 0.0));
     }
@@ -279,16 +266,15 @@ mod tests {
     }
 
     #[test]
-    fn auto_uses_sonnet_and_opus_for_complex_requests() {
-        let auto = Settings::default();
-        assert_eq!(auto.pick("cut the first 5 seconds"), "claude-sonnet-5-5");
-        assert_eq!(auto.pick("zoom less here"), "claude-sonnet-5-5");
-        assert_eq!(auto.pick("Auto edit: tighten the whole video"), "claude-opus-5-5");
-        assert_eq!(auto.pick("Remove the long pauses and filler words"), "claude-opus-5-5");
-        assert_eq!(auto.pick("cut the intro, speed up the middle part and add calm music"), "claude-opus-5-5");
-        // a model chosen by hand is used as it is
-        let haiku = Settings { model: "claude-haiku-5-5".into() };
-        assert_eq!(haiku.pick("Auto edit the whole video"), "claude-haiku-5-5");
+    fn auto_is_sonnet_and_bigger_models_burn_credits_faster() {
+        assert_eq!(Settings::default().pick(), "claude-sonnet-5-5");
+        assert_eq!(Settings { model: "claude-opus-5-5".into() }.pick(), "claude-opus-5-5");
+        assert_eq!(Settings { model: "claude-haiku-5-5".into() }.pick(), "claude-haiku-5-5");
+        assert_eq!((credit_rate("claude-sonnet-5-5"), credit_rate("claude-opus-5-5")), (1.0, 2.0));
+        assert!(credit_rate("claude-haiku-5-5") < 0.1);
+        // the same tokens cost twice the credits on Opus
+        let usage = |m: &str| Usage::from_response(&json!({ "model": m, "usage": { "input_tokens": 10_000, "output_tokens": 2_000 } })).cost_usd;
+        assert!((usage("claude-opus-5-5") - 2.0 * usage("claude-sonnet-5-5")).abs() < 1e-12);
         assert_eq!(label("claude-opus-5-5"), "Claude Opus 5.5");
     }
 

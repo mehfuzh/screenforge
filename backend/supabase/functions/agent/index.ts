@@ -29,7 +29,7 @@ const outOfCredits = (p: Payer) =>
 // The models the app offers, with US$ per million tokens [input, output, cache read]; keep in
 // step with MODELS in crates/sf-agent/src/client.rs. Models that accept server-side fallbacks
 // are marked.
-// (Opus is not in the app's list: its Auto choice sends complex requests to it.)
+// Credits are charged at each model's price, so Opus uses them twice as fast as Sonnet.
 const MODELS: Record<string, { price: [number, number, number]; fallbacks: boolean }> = {
   "claude-sonnet-5-5": { price: [2, 10, 0.2], fallbacks: true },
   "claude-haiku-5-5": { price: [0.1, 0.5, 0.01], fallbacks: false },

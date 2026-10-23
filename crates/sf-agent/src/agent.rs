@@ -70,8 +70,6 @@ pub enum Event {
     Changed(Box<Project>),
     /// Move the playhead here (output ms).
     Seek(f64),
-    /// The model Auto chose for this turn.
-    Model(&'static str),
     /// Something only the editor can do (transcribe, open export).
     Action(crate::host::Action),
     /// One request's tokens and cost.
@@ -87,11 +85,7 @@ pub enum Event {
 /// selection). Returns the conversation to continue from. Stops after the current request
 /// when `cancel` is set.
 pub fn run_turn(route: &Route, settings: &Settings, conversation: Conversation, workspace: &mut Workspace, text: &str, context: &str, cancel: &AtomicBool, emit: impl FnMut(Event)) -> Conversation {
-    let model = settings.pick(text);
-    let mut emit = emit;
-    if settings.choice() == client::AUTO {
-        emit(Event::Model(model));
-    }
+    let model = settings.pick();
     run_turn_with(|body| client::send(route, model, body), conversation, workspace, text, context, cancel, emit)
 }
 

@@ -100,9 +100,10 @@ supabase db push            # agent_usage table (migration 20261022020000_agent_
 supabase functions deploy agent
 ```
 
-- Only what the agent needs is forwarded: the models the app uses (`MODELS`: Claude Sonnet
-  5.5 and Claude Haiku 5.5 from its menu, and Claude Opus 5.5, which its Auto choice uses for
-  complex requests; kept in step with `crates/sf-agent/src/client.rs`), its own tools (no
+- Only what the agent needs is forwarded: the models the app offers (`MODELS`: Claude Sonnet
+  5.5, which Auto always uses, Claude Opus 5.5 and Claude Haiku 5.5; kept in step with
+  `crates/sf-agent/src/client.rs`). Credits are charged at each model's list price, so Opus
+  uses them twice as fast as Sonnet and Haiku about 20 times slower; its own tools (no
   server tools such as web search), `max_tokens` up to 16,000. Sonnet and Opus requests get
   `fallbacks: "default"`; a reply from a fallback model is priced at that model's rates.
 - Each reply's tokens are priced at list price and added to `agent_usage` for the device and
