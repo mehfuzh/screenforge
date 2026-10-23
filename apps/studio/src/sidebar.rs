@@ -959,6 +959,20 @@ pub fn audio_item_ui(ed: &mut Editor, ui: &mut egui::Ui) {
         ed.set_audio_clip_speed(&id, speeds[i]);
     }
     widgets::hint(ui, "Audio speed is independent of the video clip below it; pitch is preserved.");
+    let boost = clip.boost_db.unwrap_or_else(|| if clip.track == sf_project::AudioTrack::Microphone { ed.session.pkg.project.config.audio.microphone_boost_db() } else { 0.0 });
+    if let Some(db) = boost_ui(ui, boost) {
+        let idc = id.clone();
+        ed.edit(move |p| {
+            let scene = &mut p.scenes[0];
+            if let Some(mut cs) = scene.audio_clips() {
+                if let Some(c) = cs.iter_mut().find(|c| c.id == idc) {
+                    c.boost_db = Some(db);
+                }
+                scene.set_audio_clips(Some(cs));
+            }
+        });
+        ed.reload_audio();
+    }
     let mut muted = clip.muted;
     if widgets::toggle_row(ui, "Mute", "", &mut muted) {
         let idc = id.clone();
@@ -996,19 +1010,15 @@ pub fn audio_item_ui(ed: &mut Editor, ui: &mut egui::Ui) {
     widgets::hint(ui, "Clips on one layer never overlap; clips on different layers can, and play together. Drag a clip down onto the empty lane to start a new layer (⌥↑ / ⌥↓).");
 }
 
-/// Boost for every voice-over (they are quieter than the recording's microphone as a rule):
-/// in the voice-over inspector and the Audio page.
-fn voice_over_boost_ui(ed: &mut Editor, ui: &mut egui::Ui) {
-    widgets::title(ui, "Voice-over boost");
+/// Boost of the selected audio item (a clip or a voice-over take): the one boost control,
+/// `boost` now; returns the new boost in dB when a pill is picked.
+fn boost_ui(ui: &mut egui::Ui, boost: f64) -> Option<f64> {
+    widgets::title(ui, "Boost");
     const BOOSTS_DB: [f64; 4] = [0.0, 6.0, 12.0, 18.0];
-    let boost = ed.session.pkg.project.config.audio.voice_over_boost_db();
     let idx = BOOSTS_DB.iter().position(|b| (b - boost).abs() < 0.5).unwrap_or(usize::MAX);
-    if let Some(i) = widgets::pills(ui, idx, &["Off", "+6 dB", "+12 dB", "+18 dB"]) {
-        let db = BOOSTS_DB[i];
-        ed.edit(move |p| p.config.audio.voice_over_boost_db = (db > 0.0).then_some(db));
-        ed.reload_audio();
-    }
-    widgets::hint(ui, "Raises every voice-over, with a limiter so loud words do not clip. Voice-overs also get the microphone's audio mode (noise reduction, podcast). Applied in preview and export.");
+    let picked = widgets::pills(ui, idx, &["Off", "+6 dB", "+12 dB", "+18 dB"]).map(|i| BOOSTS_DB[i]);
+    widgets::hint(ui, "Raises this clip only, with a limiter so loud words do not clip; other clips keep their own level. Try +6 dB first; the volume slider is for fine tuning. Applied in preview and export.");
+    picked
 }
 
 fn voice_over_item_ui(ed: &mut Editor, ui: &mut egui::Ui) {
@@ -1032,7 +1042,10 @@ fn voice_over_item_ui(ed: &mut Editor, ui: &mut egui::Ui) {
     if widgets::toggle_row(ui, "Mute", "", &mut muted) {
         ed.edit_voice_over(&id, move |v| v.is_disabled = muted);
     }
-    voice_over_boost_ui(ed, ui);
+    if let Some(db) = boost_ui(ui, span.boost_db) {
+        ed.edit_voice_over(&id, move |v| v.boost_db = db);
+        ed.reload_audio();
+    }
     ui.horizontal_wrapped(|ui| {
         if ui.add_enabled(span.contains_output(ed.playhead_ms), egui::Button::new("Split at playhead")).on_hover_text("S").clicked() {
             let t = ed.playhead_ms;
@@ -1083,17 +1096,7 @@ fn audio_ui(ed: &mut Editor, ui: &mut egui::Ui) {
         ed.reload_audio();
     }
     widgets::hint(ui, "Noise reduction removes steady background hiss and hum. Podcast also evens out and boosts your voice. Applied in preview and export.");
-    widgets::title(ui, "Microphone boost");
-    const BOOSTS_DB: [f64; 4] = [0.0, 6.0, 12.0, 18.0];
-    let boost = ed.session.pkg.project.config.audio.microphone_boost_db();
-    let idx = BOOSTS_DB.iter().position(|b| (b - boost).abs() < 0.5).unwrap_or(usize::MAX);
-    if let Some(i) = widgets::pills(ui, idx, &["Off", "+6 dB", "+12 dB", "+18 dB"]) {
-        let db = BOOSTS_DB[i];
-        ed.edit(move |p| p.config.audio.microphone_boost_db = (db > 0.0).then_some(db));
-        ed.reload_audio();
-    }
-    widgets::hint(ui, "Raises a quiet microphone after the audio mode, with a limiter so loud moments do not clip. Try +6 dB first; the volume slider above is for fine tuning.");
-    voice_over_boost_ui(ed, ui);
+    widgets::hint(ui, "Too quiet? Select a clip or voice-over on the timeline and use Boost: it raises that clip only.");
     widgets::title(ui, "System audio");
     if ed.session.source.system_audio.is_empty() {
         widgets::hint(ui, "No system audio recorded");

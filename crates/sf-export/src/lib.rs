@@ -47,7 +47,7 @@ pub fn audio_inputs(session: &Session) -> Vec<AudioMixInput> {
     if !session.source.system_audio.is_empty() {
         tracks.push(AudioTrack::SystemAudio);
     }
-    let spans = sf_engine::audio::audio_spans(scene, &tracks, cfg.audio.volume, cfg.audio.mute_microphone, cfg.audio.mute_system_audio);
+    let spans = sf_engine::audio::audio_spans(scene, &tracks, &cfg.audio);
     let mut inputs = vec![];
     for span in spans {
         if span.muted || span.volume <= 0.0 || span.output_duration_ms() <= 1.0 {
@@ -67,8 +67,8 @@ pub fn audio_inputs(session: &Session) -> Vec<AudioMixInput> {
                 tempo: span.speed,
                 loop_input: false,
                 filter: match span.track {
-                    AudioTrack::Microphone => sf_media::microphone_filter(&cfg.audio.microphone_audio_preset, cfg.audio.microphone_boost_db()),
-                    AudioTrack::SystemAudio => None,
+                    AudioTrack::Microphone => sf_media::microphone_filter(&cfg.audio.microphone_audio_preset, span.boost_db),
+                    AudioTrack::SystemAudio => sf_media::microphone_filter("voice", span.boost_db),
                 },
             });
         }
@@ -79,8 +79,8 @@ pub fn audio_inputs(session: &Session) -> Vec<AudioMixInput> {
             continue;
         }
         let dur = vo.output_duration_ms();
-        // a voice-over is a microphone take: the microphone's audio mode, then its own boost
-        let filter = sf_media::microphone_filter(&cfg.audio.microphone_audio_preset, cfg.audio.voice_over_boost_db());
+        // a voice-over is a microphone take: the microphone's audio mode, then the take's boost
+        let filter = sf_media::microphone_filter(&cfg.audio.microphone_audio_preset, vo.boost_db);
         inputs.push(AudioMixInput { path, volume: vo.volume, delay_ms: vo.output_start_ms, start_ms: Some(vo.file_offset_ms), end_ms: Some(vo.file_offset_ms + dur), tempo: 1.0, loop_input: false, filter });
     }
     // one looping input per music clip (each can have its own track and level), started at

@@ -200,10 +200,6 @@ pub struct AudioConfig {
     /// mode and followed by a limiter. `None` = 0 (off).
     #[serde(default, rename = "sfMicrophoneBoostDb", skip_serializing_if = "Option::is_none")]
     pub microphone_boost_db: Option<f64>,
-    /// ScreenForge extension: extra gain for voice-overs in dB (0..24), applied after the
-    /// microphone's audio mode and followed by a limiter. `None` = 0 (off).
-    #[serde(default, rename = "sfVoiceOverBoostDb", skip_serializing_if = "Option::is_none")]
-    pub voice_over_boost_db: Option<f64>,
     #[serde(flatten)]
     pub extra: Extra,
 }
@@ -214,11 +210,6 @@ impl AudioConfig {
     /// Microphone boost in dB, 0 when unset.
     pub fn microphone_boost_db(&self) -> f64 {
         self.microphone_boost_db.filter(|b| b.is_finite()).unwrap_or(0.0).clamp(0.0, Self::MAX_MICROPHONE_BOOST_DB)
-    }
-
-    /// Voice-over boost in dB, 0 when unset.
-    pub fn voice_over_boost_db(&self) -> f64 {
-        self.voice_over_boost_db.filter(|b| b.is_finite()).unwrap_or(0.0).clamp(0.0, Self::MAX_MICROPHONE_BOOST_DB)
     }
 }
 
@@ -236,7 +227,6 @@ impl Default for AudioConfig {
             click_sound_effect: None,
             click_sound_effect_volume: 0.25,
             microphone_boost_db: None,
-            voice_over_boost_db: None,
             extra: Extra::new(),
         }
     }
@@ -894,6 +884,10 @@ pub struct VoiceOver {
     /// ScreenForge extension: lane on the shared audio timeline (0 = top).
     #[serde(default, rename = "sfLayer", skip_serializing_if = "is_zero_u32")]
     pub layer: u32,
+    /// ScreenForge extension: extra gain for this take in dB (0..24), after the microphone's
+    /// audio mode and followed by a limiter; 0 = off.
+    #[serde(default, rename = "sfBoostDb", skip_serializing_if = "is_zero")]
+    pub boost_db: f64,
     #[serde(flatten)]
     pub extra: Extra,
 }
@@ -925,7 +919,17 @@ impl VoiceOver {
             hide_recording: false,
             file_offset_ms: 0.0,
             layer: 0,
+            boost_db: 0.0,
             extra: Extra::new(),
+        }
+    }
+
+    /// The boost in dB, clamped to what the editor offers.
+    pub fn boost(&self) -> f64 {
+        if self.boost_db.is_finite() {
+            self.boost_db.clamp(0.0, AudioConfig::MAX_MICROPHONE_BOOST_DB)
+        } else {
+            0.0
         }
     }
 }
@@ -1097,14 +1101,15 @@ mod tests {
         assert_eq!(b.microphone_boost_db(), super::AudioConfig::MAX_MICROPHONE_BOOST_DB);
         b.microphone_boost_db = Some(f64::NAN);
         assert_eq!(b.microphone_boost_db(), 0.0);
-        // the voice-over boost is its own setting, off unless set, and saved the same way
-        assert_eq!(super::AudioConfig::default().voice_over_boost_db(), 0.0);
-        let mut c = super::AudioConfig::default();
-        c.voice_over_boost_db = Some(12.0);
-        let json = serde_json::to_string(&c).unwrap();
-        assert!(json.contains("\"sfVoiceOverBoostDb\":12"), "{json}");
-        let back: super::AudioConfig = serde_json::from_str(&json).unwrap();
-        assert_eq!((back.voice_over_boost_db(), back.microphone_boost_db()), (12.0, 0.0));
+        // a voice-over take has its own boost, off unless set
+        let mut take = super::VoiceOver::microphone(0.0, 1000.0, "take.m4a");
+        assert!(!serde_json::to_string(&take).unwrap().contains("sfBoostDb"));
+        take.boost_db = 12.0;
+        let back: super::VoiceOver = serde_json::from_str(&serde_json::to_string(&take).unwrap()).unwrap();
+        assert_eq!(back.boost(), 12.0);
+        take.boost_db = 99.0;
+        assert_eq!(take.boost(), super::AudioConfig::MAX_MICROPHONE_BOOST_DB);
+
     }
 
     use super::*;

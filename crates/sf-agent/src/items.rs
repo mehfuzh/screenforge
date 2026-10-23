@@ -98,7 +98,7 @@ pub fn definitions() -> Vec<Value> {
         }),
         json!({
             "name": "update_audio",
-            "description": "Change an audio item from get_project (a detached audio clip, a music part or a voice-over): start_ms moves it on the timeline; volume (0–2, 1 = as recorded); muted; speed (audio clips, 0.25–16); disabled (voice-overs); duration_ms, fade_in_ms, fade_out_ms and track (music parts; track from get_options music).",
+            "description": "Change an audio item from get_project (a detached audio clip, a music part or a voice-over): start_ms moves it on the timeline; volume (0–2, 1 = as recorded); muted; speed (audio clips, 0.25–16); boost_db (audio clips and voice-overs: 0, 6, 12 or 18 dB of gain with a limiter, for a quiet clip; that clip only); disabled (voice-overs); duration_ms, fade_in_ms, fade_out_ms and track (music parts; track from get_options music).",
             "input_schema": {
                 "type": "object",
                 "properties": {
@@ -108,6 +108,7 @@ pub fn definitions() -> Vec<Value> {
                     "muted": { "type": "boolean" },
                     "speed": { "type": "number" },
                     "disabled": { "type": "boolean" },
+                    "boost_db": { "type": "number" },
                     "duration_ms": { "type": "number" },
                     "fade_in_ms": { "type": "number" },
                     "fade_out_ms": { "type": "number" },
@@ -416,6 +417,9 @@ impl Workspace {
             if let Some(sp) = opt_num(input, "speed")? {
                 c.speed = sp.clamp(0.25, 16.0);
             }
+            if let Some(b) = opt_num(input, "boost_db")? {
+                c.boost_db = Some(b.clamp(0.0, 24.0));
+            }
             scene.set_audio_clips(Some(clips));
             return Ok(Outcome::edit(json!({ "ok": true }), "Changed an audio clip"));
         }
@@ -428,6 +432,9 @@ impl Workspace {
             }
             if let Some(d) = input.get("disabled").and_then(Value::as_bool).or(muted) {
                 v.is_disabled = d;
+            }
+            if let Some(b) = opt_num(input, "boost_db")? {
+                v.boost_db = b.clamp(0.0, 24.0);
             }
             return Ok(Outcome::edit(json!({ "ok": true }), "Changed a voice-over"));
         }
@@ -490,9 +497,9 @@ impl Workspace {
         let ms = |v: f64| (v * 10.0).round() / 10.0;
         let scene = &self.project.scenes[0];
         let a = &self.project.config.audio;
-        let clips: Vec<Value> = scene.audio_clips().unwrap_or_default().iter().map(|c| json!({ "id": c.id, "track": c.track, "startMs": ms(c.output_start_ms), "endMs": ms(c.output_end_ms()), "volume": c.volume, "muted": c.muted, "speed": c.speed })).collect();
+        let clips: Vec<Value> = scene.audio_clips().unwrap_or_default().iter().map(|c| json!({ "id": c.id, "track": c.track, "startMs": ms(c.output_start_ms), "endMs": ms(c.output_end_ms()), "volume": c.volume, "muted": c.muted, "speed": c.speed, "boostDb": c.boost_db })).collect();
         let music: Vec<Value> = sf_engine::lanes::music_clips(&self.project, tl).iter().map(|m| json!({ "id": m.id, "startMs": ms(m.output_start_ms), "endMs": ms(m.output_end_ms()), "track": m.file_name, "volume": m.volume, "muted": m.muted, "fadeInMs": m.fade_in_ms, "fadeOutMs": m.fade_out_ms })).collect();
-        let voice: Vec<Value> = sf_engine::audio::voice_over_spans(scene, tl).iter().map(|v| json!({ "id": v.id, "startMs": ms(v.output_start_ms), "endMs": ms(v.output_end_ms), "volume": v.volume, "disabled": v.muted })).collect();
+        let voice: Vec<Value> = sf_engine::audio::voice_over_spans(scene, tl).iter().map(|v| json!({ "id": v.id, "startMs": ms(v.output_start_ms), "endMs": ms(v.output_end_ms), "volume": v.volume, "boostDb": v.boost_db, "disabled": v.muted })).collect();
         json!({
             "recordedTracks": self.audio_tracks,
             "detached": scene.is_audio_detached(),
@@ -592,8 +599,9 @@ mod tests {
         let mut w = ws();
         w.project.scenes[0].voice_overs.push(VoiceOver::microphone(1000.0, 3000.0, "take.m4a"));
         let vid = w.project.scenes[0].voice_overs[0].id.clone();
-        w.run("update_audio", &json!({ "id": vid, "start_ms": 2000, "volume": 1.5 })).unwrap();
+        w.run("update_audio", &json!({ "id": vid, "start_ms": 2000, "volume": 1.5, "boost_db": 12 })).unwrap();
         assert_eq!(w.project.scenes[0].voice_overs[0].source_start_ms, 2000.0);
+        assert_eq!(w.project.scenes[0].voice_overs[0].boost(), 12.0);
         w.run("split", &json!({ "id": vid, "at_ms": 3000 })).unwrap();
         assert_eq!(w.project.scenes[0].voice_overs.len(), 2);
         assert!(w.run("update_audio", &json!({ "id": "missing" })).is_err());

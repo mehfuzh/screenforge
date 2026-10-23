@@ -748,8 +748,10 @@ impl TimelineWidget {
         }
         let mut blocks: Vec<Block> = vec![];
         for v in ed.session.voice_over_spans() {
-            let file_ms = ed.audio.voice_duration_ms(&v.file_name).unwrap_or(v.file_offset_ms + v.output_duration_ms()).max(1.0);
-            blocks.push(Block { key: key(Kind::Voice, &v.id), id: v.id.clone(), kind: Kind::Voice, start: v.output_start_ms, end: v.output_end_ms, offset: v.file_offset_ms, file_ms, muted: v.muted, volume: v.volume, file_name: v.file_name.clone(), music: None, track_label: String::new() });
+            // decoded per boost: the waveform shows the take as it plays
+            let audio_key = crate::audio::voice_key(&v.file_name, v.boost_db);
+            let file_ms = ed.audio.voice_duration_ms(&audio_key).unwrap_or(v.file_offset_ms + v.output_duration_ms()).max(1.0);
+            blocks.push(Block { key: key(Kind::Voice, &v.id), id: v.id.clone(), kind: Kind::Voice, start: v.output_start_ms, end: v.output_end_ms, offset: v.file_offset_ms, file_ms, muted: v.muted, volume: v.volume, file_name: audio_key, music: None, track_label: String::new() });
         }
         let music = sf_engine::lanes::music_clips(&ed.session.pkg.project, &ed.session.timeline);
         let fades = sf_project::music_clips::effective_fades(&music);
@@ -1020,7 +1022,7 @@ impl TimelineWidget {
         let tracks = crate::audio::AudioPlayer::available_tracks(&ed.session);
         let base_id = ui.id().with("audiotrack");
         let cfg = ed.session.pkg.project.config.clone();
-        let spans = sf_engine::audio::audio_spans(&ed.session.pkg.project.scenes[0], &tracks, cfg.audio.volume, cfg.audio.mute_microphone, cfg.audio.mute_system_audio);
+        let spans = sf_engine::audio::audio_spans(&ed.session.pkg.project.scenes[0], &tracks, &cfg.audio);
         let detached = ed.session.pkg.project.scenes[0].is_audio_detached();
 
         // empty-area interaction (scrub + context menu)

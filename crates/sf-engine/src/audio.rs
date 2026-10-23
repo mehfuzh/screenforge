@@ -4,7 +4,7 @@
 //! (ScreenForge extension `sfAudioClips`): clips are placed independently.
 
 use sf_project::audio_clips::{AudioTrack, SceneAudioExt};
-use sf_project::v4::Scene;
+use sf_project::v4::{AudioConfig, Scene};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct AudioSpan {
@@ -21,6 +21,8 @@ pub struct AudioSpan {
     pub muted: bool,
     /// Timeline lane (detached mode); linked audio is always on lane 0.
     pub layer: u32,
+    /// Boost in dB (0 = none), applied after the microphone's audio mode.
+    pub boost_db: f64,
 }
 
 impl AudioSpan {
@@ -37,7 +39,13 @@ impl AudioSpan {
 
 /// Resolve the audio spans of a scene for the tracks that exist in the recording.
 /// `base_volume` is `config.audio.volume` for the microphone (system audio uses 1).
-pub fn audio_spans(scene: &Scene, tracks: &[AudioTrack], mic_volume: f64, mute_mic: bool, mute_system: bool) -> Vec<AudioSpan> {
+pub fn audio_spans(scene: &Scene, tracks: &[AudioTrack], audio: &AudioConfig) -> Vec<AudioSpan> {
+    let (mic_volume, mute_mic, mute_system) = (audio.volume, audio.mute_microphone, audio.mute_system_audio);
+    // the whole-microphone boost of older projects, for linked audio and clips without their own
+    let track_boost = |t: &AudioTrack| match t {
+        AudioTrack::Microphone => audio.microphone_boost_db(),
+        AudioTrack::SystemAudio => 0.0,
+    };
     let track_muted = |t: &AudioTrack| match t {
         AudioTrack::Microphone => mute_mic,
         AudioTrack::SystemAudio => mute_system,
@@ -59,6 +67,7 @@ pub fn audio_spans(scene: &Scene, tracks: &[AudioTrack], mic_volume: f64, mute_m
                 volume: c.volume * base(&c.track),
                 muted: c.muted || track_muted(&c.track),
                 layer: c.layer,
+                boost_db: c.boost_db.filter(|b| b.is_finite()).map_or_else(|| track_boost(&c.track), |b| b.clamp(0.0, AudioConfig::MAX_MICROPHONE_BOOST_DB)),
                 id: c.id,
                 track: c.track,
             })
@@ -85,6 +94,7 @@ pub fn audio_spans(scene: &Scene, tracks: &[AudioTrack], mic_volume: f64, mute_m
                 volume: vol * base(t),
                 muted: track_muted(t),
                 layer: 0,
+                boost_db: track_boost(t),
             });
         }
         cursor += out_len;
@@ -107,6 +117,8 @@ pub struct VoiceOverSpan {
     pub muted: bool,
     /// Lane on the shared audio timeline.
     pub layer: u32,
+    /// The take's boost in dB (0 = none).
+    pub boost_db: f64,
 }
 
 impl VoiceOverSpan {
@@ -142,6 +154,7 @@ pub fn voice_over_spans(scene: &Scene, timeline: &crate::timeline::Timeline) -> 
                 volume: v.volume,
                 muted: v.is_disabled,
                 layer: v.layer,
+                boost_db: v.boost(),
             })
         })
         .filter(|s| s.output_duration_ms() > 0.0)
