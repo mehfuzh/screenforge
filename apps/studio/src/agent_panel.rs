@@ -283,13 +283,65 @@ fn editor_context(ed: &Editor) -> String {
     s
 }
 
+/// `1979.3` → `1,979`.
+fn thousands(n: f64) -> String {
+    let digits = (n.max(0.0).floor() as u64).to_string();
+    let mut out = String::new();
+    for (i, ch) in digits.chars().enumerate() {
+        if i > 0 && (digits.len() - i) % 3 == 0 {
+            out.push(',');
+        }
+        out.push(ch);
+    }
+    out
+}
+
+/// Small caps heading inside a menu.
+fn section_label(ui: &mut egui::Ui, text: &str) {
+    ui.add_space(10.0);
+    ui.label(RichText::new(text).size(10.5).color(theme::p().text_faint));
+    ui.add_space(2.0);
+}
+
+/// A quiet text button (dim, brighter on hover) instead of a blue link.
+fn quiet_link(ui: &mut egui::Ui, text: &str) -> egui::Response {
+    let pal = theme::p();
+    let id = ui.next_auto_id();
+    let hovered = ui.ctx().read_response(id).is_some_and(|r| r.hovered());
+    ui.add(egui::Label::new(RichText::new(text).size(12.5).color(if hovered { pal.text } else { pal.text_faint })).sense(egui::Sense::click())).on_hover_cursor(egui::CursorIcon::PointingHand)
+}
+
+/// The Pro offer: an outlined card with a title and a line under it.
+fn plan_card(ui: &mut egui::Ui, title: &str, line: &str) -> egui::Response {
+    let pal = theme::p();
+    let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 48.0), egui::Sense::click());
+    let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
+    let p = ui.painter();
+    p.rect(rect, CornerRadius::same(widgets::BUTTON_RADIUS), if resp.hovered() { pal.card_3 } else { pal.card_2 }, Stroke::new(1.0, pal.accent), egui::StrokeKind::Inside);
+    p.text(egui::pos2(rect.left() + 12.0, rect.top() + 15.0), egui::Align2::LEFT_CENTER, title, egui::FontId::proportional(14.0), pal.text);
+    p.text(egui::pos2(rect.left() + 12.0, rect.top() + 33.0), egui::Align2::LEFT_CENTER, line, egui::FontId::proportional(11.5), pal.text_dim);
+    resp
+}
+
+/// A top-up pack: the credits large, the price under them.
+fn pack_tile(ui: &mut egui::Ui, w: f32, credits: &str, price: &str) -> egui::Response {
+    let pal = theme::p();
+    let (rect, resp) = ui.allocate_exact_size(vec2(w, 50.0), egui::Sense::click());
+    let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand).on_hover_text(format!("Buy {credits} credits for {price}"));
+    let p = ui.painter();
+    p.rect_filled(rect, CornerRadius::same(widgets::BUTTON_RADIUS), if resp.hovered() { pal.card_3 } else { pal.card_2 });
+    p.text(egui::pos2(rect.center().x, rect.top() + 18.0), egui::Align2::CENTER_CENTER, credits, egui::FontId::proportional(15.0), pal.text);
+    p.text(egui::pos2(rect.center().x, rect.top() + 35.0), egui::Align2::CENTER_CENTER, price, egui::FontId::proportional(11.5), pal.text_dim);
+    resp
+}
+
 /// Short balance for the header chip ("820 credits").
 fn credits_label(n: f64) -> String {
     let n = n.max(0.0).floor() as u64;
     match n {
         1 => "1 credit".into(),
         _ if n >= 10_000 => format!("{}K credits", n / 1000),
-        _ => format!("{n} credits"),
+        _ => format!("{} credits", thousands(n as f64)),
     }
 }
 
@@ -480,7 +532,7 @@ impl AgentPanel {
         }
     }
 
-    /// Who is signed in, and Switch account / Sign out / Manage subscription.
+    /// Who is signed in, and Manage subscription · Switch account · Sign out.
     fn account_ui(&mut self, ui: &mut egui::Ui) {
         let pal = theme::p();
         if self.sign_in.is_some() {
@@ -490,70 +542,84 @@ impl AgentPanel {
         let pro = self.credits.as_ref().is_some_and(|c| c["pro"].as_bool() == Some(true));
         match sf_license::load_email() {
             Some(email) => {
-                ui.label(RichText::new(format!("Signed in as {email}{}", if pro { " · Pro" } else { "" })).size(12.5).color(pal.text_dim));
+                ui.add(egui::Label::new(RichText::new(&email).size(12.5).color(pal.text_dim)).truncate());
                 ui.horizontal_wrapped(|ui| {
-                    if pro && ui.link("Manage subscription").clicked() {
+                    ui.spacing_mut().item_spacing.x = 12.0;
+                    if pro && quiet_link(ui, "Manage subscription").clicked() {
                         self.manage_subscription();
                     }
-                    if ui.link("Switch account").clicked() {
+                    if quiet_link(ui, "Switch account").clicked() {
                         self.open_sign_in(Some(email.clone()));
                     }
-                    if ui.link("Sign out").clicked() {
+                    if quiet_link(ui, "Sign out").clicked() {
                         self.sign_out();
                     }
                 });
             }
             None => {
-                if ui.link("Sign in").on_hover_text("Already on Pro? Sign in with the email you subscribed with").clicked() {
+                if quiet_link(ui, "Already on Pro? Sign in").clicked() {
                     self.open_sign_in(None);
                 }
             }
         }
     }
 
-    /// Plan, balance, Pro and the top-up packs.
+    /// Balance, then Pro, the top-up packs, and the account at the bottom.
     fn credits_menu(&mut self, ui: &mut egui::Ui) {
         let pal = theme::p();
         let Some(c) = self.credits.clone() else { return };
         let num = |k: &str| c[k].as_f64().unwrap_or(0.0);
-        let licensed = c["account"].is_string();
-        let allowed = c["allowed"].as_bool() == Some(true);
-        ui.set_width(260.0);
+        let (pro, allowed, licensed) = (c["pro"].as_bool() == Some(true), c["allowed"].as_bool() == Some(true), c["account"].is_string());
+        ui.set_width(276.0);
         ui.spacing_mut().item_spacing.y = 4.0;
-        let status = if c["pro"].as_bool() == Some(true) {
-            format!("Pro · {} this month · {} top-up", credits_label(num("monthly")), credits_label(num("topup")))
-        } else if licensed {
-            format!("{} left", credits_label(num("credits")))
-        } else {
-            format!("Free trial · {} left", credits_label(num("trial")))
-        };
-        self.account_ui(ui);
-        ui.separator();
-        ui.label(RichText::new(status).size(12.5).color(pal.text_dim));
-        ui.label(RichText::new("1 credit is about one cent of Claude usage.").size(11.5).color(pal.text_faint));
-        ui.separator();
+
+        // balance and plan
+        ui.horizontal(|ui| {
+            ui.label(RichText::new(format!("{} credits", thousands(num("credits")))).size(19.0).strong().color(pal.text));
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                let plan = if pro { "Pro" } else if allowed { "Team" } else { "Free" };
+                egui::Frame::NONE.fill(pal.card_3).corner_radius(CornerRadius::same(widgets::BUTTON_RADIUS)).inner_margin(egui::Margin::symmetric(7, 2)).show(ui, |ui| {
+                    ui.label(RichText::new(plan).size(11.5).color(if pro { pal.accent_hover } else { pal.text_dim }));
+                });
+            });
+        });
+        let detail = if pro { format!("{} this month · {} top-up", thousands(num("monthly")), thousands(num("topup"))) } else { "About 1¢ of Claude each".to_string() };
+        ui.label(RichText::new(detail).size(12.0).color(pal.text_faint));
+
         if sf_license::load_email().is_none() {
-            ui.label(RichText::new("Email for checkout").size(12.5).color(pal.text_dim));
+            ui.add_space(8.0);
+            ui.label(RichText::new("Email for checkout").size(12.0).color(pal.text_dim));
             widgets::text_field(ui, &mut self.email, "you@example.com");
         }
-        if c["pro"].as_bool() != Some(true) {
-            let monthly = num("monthlyCredits") as u64;
-            if model_row(ui, "Upgrade to Pro · $20/month", &format!("{monthly} credits a month, and export"), false).clicked() {
+
+        if !pro {
+            section_label(ui, "PLAN");
+            let monthly = thousands(num("monthlyCredits"));
+            if plan_card(ui, "Pro · $20/month", &format!("{monthly} credits a month and unlimited export")).clicked() {
                 self.buy("pro");
                 ui.close();
             }
         }
+
         if allowed && licensed {
-            for p in c["packs"].as_array().cloned().unwrap_or_default() {
-                let (plan, credits, usd) = (p["plan"].as_str().unwrap_or(""), p["credits"].as_u64().unwrap_or(0), p["usd"].as_u64().unwrap_or(0));
-                if model_row(ui, &format!("{credits} credits · ${usd}"), "Top-up, never expires", false).clicked() {
-                    self.buy(plan);
-                    ui.close();
+            section_label(ui, "TOP UP · NEVER EXPIRES");
+            let packs = c["packs"].as_array().cloned().unwrap_or_default();
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 6.0;
+                let w = ((ui.available_width() - 12.0) / 3.0).floor();
+                for p in packs {
+                    let (plan, credits, usd) = (p["plan"].as_str().unwrap_or("").to_string(), p["credits"].as_f64().unwrap_or(0.0), p["usd"].as_u64().unwrap_or(0));
+                    if pack_tile(ui, w, &thousands(credits), &format!("${usd}")).clicked() {
+                        self.buy(&plan);
+                        ui.close();
+                    }
                 }
-            }
-        } else {
-            ui.label(RichText::new("Credit packs top up Pro.").size(11.5).color(pal.text_faint));
+            });
         }
+
+        ui.add_space(6.0);
+        ui.separator();
+        self.account_ui(ui);
     }
 
     /// The agent is part of Pro: shown instead of the chat on a computer without it.
@@ -1066,7 +1132,7 @@ fn square_button(ui: &mut egui::Ui, icon: widgets::Icon, primary: bool, tip: &st
 
 #[cfg(test)]
 mod tests {
-    use super::{compact, dollars};
+    use super::{compact, dollars, thousands};
 
     #[test]
     fn usage_reads_short() {
@@ -1076,5 +1142,6 @@ mod tests {
         assert_eq!(compact(1_270_000), "1.3M");
         assert_eq!(dollars(0.0412), "$0.04");
         assert_eq!(dollars(0.001), "<$0.01");
+        assert_eq!((thousands(1979.4), thousands(999.0), thousands(1_250_000.0)), ("1,979".to_string(), "999".to_string(), "1,250,000".to_string()));
     }
 }
