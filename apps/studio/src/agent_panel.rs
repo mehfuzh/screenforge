@@ -580,7 +580,8 @@ impl AgentPanel {
         ui.horizontal(|ui| {
             ui.label(RichText::new(format!("{} credits", thousands(num("credits")))).size(19.0).strong().color(pal.text));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                let plan = if pro { "Pro" } else if allowed { "Team" } else { "Free" };
+                // Staff: on the backend's AGENT_STAFF_EMAILS list (the agent without Pro)
+                let plan = if pro { "Pro" } else if allowed { "Staff" } else { "Free" };
                 egui::Frame::NONE.fill(pal.card_3).corner_radius(CornerRadius::same(widgets::BUTTON_RADIUS)).inner_margin(egui::Margin::symmetric(7, 2)).show(ui, |ui| {
                     ui.label(RichText::new(plan).size(11.5).color(if pro { pal.accent_hover } else { pal.text_dim }));
                 });

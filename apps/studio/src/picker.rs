@@ -120,6 +120,8 @@ impl Appearance {
 pub enum PickerAction {
     OpenProject(PathBuf),
     OpenProjectDialog,
+    /// An empty project window to drop a video into.
+    NewProject,
     StartRecording(RecordRequest),
     /// Open the drag-to-select overlay; the app starts the recording with the chosen rect.
     SelectArea(RecordRequest),
@@ -304,7 +306,7 @@ impl Picker {
         let mut texts: Vec<String> = [
             "Don't record camera", "Don't record microphone", "Don't record system audio", "Record system audio from all apps",
             "Recording countdown", "None", "3 seconds", "5 seconds", "10 seconds", "Appearance", "Match system", "Light", "Dark", "Osaka Jade", "Quit ScreenForge",
-            "RECENT PROJECTS", "Open", "No projects yet. Record something or open a project.", "Loading…", "No preview", "0123456789 min h d ago", "Move to Trash",
+            "RECENT PROJECTS", "Open", "New", "No projects yet. Record something or open a project.", "Loading…", "No preview", "0123456789 min h d ago", "Move to Trash",
         ]
         .map(String::from)
         .to_vec();
@@ -631,8 +633,11 @@ impl Picker {
         inner.horizontal(|ui| {
             ui.label(RichText::new("RECENT PROJECTS").small().color(theme::p().text_dim));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if open_button(ui).clicked() {
+                if open_button(ui, widgets::Icon::Folder, "Open", "Open a project, or import a Screen Studio project").clicked() {
                     *action = Some(PickerAction::OpenProjectDialog);
+                }
+                if open_button(ui, widgets::Icon::Plus, "New", "A new project from a screencast or video you already have").clicked() {
+                    *action = Some(PickerAction::NewProject);
                 }
             });
         });
@@ -870,19 +875,20 @@ fn project_card(ui: &mut Ui, path: &std::path::Path, tex: Option<&egui::TextureH
     (resp.on_hover_cursor(egui::CursorIcon::PointingHand), trash_clicked)
 }
 
-/// "Open" with a folder icon for the recent-projects panel: quiet on the glass, filled on hover.
-fn open_button(ui: &mut Ui) -> egui::Response {
+/// An icon and a word for the recent-projects panel ("Open", "New"): quiet on the glass,
+/// filled on hover.
+fn open_button(ui: &mut Ui, icon: widgets::Icon, text: &str, tip: &str) -> egui::Response {
     let pal = theme::p();
-    let galley = ui.painter().layout_no_wrap("Open".into(), egui::FontId::proportional(13.0), Color32::PLACEHOLDER);
+    let galley = ui.painter().layout_no_wrap(text.into(), egui::FontId::proportional(13.0), Color32::PLACEHOLDER);
     let (rect, resp) = ui.allocate_exact_size(egui::vec2(galley.size().x + 44.0, 28.0), egui::Sense::click());
     let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
     let fg = if resp.hovered() { pal.glass_button_fg } else { pal.on_glass };
     if resp.hovered() {
         ui.painter().rect_filled(rect, CornerRadius::same(2), pal.glass_button);
     }
-    widgets::paint_icon(ui.painter(), egui::Rect::from_center_size(pos2(rect.left() + 17.0, rect.center().y), egui::vec2(14.0, 14.0)), widgets::Icon::Folder, fg);
+    widgets::paint_icon(ui.painter(), egui::Rect::from_center_size(pos2(rect.left() + 17.0, rect.center().y), egui::vec2(14.0, 14.0)), icon, fg);
     ui.painter().galley(pos2(rect.left() + 32.0, rect.center().y - galley.size().y / 2.0), galley, fg);
-    resp.on_hover_cursor(egui::CursorIcon::PointingHand).on_hover_text("Open a project, or import a Screen Studio project")
+    resp.on_hover_cursor(egui::CursorIcon::PointingHand).on_hover_text(tip)
 }
 
 /// A row of page dots centred on (`cx`, `cy`); returns the page whose dot was clicked.

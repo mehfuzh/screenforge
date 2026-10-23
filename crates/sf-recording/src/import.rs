@@ -180,6 +180,183 @@ pub fn import_video(src: &Path, dir: &Path, progress: impl Fn(f64), cancel: &Ato
     r
 }
 
+/// The tracks of a recording's first session, from its `metadata.json`.
+struct Tracks {
+    display: String,
+    microphone: Option<String>,
+    system_audio: Option<String>,
+}
+
+fn recorders(doc: &Value) -> Vec<Value> {
+    doc["recorders"].as_array().cloned().unwrap_or_default()
+}
+
+fn first_output(doc: &Value, kind: &str) -> Option<String> {
+    recorders(doc).iter().find(|r| r["type"] == kind).and_then(|r| r["sessions"][0]["outputFilename"].as_str().map(String::from))
+}
+
+fn tracks(doc: &Value) -> Result<Tracks> {
+    let display = recorders(doc).into_iter().find(|r| r["type"] == "display").ok_or_else(|| Error::InvalidConfig("the recording has no screen video".into()))?;
+    if display["sessions"].as_array().map_or(0, Vec::len) != 1 {
+        return Err(Error::InvalidConfig("a recording that was paused and resumed cannot be extended yet".into()));
+    }
+    Ok(Tracks {
+        display: display["sessions"][0]["outputFilename"].as_str().ok_or_else(|| Error::InvalidConfig("the screen video has no file".into()))?.to_string(),
+        microphone: first_output(doc, "microphone"),
+        system_audio: first_output(doc, "systemAudio"),
+    })
+}
+
+/// `metadata.json` after `added_ms` more of every track (and a microphone track when the
+/// recording had none and `new_mic` names its file).
+fn extend_metadata(doc: &mut Value, added_ms: f64, new_mic: Option<&str>) {
+    let grow = |s: &mut Value| {
+        for k in ["durationMs", "processTimeEndMs", "unixEndMs"] {
+            if let Some(v) = s[k].as_f64() {
+                s[k] = Value::from(v + added_ms);
+            }
+        }
+    };
+    if let Some(list) = doc["recorders"].as_array_mut() {
+        for r in list.iter_mut() {
+            if let Some(s) = r["sessions"].get_mut(0) {
+                grow(s);
+            }
+        }
+    }
+    if let Some(s) = doc["sessions"].get_mut(0) {
+        grow(s);
+    }
+    if let Some(file) = new_mic {
+        let mut session = doc["sessions"][0].clone();
+        session["outputFilename"] = Value::from(file);
+        let index = file.trim_start_matches("channel-").split('-').next().unwrap_or("2").to_string();
+        if let Some(list) = doc["recorders"].as_array_mut() {
+            list.push(serde_json::json!({ "configuration": { "deviceId": "imported" }, "id": format!("channel-{index}-microphone"), "sessions": [session], "type": "microphone" }));
+        }
+    }
+    *doc = crate::metadata::sort_keys(doc.take());
+}
+
+/// Append the video `src` to the recording in `dir`: its picture after the screen video's end
+/// (letterboxed to the recording's size and frame rate), its sound after the microphone's
+/// (silence where either part has none; a microphone track is added when the recording had
+/// none), the system audio padded with silence. The screen video is re-encoded once, the files
+/// are swapped when everything succeeded, and `metadata.json` is extended. Returns
+/// `(start ms, length ms)` of the appended part in source time.
+pub fn append_video(dir: &Path, src: &Path, progress: impl Fn(f64), cancel: &AtomicBool) -> Result<(f64, f64)> {
+    let meta_path = dir.join(sf_project::recording::METADATA_FILE);
+    let text = std::fs::read_to_string(&meta_path).map_err(|source| Error::Io { path: meta_path.clone(), source })?;
+    let mut doc: Value = serde_json::from_str(&text).map_err(Error::Json)?;
+    let t = tracks(&doc)?;
+    let old = probe(&dir.join(&t.display))?;
+    let new = probe(src)?;
+    let (od, nd) = (old.duration_ms / 1000.0, new.duration_ms / 1000.0);
+    let fps = old.fps.round().clamp(1.0, 120.0);
+    let (w, h) = (old.width + old.width % 2, old.height + old.height % 2);
+
+    // a microphone track exists afterwards when either part has sound
+    let new_mic = match (&t.microphone, new.has_audio) {
+        (None, true) => {
+            let next = recorders(&doc).iter().filter_map(|r| r["id"].as_str()?.trim_start_matches("channel-").split('-').next()?.parse::<usize>().ok()).max().unwrap_or(1) + 1;
+            Some(AudioChannel { kind: "microphone", channel_index: next, device_id: None }.output_filename(0))
+        }
+        _ => None,
+    };
+    let mic_out = t.microphone.clone().or_else(|| new_mic.clone());
+
+    let tmp = dir.join(".append");
+    let _ = std::fs::remove_dir_all(&tmp);
+    std::fs::create_dir_all(&tmp).map_err(|source| Error::Io { path: tmp.clone(), source })?;
+    let mut args: Vec<String> = ["-y", "-nostdin", "-hide_banner", "-loglevel", "error", "-progress", "pipe:1", "-nostats"].map(String::from).to_vec();
+    let mut inputs = vec![dir.join(&t.display), src.to_path_buf()];
+    let mic_in = t.microphone.as_ref().map(|m| {
+        inputs.push(dir.join(m));
+        inputs.len() - 1
+    });
+    let sys_in = t.system_audio.as_ref().map(|m| {
+        inputs.push(dir.join(m));
+        inputs.len() - 1
+    });
+    for i in &inputs {
+        args.extend(["-i".into(), i.to_string_lossy().into_owned()]);
+    }
+    let mut graph = vec![
+        format!("[0:v]fps={fps},scale={w}:{h},setsar=1,format=yuv420p[v0]"),
+        format!("[1:v]scale={w}:{h}:force_original_aspect_ratio=decrease,pad={w}:{h}:(ow-iw)/2:(oh-ih)/2:color=black,fps={fps},setsar=1,format=yuv420p[v1]"),
+        "[v0][v1]concat=n=2:v=1:a=0[v]".to_string(),
+    ];
+    if mic_out.is_some() {
+        let mono = "aresample=48000,aformat=sample_fmts=fltp:channel_layouts=mono";
+        graph.push(match mic_in {
+            Some(i) => format!("[{i}:a]{mono}[ao]"),
+            None => format!("anullsrc=r=48000:cl=mono,atrim=duration={od:.3}[ao]"),
+        });
+        graph.push(if new.has_audio { format!("[1:a:0]{mono}[an]") } else { format!("anullsrc=r=48000:cl=mono,atrim=duration={nd:.3}[an]") });
+        graph.push("[ao][an]concat=n=2:v=0:a=1[mic]".into());
+    }
+    if let Some(i) = sys_in {
+        graph.push(format!("[{i}:a]apad=whole_dur={:.3}[sys]", od + nd));
+    }
+    args.extend(["-filter_complex".into(), graph.join(";")]);
+    args.extend(["-map".into(), "[v]".into()]);
+    args.extend(display::hls_encode_args_for(display::DISPLAY_CHANNEL, display::target_bitrate(w, h, 0.85), display::video_encoder(), 0));
+    if let Some(m) = &mic_out {
+        args.extend(["-map", "[mic]", "-c:a", "aac", "-b:a", "160k"].map(String::from));
+        args.push(m.clone());
+    }
+    if let Some(s) = &t.system_audio {
+        args.extend(["-map", "[sys]", "-c:a", "aac", "-b:a", "160k"].map(String::from));
+        args.push(s.clone());
+    }
+
+    let run = (|| {
+        let mut cmd = std::process::Command::new(crate::ffmpeg::ffmpeg_path()?);
+        crate::ffmpeg::hide_console(&mut cmd);
+        let mut child = cmd.args(&args).current_dir(&tmp).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().map_err(|source| Error::Io { path: src.to_path_buf(), source })?;
+        if let Some(out) = child.stdout.take() {
+            for line in BufReader::new(out).lines().map_while(|l| l.ok()) {
+                if cancel.load(Ordering::Relaxed) {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err(Error::Capture("cancelled".into()));
+                }
+                if let Some(us) = line.strip_prefix("out_time_us=").or_else(|| line.strip_prefix("out_time_ms=")).and_then(|v| v.trim().parse::<f64>().ok()) {
+                    progress((us / 1000.0).min(old.duration_ms + new.duration_ms));
+                }
+            }
+        }
+        let out = child.wait_with_output().map_err(|source| Error::Io { path: src.to_path_buf(), source })?;
+        if !out.status.success() {
+            return Err(Error::Capture(format!("ffmpeg could not add the video: {}", String::from_utf8_lossy(&out.stderr).trim())));
+        }
+        Ok(())
+    })();
+    if let Err(e) = run {
+        let _ = std::fs::remove_dir_all(&tmp);
+        return Err(e);
+    }
+
+    // swap: the old screen video's files go, the new ones move in
+    let base = t.display.trim_end_matches(".m3u8").to_string();
+    for f in std::fs::read_dir(dir).map_err(|source| Error::Io { path: dir.to_path_buf(), source })?.flatten() {
+        let name = f.file_name().to_string_lossy().into_owned();
+        if name.starts_with(&format!("{base}-")) || name == t.display {
+            let _ = std::fs::remove_file(f.path());
+        }
+    }
+    for f in std::fs::read_dir(&tmp).map_err(|source| Error::Io { path: tmp.clone(), source })?.flatten() {
+        let to = dir.join(f.file_name());
+        std::fs::rename(f.path(), &to).map_err(|source| Error::Io { path: to, source })?;
+    }
+    let _ = std::fs::remove_dir_all(&tmp);
+
+    extend_metadata(&mut doc, new.duration_ms, new_mic.as_deref());
+    let text = serde_json::to_string_pretty(&doc).map_err(Error::Json)?;
+    std::fs::write(&meta_path, text).map_err(|source| Error::Io { path: meta_path, source })?;
+    Ok((old.duration_ms, new.duration_ms))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -248,6 +425,60 @@ mod tests {
         assert!(import_video(&src, &gone, |_| {}, &AtomicBool::new(true)).is_err());
         assert!(!gone.exists());
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// A test clip made with ffmpeg (`None` when it lacks libx264).
+    fn clip(path: &Path, size: &str, seconds: u32, sound: bool) -> Option<()> {
+        let ffmpeg = crate::ffmpeg::ffmpeg_path().ok()?;
+        let mut cmd = std::process::Command::new(ffmpeg);
+        cmd.args(["-v", "error", "-y", "-f", "lavfi", "-i", &format!("testsrc2=size={size}:rate=30:duration={seconds}")]);
+        if sound {
+            cmd.args(["-f", "lavfi", "-i", &format!("sine=frequency=440:duration={seconds}"), "-c:a", "aac", "-shortest"]);
+        }
+        cmd.args(["-c:v", "libx264", "-pix_fmt", "yuv420p"]).arg(path).status().ok()?.success().then_some(())
+    }
+
+    #[test]
+    fn appends_a_video_after_the_recording() {
+        let root = std::env::temp_dir().join(format!("sf-append-e2e-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let (first, second) = (root.join("first.mov"), root.join("second.mp4"));
+        if clip(&first, "320x240", 3, true).is_none() || clip(&second, "120x200", 2, false).is_none() {
+            return;
+        }
+        let rec = root.join("rec");
+        import_video(&first, &rec, |_| {}, &AtomicBool::new(false)).unwrap();
+        let (start, len) = append_video(&rec, &second, |_| {}, &AtomicBool::new(false)).unwrap();
+        assert!((start - 3000.0).abs() < 150.0 && (len - 2000.0).abs() < 150.0, "{start} {len}");
+        // the screen video now runs on into the appended part, at the recording's size
+        let p = probe(&rec.join("channel-1-display-0.m3u8")).unwrap();
+        assert!((p.duration_ms - 5000.0).abs() < 300.0, "{}", p.duration_ms);
+        assert_eq!((p.width, p.height), (320, 240));
+        // the microphone runs on (silence where the second clip had none) and the metadata grew
+        let mic = probe_audio_ms(&rec.join("channel-2-microphone-0.m4a"));
+        assert!((mic - 5000.0).abs() < 300.0, "{mic}");
+        let meta: Value = serde_json::from_str(&std::fs::read_to_string(rec.join("metadata.json")).unwrap()).unwrap();
+        assert!((meta["sessions"][0]["durationMs"].as_f64().unwrap() - 5000.0).abs() < 300.0);
+        assert!(!rec.join(".append").exists());
+
+        // a silent recording gets a microphone track when the appended video has sound
+        let (quiet, loud) = (root.join("quiet.mov"), root.join("loud.mov"));
+        clip(&quiet, "320x240", 2, false).unwrap();
+        clip(&loud, "320x240", 2, true).unwrap();
+        let rec2 = root.join("rec2");
+        import_video(&quiet, &rec2, |_| {}, &AtomicBool::new(false)).unwrap();
+        append_video(&rec2, &loud, |_| {}, &AtomicBool::new(false)).unwrap();
+        let meta: Value = serde_json::from_str(&std::fs::read_to_string(rec2.join("metadata.json")).unwrap()).unwrap();
+        let mic = meta["recorders"].as_array().unwrap().iter().find(|r| r["type"] == "microphone").expect("a microphone track");
+        let file = mic["sessions"][0]["outputFilename"].as_str().unwrap();
+        assert!((probe_audio_ms(&rec2.join(file)) - 4000.0).abs() < 300.0);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    fn probe_audio_ms(path: &Path) -> f64 {
+        let out = std::process::Command::new(crate::ffmpeg::ffprobe_path().unwrap()).args(["-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0"]).arg(path).output().unwrap();
+        String::from_utf8_lossy(&out.stdout).trim().parse::<f64>().unwrap() * 1000.0
     }
 
     #[test]

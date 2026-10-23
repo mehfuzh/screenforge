@@ -291,6 +291,8 @@ pub enum Icon {
     ArrowUp,
     /// Check mark (the chosen item in a menu).
     Check,
+    /// Plus sign (a new project).
+    Plus,
 }
 
 /// Live level as an equalizer: the most recent `levels` (0..1, oldest first) as bars that
@@ -414,6 +416,10 @@ pub fn paint_icon(p: &egui::Painter, rect: Rect, icon: Icon, color: Color32) {
         }
         Icon::Stop => {
             p.rect_filled(rr(-0.6, -0.6, 0.6, 0.6), 1.0, color);
+        }
+        Icon::Plus => {
+            line((0.0, -0.75), (0.0, 0.75));
+            line((-0.75, 0.0), (0.75, 0.0));
         }
         Icon::Check => {
             line((-0.75, 0.05), (-0.25, 0.55));
