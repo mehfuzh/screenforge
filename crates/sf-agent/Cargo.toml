@@ -12,3 +12,4 @@ sf-engine.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 ureq = { version = "2", features = ["json"] }
+base64 = "0.22"

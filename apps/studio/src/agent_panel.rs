@@ -52,6 +52,9 @@ struct StudioHost {
     options: Value,
     presets: Vec<(String, PathBuf)>,
     project_dir: PathBuf,
+    /// The screen video (source time = its time) and its size.
+    media: PathBuf,
+    media_size: (u32, u32),
     /// Results of the last Unsplash search, for `download_photo`.
     photos: Mutex<Vec<crate::unsplash::Photo>>,
     ctx: egui::Context,
@@ -75,11 +78,75 @@ impl StudioHost {
             "hasCamera": !ed.session.source.camera.is_empty(),
             "hasTranscript": !ed.session.captions.is_empty(),
         });
-        StudioHost { options, presets, project_dir: ed.session.pkg.path.clone(), photos: Mutex::new(vec![]), ctx: ctx.clone() }
+        let media_size = (ed.session.source.native_width.max(1), ed.session.source.native_height.max(1));
+        StudioHost { options, presets, project_dir: ed.session.pkg.path.clone(), media: ed.session.source.media_path.clone(), media_size, photos: Mutex::new(vec![]), ctx: ctx.clone() }
     }
 }
 
+/// Motion sections per screen video, measured once (decoding is the slow part).
+static MOTION: Mutex<Vec<(PathBuf, Vec<(f64, f64, sf_agent::motion::Motion)>)>> = Mutex::new(Vec::new());
+
+/// Frames the motion scan reads per second, and their width (wide enough that a typed
+/// character changes a few pixels).
+const MOTION_FPS: f64 = 2.0;
+const MOTION_W: u32 = 640;
+
+fn ffmpeg() -> Result<std::process::Command, String> {
+    let path = sf_recording::ffmpeg::ffmpeg_path().map_err(|e| e.to_string())?;
+    let mut cmd = std::process::Command::new(path);
+    sf_recording::ffmpeg::hide_console(&mut cmd);
+    Ok(cmd)
+}
+
 impl Host for StudioHost {
+    fn screen_motion(&self) -> Result<Vec<(f64, f64, sf_agent::motion::Motion)>, String> {
+        if let Some((_, s)) = MOTION.lock().map_err(|_| "busy")?.iter().find(|(p, _)| *p == self.media) {
+            return Ok(s.clone());
+        }
+        let h = ((MOTION_W as f64 * self.media_size.1 as f64 / self.media_size.0 as f64 / 2.0).round() as u32 * 2).max(2);
+        let mut child = ffmpeg()?
+            .args(["-v", "error", "-nostdin", "-i"])
+            .arg(&self.media)
+            .args(["-vf", &format!("fps={MOTION_FPS},scale={MOTION_W}:{h},format=gray"), "-f", "rawvideo", "-"])
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .map_err(|e| format!("could not read the video: {e}"))?;
+        // one frame at a time: a long video never sits in memory
+        let mut stdout = child.stdout.take().ok_or("could not read the video")?;
+        let size = (MOTION_W * h) as usize;
+        let frames = std::iter::from_fn(|| {
+            use std::io::Read;
+            let mut f = vec![0u8; size];
+            stdout.read_exact(&mut f).ok().map(|_| f)
+        });
+        let sections = sf_agent::motion::sections(frames, MOTION_W as usize, MOTION_FPS);
+        let _ = child.wait();
+        if sections.is_empty() {
+            return Err("could not read the video".into());
+        }
+        MOTION.lock().map_err(|_| "busy")?.push((self.media.clone(), sections.clone()));
+        Ok(sections)
+    }
+
+    fn screen_frames(&self, source_ms: &[f64]) -> Result<Vec<Vec<u8>>, String> {
+        source_ms
+            .iter()
+            .map(|t| {
+                let out = ffmpeg()?
+                    .args(["-v", "error", "-nostdin", "-ss", &format!("{:.3}", t / 1000.0), "-i"])
+                    .arg(&self.media)
+                    .args(["-frames:v", "1", "-vf", "scale=768:-2", "-q:v", "5", "-f", "image2", "-c:v", "mjpeg", "pipe:1"])
+                    .output()
+                    .map_err(|e| format!("could not read the video: {e}"))?;
+                if out.stdout.is_empty() {
+                    return Err(format!("no frame at {:.1} s", t / 1000.0));
+                }
+                Ok(out.stdout)
+            })
+            .collect()
+    }
+
     fn options(&self) -> Value {
         self.options.clone()
     }
@@ -386,6 +453,12 @@ impl AgentPanel {
             project: ed.session.pkg.project.clone(),
             words: ed.session.captions.lines.iter().flat_map(|l| l.words.iter().cloned()).collect(),
             auto_zooms: ed.session.auto_zooms(),
+            activity: {
+                let t = &ed.session.cursor_track;
+                let clicks: Vec<f64> = t.clicks.iter().filter(|c| c.down).map(|c| c.time_ms).collect();
+                let moves: Vec<f64> = t.samples.iter().map(|s| s.time_ms).collect();
+                (!t.key_downs.is_empty() || !clicks.is_empty() || !moves.is_empty()).then(|| sf_agent::activity::Activity::from_events(&t.key_downs, &clicks, &moves, ed.session.source.duration_ms))
+            },
             seek_to: None,
             content_px: crate::masks::content_px(ed),
             audio_tracks: crate::audio::AudioPlayer::available_tracks(&ed.session),

@@ -620,6 +620,13 @@ mod tests {
         fn import_file(&self, path: &str) -> Result<String, String> {
             Ok(path.rsplit('/').next().unwrap().to_string())
         }
+        fn screen_motion(&self) -> Result<Vec<(f64, f64, crate::motion::Motion)>, String> {
+            use crate::motion::Motion;
+            Ok(vec![(0.0, 2000.0, Motion::Still), (2000.0, 6000.0, Motion::Small), (6000.0, 10_000.0, Motion::Large)])
+        }
+        fn screen_frames(&self, source_ms: &[f64]) -> Result<Vec<Vec<u8>>, String> {
+            Ok(source_ms.iter().map(|t| format!("jpeg@{t}").into_bytes()).collect())
+        }
     }
 
     #[test]
@@ -640,6 +647,14 @@ mod tests {
         w.run("apply_preset", &json!({ "name": "Dark" })).unwrap();
         assert_eq!(w.project.config.output.padding_ratio01, 0.2);
         assert!(w.run("apply_preset", &json!({ "name": "Nope" })).is_err());
+        // motion follows the timeline: after cutting the first 2 s the typing starts at 0
+        w.run("cut", &json!({ "ranges": [{ "start_ms": 0, "end_ms": 2000 }] })).unwrap();
+        let m: Value = serde_json::from_str(&w.run("get_motion", &json!({})).unwrap().result).unwrap();
+        assert_eq!(m["sections"], json!([[0.0, 4000.0, "small"], [4000.0, 8000.0, "large"]]));
+        // frames are asked for by source time and come back as images
+        let o = w.run("view_frames", &json!({ "at_ms": [1000, 5000] })).unwrap();
+        assert_eq!(o.images, vec![b"jpeg@3000".to_vec(), b"jpeg@7000".to_vec()]);
+        assert!(w.run("view_frames", &json!({ "at_ms": [] })).is_err());
         w.run("transcribe", &json!({ "language": "en" })).unwrap();
         w.run("open_export", &json!({})).unwrap();
         assert_eq!(w.actions, vec![Action::Transcribe { language: Some("en".into()) }, Action::OpenExport]);

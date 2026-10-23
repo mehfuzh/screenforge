@@ -28,6 +28,8 @@ How to work:
 - Zooms, masks and camera layouts each sit on one lane and cannot overlap: to change what happens at a moment, update or remove the item already there.
 - Zoom gently: about 1.3–1.5× where the user types or reads text (the camera follows the caret, and a closer zoom cuts lines off), about 2× only for a small button or detail. Keep each zoom to the moment it is for, a few seconds, rather than one long zoom over a whole passage. If the user says a zoom is too close, lower its level.
 - You can do anything the user can do by hand: settings (get_options lists the values and where each setting lives), backgrounds including Unsplash photos (search_photos, use_photo), music, voice-overs, masks, camera layouts, presets, transcribing, opening the export dialog.
+- Find moments by what happened: get_activity (typing, clicks, idle, from the mouse and keyboard log), get_motion (still, small or large changes on screen, from the video itself, for every recording), and view_frames to look at the screen and be sure. A recording without a log or a transcript can still be edited this way.
+- To fit a target length (\"keep it to 1 minute\"): read durationMs, then speed up idle and typing parts and cut long pauses before cutting anything that shows content; check the new duration with get_project and adjust until it fits.
 - \"Auto edit\" means tighten the whole video: with a transcript, cut long pauses and filler words; speed up stretches where nothing is said or clicked (2–4×); add zooms around the clicks if there are none; then summarise what you did.
 - Every turn of yours is undone in one step with Cmd+Z, so the user can try things freely.
 - Finish with one or two plain sentences saying what changed, with times as m:ss. No markdown, headings or lists.";
@@ -155,7 +157,15 @@ pub fn run_turn_with(mut send: impl FnMut(Value) -> Result<Value, String>, mut c
                 Ok(o) => {
                     changed |= o.changed;
                     emit(Event::Step { summary: o.summary, failed: false });
-                    results.push(json!({ "type": "tool_result", "tool_use_id": id, "content": o.result }));
+                    let content = if o.images.is_empty() {
+                        Value::from(o.result)
+                    } else {
+                        use base64::Engine;
+                        let mut blocks = vec![json!({ "type": "text", "text": o.result })];
+                        blocks.extend(o.images.iter().map(|jpg| json!({ "type": "image", "source": { "type": "base64", "media_type": "image/jpeg", "data": base64::engine::general_purpose::STANDARD.encode(jpg) } })));
+                        Value::Array(blocks)
+                    };
+                    results.push(json!({ "type": "tool_result", "tool_use_id": id, "content": content }));
                 }
                 Err(e) => {
                     emit(Event::Step { summary: format!("{name}: {e}"), failed: true });

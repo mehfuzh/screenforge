@@ -19,6 +19,10 @@ pub trait Host: Send + Sync {
     fn download_photo(&self, id: &str) -> Result<Value, String>;
     /// Copy the file at `path` into the project's assets: its file name there.
     fn import_file(&self, path: &str) -> Result<String, String>;
+    /// What the screen video does over time (source ms): see [`crate::motion::sections`].
+    fn screen_motion(&self) -> Result<Vec<(f64, f64, crate::motion::Motion)>, String>;
+    /// JPEG stills of the screen video at source times (ms), one per time.
+    fn screen_frames(&self, source_ms: &[f64]) -> Result<Vec<Vec<u8>>, String>;
 }
 
 /// Something only the editor can do, asked for by a tool and run when the round's edits are

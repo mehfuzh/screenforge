@@ -4405,6 +4405,7 @@ dependencies = [
 name = "sf-agent"
 version = "0.1.31"
 dependencies = [
+ "base64",
  "serde",
  "serde_json",
  "sf-engine",

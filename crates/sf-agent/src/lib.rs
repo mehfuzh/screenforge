@@ -10,10 +10,12 @@
 //! Nothing here touches the UI or the disk: the editor runs [`agent::run_turn`] on a thread with
 //! a copy of the project and applies the edited project it sends back.
 
+pub mod activity;
 pub mod agent;
 pub mod client;
 pub mod host;
 mod items;
+pub mod motion;
 pub mod tools;
 
 pub use agent::{run_turn, Conversation, Event};

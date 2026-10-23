@@ -15,6 +15,7 @@ use sf_project::audio_clips::AudioTrack;
 use sf_project::v4::{Slice, Zoom};
 use sf_project::Project;
 
+use crate::activity::Activity;
 use crate::host::{Action, Host};
 
 /// Pieces of a clip shorter than this (one frame at 60 fps) are dropped after a cut.
@@ -35,6 +36,9 @@ pub struct Workspace {
     pub words: Vec<Word>,
     /// Automatic zooms from the recording's clicks (source time), for `add_auto_zooms`.
     pub auto_zooms: Vec<Zoom>,
+    /// Typing, clicks and idle stretches from the mouse and keyboard log; `None` when the
+    /// recording has none (imported videos, iPhone recordings).
+    pub activity: Option<Activity>,
     /// Set by the `seek` tool: where the editor should move the playhead.
     pub seek_to: Option<f64>,
     /// Pixel size of the cropped recording (mask areas are stored in it).
@@ -56,14 +60,16 @@ pub struct Outcome {
     pub summary: String,
     /// The project changed.
     pub changed: bool,
+    /// JPEG images sent back with the result (`view_frames`).
+    pub images: Vec<Vec<u8>>,
 }
 
 impl Outcome {
     pub(crate) fn read(result: Value, summary: impl Into<String>) -> Self {
-        Outcome { result: result.to_string(), summary: summary.into(), changed: false }
+        Outcome { result: result.to_string(), summary: summary.into(), changed: false, images: vec![] }
     }
     pub(crate) fn edit(result: Value, summary: impl Into<String>) -> Self {
-        Outcome { result: result.to_string(), summary: summary.into(), changed: true }
+        Outcome { result: result.to_string(), summary: summary.into(), changed: true, images: vec![] }
     }
 }
 
@@ -106,6 +112,25 @@ fn timeline_definitions() -> Value {
                     "start_ms": { "type": "number", "description": "Only words from here (optional)" },
                     "end_ms": { "type": "number", "description": "Only words up to here (optional)" }
                 }
+            }
+        },
+        {
+            "name": "get_activity",
+            "description": "What happened in the recording, from its mouse and keyboard log: typing sections [start_ms, end_ms, keys], clicks, and idle stretches (no typing, clicking or mouse movement for 2.5 s or more), on the timeline. Use it for \"the typing part\", \"where nothing happens\" or \"the clicks\". Imported videos and iPhone recordings have no log: then use get_motion and view_frames.",
+            "input_schema": { "type": "object", "properties": { "start_ms": { "type": "number" }, "end_ms": { "type": "number" } } }
+        },
+        {
+            "name": "get_motion",
+            "description": "What the picture does over time, measured from the video itself (works for every recording): sections that are still (nothing changes), small (a few pixels change in one place, like typing), or large (scrolling, switching windows, video). A cheap measure: confirm what a section shows with view_frames before acting on it.",
+            "input_schema": { "type": "object", "properties": { "start_ms": { "type": "number" }, "end_ms": { "type": "number" } } }
+        },
+        {
+            "name": "view_frames",
+            "description": "Look at the video: stills of the screen at timeline times (at most 8 per call), returned as images. Use them to see what is on screen, find where something happens, or check a section from get_motion. Pick times that tell the sections apart; a few frames are usually enough.",
+            "input_schema": {
+                "type": "object",
+                "properties": { "at_ms": { "type": "array", "items": { "type": "number" }, "minItems": 1, "maxItems": 8 } },
+                "required": ["at_ms"]
             }
         },
         {
@@ -288,7 +313,7 @@ fn subtract(a: f64, b: f64, holes: &mut [(f64, f64)]) -> Vec<(f64, f64)> {
 
 impl Workspace {
     pub fn new(project: Project) -> Self {
-        Workspace { project, words: vec![], auto_zooms: vec![], seek_to: None, content_px: (1920.0, 1080.0), audio_tracks: vec![], host: None, actions: vec![] }
+        Workspace { project, words: vec![], auto_zooms: vec![], activity: None, seek_to: None, content_px: (1920.0, 1080.0), audio_tracks: vec![], host: None, actions: vec![] }
     }
 
     pub(crate) fn timeline(&self) -> Timeline {
@@ -439,6 +464,34 @@ impl Workspace {
             }
             "patch_project" => self.patch(input.get("ops").and_then(Value::as_array).ok_or("`ops` must be a list")?),
             "get_options" => Ok(Outcome::read(crate::host::options(self.host.as_deref()), "Read the options")),
+            "get_activity" => self.activity_tool(opt_num(input, "start_ms")?, opt_num(input, "end_ms")?),
+            "get_motion" => {
+                let (from, to) = (opt_num(input, "start_ms")?.unwrap_or(0.0), opt_num(input, "end_ms")?.unwrap_or(f64::INFINITY));
+                let tl = self.timeline();
+                let sections: Vec<Value> = self
+                    .host()?
+                    .screen_motion()?
+                    .into_iter()
+                    .filter_map(|(s0, s1, m)| Self::output_range(&tl, s0, s1).map(|(a, b)| (a, b, m)))
+                    .filter(|(a, b, _)| *b > from && *a < to)
+                    .map(|(a, b, m)| json!([a.round(), b.round(), m.label()]))
+                    .collect();
+                let n = sections.len();
+                Ok(Outcome::read(json!({ "sections": sections }), format!("Measured motion ({n} sections)")))
+            }
+            "view_frames" => {
+                let times: Vec<f64> = input.get("at_ms").and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_f64).take(8).collect()).unwrap_or_default();
+                if times.is_empty() {
+                    return Err("`at_ms` needs at least one time".into());
+                }
+                let tl = self.timeline();
+                let dur = tl.duration_ms();
+                let source: Vec<f64> = times.iter().map(|t| tl.output_to_source(t.clamp(0.0, (dur - 1.0).max(0.0))).ok_or_else(|| format!("{} is outside the video", clock(*t)))).collect::<Result<_, _>>()?;
+                let images = self.host()?.screen_frames(&source)?;
+                let labels: Vec<Value> = times.iter().map(|t| json!(clock(*t))).collect();
+                let n = images.len();
+                Ok(Outcome { result: json!({ "frames": labels, "note": "The images follow, in the same order." }).to_string(), summary: format!("Looked at {n} frames"), changed: false, images })
+            }
             "apply_preset" => {
                 let name = input.get("name").and_then(Value::as_str).ok_or("`name` is required")?;
                 let host = self.host.clone().ok_or("not available here (no editor)")?;
@@ -504,6 +557,20 @@ impl Workspace {
             }
             _ => Err(format!("unknown tool {name}")),
         }
+    }
+
+    fn activity_tool(&self, from: Option<f64>, to: Option<f64>) -> Result<Outcome, String> {
+        let Some(a) = self.activity.as_ref().filter(|a| !a.is_empty()) else {
+            return Ok(Outcome::read(json!({ "note": "No mouse or keyboard log for this recording (an imported video or an iPhone recording). Use get_motion and view_frames to find what happens when." }), "No input log"));
+        };
+        let tl = self.timeline();
+        let (from, to) = (from.unwrap_or(0.0), to.unwrap_or(f64::INFINITY));
+        let within = |a: f64, b: f64| b > from && a < to;
+        let typing: Vec<Value> = a.typing.iter().filter_map(|(s0, s1, n)| Self::output_range(&tl, *s0, *s1).filter(|(x, y)| within(*x, *y)).map(|(x, y)| json!([x.round(), y.round(), n]))).collect();
+        let idle: Vec<Value> = a.idle.iter().filter_map(|(s0, s1)| Self::output_range(&tl, *s0, *s1).filter(|(x, y)| within(*x, *y)).map(|(x, y)| json!([x.round(), y.round()]))).collect();
+        let clicks: Vec<Value> = a.clicks.iter().filter_map(|t| tl.source_to_output(*t)).filter(|t| within(*t, *t)).take(300).map(|t| json!(t.round())).collect();
+        let summary = format!("Read the activity ({} typing, {} idle)", typing.len(), idle.len());
+        Ok(Outcome::read(json!({ "typing": typing, "clicks": clicks, "idle": idle }), summary))
     }
 
     fn overview(&self) -> Value {
@@ -916,6 +983,20 @@ mod tests {
         w.run("add_auto_zooms", &json!({})).unwrap();
         assert_eq!(w.project.scenes[0].zooms.len(), 2);
         assert_eq!(w.project.scenes[0].zooms[0].source_start_ms, 1000.0);
+    }
+
+    #[test]
+    fn activity_is_reported_on_the_timeline() {
+        let mut w = ws();
+        let o = w.run("get_activity", &json!({})).unwrap();
+        assert!(o.result.contains("No mouse or keyboard log"));
+        w.activity = Some(Activity { typing: vec![(4000.0, 8000.0, 40)], clicks: vec![1000.0, 9000.0], idle: vec![(0.0, 3000.0)] });
+        w.run("set_speed", &json!({ "start_ms": 4000, "end_ms": 8000, "speed": 4 })).unwrap();
+        let v: Value = serde_json::from_str(&w.run("get_activity", &json!({})).unwrap().result).unwrap();
+        // the typing now plays in 1 s; the click after it moved 3 s earlier
+        assert_eq!(v["typing"], json!([[4000.0, 5000.0, 40]]));
+        assert_eq!(v["clicks"], json!([1000.0, 6000.0]));
+        assert_eq!(v["idle"], json!([[0.0, 3000.0]]));
     }
 
     #[test]
