@@ -10,15 +10,37 @@
 [![Windows](https://img.shields.io/badge/Windows-10%2B%20x86__64-0078d4?logo=windows&logoColor=white)](https://github.com/mehfuzh/screenforge/releases/latest/download/ScreenForge-windows-x86_64-setup.exe)
 [![Status](https://img.shields.io/badge/Status-early%20alpha-ffe16b)](docs/STATUS.md)
 
-**Your AI screen editor: create professional screencasts in minutes.**
+**Your AI screen editor. Just ask. It edits.**
 
-Open source screen recorder and timeline editor for macOS, Windows and Linux, written in Rust, for
-tutorials, product demos and YouTube. Recordings come out polished: automatic zooms that follow your clicks and
-typing, a smooth cursor, backgrounds, and an audio track you can split, trim, move, mute and
-speed up on its own. Projects are saved as `.screenforge` packages; Screen Studio projects
-(`.screenstudio`) can be imported.
+ScreenForge is an open source AI video editor and screen recorder for macOS, Windows and Linux,
+written in Rust. Record your screen, your camera or an iPhone, or drop in any MP4, MOV or M4V,
+then tell the agent what you want: "cut the ums and the long pauses", "zoom on my clicks",
+"get this under a minute", "add calm music and a mountain photo behind it". It edits the
+project on the timeline while you watch, and everything it does can be changed or undone by
+hand. Projects are saved as `.screenforge` packages; Screen Studio projects (`.screenstudio`)
+can be imported.
 
 ![ScreenForge editor](docs/demo.gif)
+
+## AI features
+
+- **Editing agent** (Agent page, ⌘L): ask in plain words, or *Auto edit* for a first cut. Claude
+  edits through the same tools you use by hand: cuts, speed, splits, zooms, masks, camera
+  layouts, audio clips, music and voice-overs, backgrounds (including Unsplash search), presets
+  and every sidebar setting. It reads the transcript, finds typing, clicks and idle stretches in
+  the input log, measures motion in the video itself (so imported and iPhone videos work too)
+  and looks at frames to check what is on screen. A whole answer is one undo; editing by hand
+  stops the agent and keeps your edit. Models: Sonnet 5.5 (default), Opus 5.5 or Haiku 5.5.
+- **AI voice narration**: type a script and Kokoro-82M reads it into a voice-over take, on your
+  computer (six voices, adjustable speed). The agent can write and place narration too.
+- **Automatic captions**: on-device Whisper transcription of the microphone and recorded
+  voice-overs; narrated takes carry their exact words. Styled captions in preview and export,
+  SRT and WebVTT export.
+- **Camera smarts**: on-device face tracking keeps you centred; DaVinci Resolve style colour
+  grading and `.cube` LUTs.
+
+Captions, narration and face tracking run locally; the agent runs on Claude through the
+ScreenForge backend (see `site/privacy.html` for what is sent).
 
 ## Download
 
@@ -57,25 +79,24 @@ If the dialog never appears or recording reports that no ScreenCast portal was f
 after switching between desktops), restart the portal: `systemctl --user restart xdg-desktop-portal`.
 
 **Pricing:** recording and editing are free and open source (Apache-2.0), and so are your first
-three exports. After that, exporting from the official build needs a license: US$49
-once (lifetime, no subscription), verified offline. It is Apache-2.0 code, so you can always build it yourself and
-remove the gate; the license pays for the maintained, signed and notarized download, the CI that
-builds it, and ongoing maintenance. See `backend/README.md` for how keys are issued.
+three exports.
 
-> Status: early alpha. Records the screen with ScreenCaptureKit (plus an optional webcam), edits on a GPU-rendered
-> timeline (cuts, speed, zooms that follow the cursor, smoothed cursor, backgrounds, padding,
-> shadow, camera layouts, face tracking and DaVinci Resolve style colour grading for the camera, captions transcribed on device with Whisper) and exports MP4/HEVC/ProRes/GIF/WebM with mixed audio, background
-> music and an independent audio track. See `docs/STATUS.md` for what is missing.
+- **Pro**, US$20/month: the AI agent with 1,000 credits a month (one credit is about US$0.01 of
+  Claude usage) and unlimited export. Credit packs (500 / 1,250 / 2,500 for US$10 / 25 / 50)
+  top it up and never expire.
+- **Creator**, US$49 once: unlimited export for life, verified offline, no agent.
 
-## Product roadmap
+It is Apache-2.0 code, so you can always build it yourself and remove the export gate; the
+license pays for the maintained, signed and notarized download, the CI that builds it, and
+ongoing maintenance. The hosted agent needs Pro; debug builds can call Claude directly with
+your own `ANTHROPIC_API_KEY`. See `backend/README.md` for how keys and credits are issued.
 
-Controls for these show up greyed out in the app (hover: "on the product roadmap") rather than half-working:
-
-- **Masks and highlights** — blur or hide regions, spotlight areas
-- **Crop editing** — the Crop tool in the preview toolbar
-- **Keyboard shortcut overlay** — key-cap rendering of recorded keystrokes
-- **Device frames** — iPhone/iPad recording and mockup frames
-- **Unsplash backgrounds** — online wallpaper search
+> Status: early alpha. Records the screen (plus an optional webcam or a cabled iPhone/iPad),
+> edits on a GPU-rendered timeline (cuts, speed, zooms that follow the cursor, smoothed cursor,
+> backgrounds, masks, crop, device frames, camera layouts with face tracking and colour
+> grading, captions, voice-overs and AI narration), edits for you with the agent, and exports
+> MP4/HEVC/ProRes/GIF/WebM with mixed audio and background music. See `docs/STATUS.md` for what
+> is missing.
 
 ## Layout
 
@@ -86,10 +107,14 @@ Controls for these show up greyed out in the app (hover: "on the product roadmap
 | `crates/sf-media`    | ffmpeg-driven decode (HLS fMP4 → RGBA) and encode (rawvideo → H.264/HEVC/ProRes/GIF/WebM + audio mix) |
 | `crates/sf-render`   | wgpu compositor (WGSL): background, shadow, rounded screen, camera (Resolve style grade, 3D LUTs), cursor sprites |
 | `crates/sf-session`  | an opened project: sources, caches, face tracking, per-frame `FrameDesc` |
+| `crates/sf-agent`    | editing agent: Claude tool loop (timeline, cuts, speed, zooms, settings, activity, motion, frames) over a copy of the project |
+| `crates/sf-tts`      | on-device AI narration: Kokoro-82M via ONNX Runtime, misaki pronunciation, word timings for captions |
+| `crates/sf-transcribe` | on-device captions: whisper.cpp with per-word timestamps |
+| `crates/sf-license`  | offline Ed25519 license keys that gate export |
 | `crates/sf-vision`   | on-device face detection for the camera feed (SeetaFace cascade, model compiled in) |
 | `crates/sf-export`   | headless export loop |
-| `crates/sf-recording`| recorder (ScreenCaptureKit, webcam, input events, cursor capture) writing the polyrecorder layout |
-| `apps/studio`        | egui desktop app (launcher, editor, export) |
+| `crates/sf-recording`| recorder (ScreenCaptureKit, webcam, iPhone/iPad, input events, cursor capture) writing the polyrecorder layout; video import |
+| `apps/studio`        | egui desktop app (launcher, editor, agent panel, narration, export) |
 | `apps/sf-cli`        | `sf inspect | frame | export | resave` |
 
 ## Requirements
@@ -120,13 +145,14 @@ cargo run -p sf-cli -- export  "…/My Recording.screenforge" -o out.mp4 --fps 6
 cargo run -p sf-cli -- import  "…/My Recording.screenstudio"   # copy to ~/ScreenForge Projects
 cargo run -p studio -- "…/My Recording.screenforge"   # editor
 cargo run -p studio                                      # recording picker
+ANTHROPIC_API_KEY=sk-ant-… cargo run -p studio -- "…/My Recording.screenforge"   # agent without the backend (debug builds)
 ```
 
 The app needs Screen Recording and Input Monitoring permissions (System Settings →
 Privacy & Security) for the process that runs it (your terminal when using `cargo run`).
 
 Editor shortcuts: Space play/pause · ←/→ frame · ⇧←/→ second · S split · ⌫ delete clip ·
-⌘Z/⌘⇧Z undo/redo · ⌘S save · ⌘E export · ⌘+wheel zoom timeline.
+⌘Z/⌘⇧Z undo/redo · ⌘L agent · ⌘S save · ⌘E export · ⌘+wheel zoom timeline.
 
 ## License
 
