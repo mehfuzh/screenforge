@@ -31,6 +31,8 @@ const photo = (p: any) => ({
   authorUrl: p.user?.links?.html,
   photoUrl: p.links?.html,
   downloadLocation: p.links?.download_location,
+  // what the photo shows, so the editor's agent can pick one by its content
+  description: p.alt_description ?? p.description ?? null,
 });
 
 serve(async (req) => {

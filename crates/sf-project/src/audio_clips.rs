@@ -42,6 +42,10 @@ pub struct AudioClip {
     /// Clips on different layers may overlap in time and are mixed together.
     #[serde(default)]
     pub layer: u32,
+    /// Gain in dB with a limiter, for a quiet clip (`sfBoostDb`). `None`: a microphone clip
+    /// takes `config.audio.microphoneBoostDb`, the whole-track boost of older projects.
+    #[serde(default, rename = "sfBoostDb", skip_serializing_if = "Option::is_none")]
+    pub boost_db: Option<f64>,
 }
 
 fn one() -> f64 {
@@ -52,7 +56,7 @@ impl AudioClip {
     pub const MIN_DURATION_MS: f64 = 50.0;
 
     pub fn new(track: AudioTrack, output_start_ms: f64, source_start_ms: f64, source_end_ms: f64, speed: f64) -> Self {
-        AudioClip { id: new_id(), track, output_start_ms, source_start_ms, source_end_ms, speed: speed.max(0.01), volume: 1.0, muted: false, layer: 0 }
+        AudioClip { id: new_id(), track, output_start_ms, source_start_ms, source_end_ms, speed: speed.max(0.01), volume: 1.0, muted: false, layer: 0, boost_db: None }
     }
 
     pub fn source_duration_ms(&self) -> f64 {

@@ -18,6 +18,8 @@ pub enum Screen {
     /// thread (the spinner keeps turning however long the load takes).
     /// Loading a project; the progress is filled while a Screen Studio project is imported.
     Opening(PathBuf, std::sync::mpsc::Receiver<anyhow::Result<sf_session::Session>>, std::sync::Arc<sf_project::ImportProgress>),
+    /// A new, empty project: drop a screencast or video in (or choose one) to start it.
+    Blank,
 }
 
 pub struct App {
@@ -37,6 +39,10 @@ pub struct App {
     titlebar_fix: u8,
     /// Project passed on the command line (`screenforge My.screenforge`), opened on the first frame.
     pending_open: Option<PathBuf>,
+    /// The Opening screen is adding a video to the project it reopens (not importing one).
+    appending: bool,
+    /// SF_START_NEW was handled.
+    started_new: bool,
     /// First-launch permissions window.
     perm_setup: Option<crate::permissions::PermissionsSetup>,
     /// Closing a just-recorded project: ask keep / move to Trash. `true` = quit afterwards.
@@ -137,7 +143,7 @@ impl App {
         let mut picker = Picker::default();
         picker.load_inputs();
         let perm_setup = (crate::permissions::PermissionsSetup::needed() || std::env::var_os("SF_SHOW_PERMISSIONS").is_some()).then(crate::permissions::PermissionsSetup::start);
-        let app = App { gpu, screen: Screen::Picker(picker), error: None, prefs, window_mode: WindowMode::Picker, picker_height: crate::picker::BAR_WINDOW_H, placed_once: false, tray: None, tray_tried: false, area_select: None, window_select: None, titlebar_fix: 0, perm_setup, confirm_close: None, quitting: false, fresh_open: None, last_size: None, last_pointer: None, #[cfg(target_os = "linux")] input_region: crate::os::InputRegion::new(cc), #[cfg(target_os = "windows")] window_shape: crate::os::WindowShape::new(cc), pending_open: std::env::args().nth(1).map(PathBuf::from).filter(|p| p.is_dir() || p.extension().is_some_and(|e| e == sf_project::PACKAGE_EXTENSION || e == sf_project::SCREEN_STUDIO_EXTENSION)) };
+        let app = App { gpu, screen: Screen::Picker(picker), error: None, prefs, window_mode: WindowMode::Picker, picker_height: crate::picker::BAR_WINDOW_H, placed_once: false, tray: None, tray_tried: false, area_select: None, window_select: None, titlebar_fix: 0, perm_setup, confirm_close: None, quitting: false, fresh_open: None, last_size: None, last_pointer: None, #[cfg(target_os = "linux")] input_region: crate::os::InputRegion::new(cc), #[cfg(target_os = "windows")] window_shape: crate::os::WindowShape::new(cc), appending: false, started_new: false, pending_open: std::env::args().nth(1).map(PathBuf::from).filter(|p| p.is_dir() || sf_recording::import::is_video(p) || p.extension().is_some_and(|e| e == sf_project::PACKAGE_EXTENSION || e == sf_project::SCREEN_STUDIO_EXTENSION)) };
         crate::open_docs::set_context(&cc.egui_ctx);
         // a project on the command line opens on the first frame (`pending_open`)
         app
@@ -315,7 +321,32 @@ impl App {
 
     /// Switch to the editor window and show "Opening …" while the project loads in the
     /// background; `open_project` finishes once it has.
+    /// Add the video `video` to the end of the open project: saved, extended on a background
+    /// thread (`sf_recording::import::append_video`, a new clip after the last one), reopened.
+    fn begin_append(&mut self, video: PathBuf, ctx: &egui::Context) {
+        let Screen::Editor(ed) = &mut self.screen else { return };
+        ed.save_if_dirty();
+        let project = ed.path.clone();
+        let source_ms = ed.session.source.duration_ms;
+        let (tx, rx) = std::sync::mpsc::channel();
+        let (gpu, add, repaint) = (self.gpu.clone(), video.clone(), ctx.clone());
+        let progress = std::sync::Arc::new(sf_project::ImportProgress::default());
+        let shared = progress.clone();
+        std::thread::Builder::new()
+            .name("append-video".into())
+            .spawn(move || {
+                let loaded = append_to_project(&project, &add, source_ms, &shared).and_then(|p| Editor::load_session(&p, gpu));
+                let _ = tx.send(loaded);
+                repaint.request_repaint();
+            })
+            .expect("spawn video appender");
+        self.appending = true;
+        self.screen = Screen::Opening(video, rx, progress);
+        ctx.request_repaint();
+    }
+
     fn begin_open(&mut self, path: PathBuf, ctx: &egui::Context) {
+        self.appending = false;
         self.leave_editor();
         let (tx, rx) = std::sync::mpsc::channel();
         let (gpu, load_path, repaint) = (self.gpu.clone(), path.clone(), ctx.clone());
@@ -324,8 +355,8 @@ impl App {
         std::thread::Builder::new()
             .name("open-project".into())
             .spawn(move || {
-                // a `.screenstudio` package is imported to a `.screenforge` one before it opens
-                let loaded = sf_session::create::package_to_open(&load_path, &import).and_then(|p| Editor::load_session(&p, gpu));
+                // a `.screenstudio` package or a video file becomes a `.screenforge` package first
+                let loaded = open_or_import(&load_path, &import).and_then(|p| Editor::load_session(&p, gpu));
                 let _ = tx.send(loaded);
                 repaint.request_repaint();
             })
@@ -414,7 +445,40 @@ fn project_dialog() -> rfd::FileDialog {
 
 /// Placeholder while a project loads: its name and a spinner, centred on the editor background.
 /// While a Screen Studio project is copied in, an import dialog with progress and Cancel instead.
-fn opening_ui(ui: &mut egui::Ui, path: &std::path::Path, progress: &sf_project::ImportProgress) {
+/// Append `video` to the project at `project` (its recording is `source_ms` long) as a new clip
+/// at the end of the timeline; returns the project to reopen.
+fn append_to_project(project: &std::path::Path, video: &std::path::Path, source_ms: f64, progress: &sf_project::ImportProgress) -> anyhow::Result<PathBuf> {
+    use std::sync::atomic::Ordering;
+    let added = sf_recording::import::probe(video)?;
+    progress.total.store((source_ms + added.duration_ms).max(1.0) as u64, Ordering::Relaxed);
+    let mut pkg = sf_project::ProjectPackage::open(project)?;
+    let (start, len) = sf_recording::import::append_video(&pkg.recording_dir(), video, |ms| progress.done.store(ms as u64, Ordering::Relaxed), &progress.cancel)?;
+    pkg.project.scenes[0].slices.push(sf_project::v4::Slice::new(start, start + len));
+    pkg.save()?;
+    Ok(project.to_path_buf())
+}
+
+/// The package to open for `path`: a project as it is, a Screen Studio project copied in, or a
+/// video file (`.mov`, `.mp4`, `.m4v`) made into a new project (progress in ms of video).
+fn open_or_import(path: &std::path::Path, progress: &sf_project::ImportProgress) -> anyhow::Result<PathBuf> {
+    use std::sync::atomic::Ordering;
+    if !sf_recording::import::is_video(path) {
+        return sf_session::create::package_to_open(path, progress);
+    }
+    let probe = sf_recording::import::probe(path)?;
+    progress.total.store(probe.duration_ms.max(1.0) as u64, Ordering::Relaxed);
+    let name = path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| "Video".into());
+    let dir = crate::recorder::recordings_folder().join(format!("Import {} {}", name, chrono::Local::now().format("%Y-%m-%d %H.%M.%S")));
+    sf_recording::import::import_video(path, &dir, |ms| progress.done.store(ms as u64, Ordering::Relaxed), &progress.cancel)?;
+    // a tall, phone-shaped video starts in a phone frame, like a Device recording
+    let tall = probe.height as f64 >= probe.width as f64 * 1.6;
+    let opts = sf_session::create::CreateOptions { name, projects_folder: sf_session::create::default_projects_folder(), default_config: None, create_automatic_zooms: false, markers_ms: vec![], device_mockup: tall };
+    let pkg = sf_session::create::create_project_from_recording(&dir, opts)?;
+    sf_session::preview::write_quicklook_preview_async(&pkg.path);
+    Ok(pkg.path)
+}
+
+fn opening_ui(ui: &mut egui::Ui, path: &std::path::Path, progress: &sf_project::ImportProgress, appending: bool) {
     use std::sync::atomic::Ordering;
     let pal = crate::theme::p();
     let rect = ui.max_rect();
@@ -422,7 +486,7 @@ fn opening_ui(ui: &mut egui::Ui, path: &std::path::Path, progress: &sf_project::
     let c = rect.center();
     let (done, total) = (progress.done.load(Ordering::Relaxed), progress.total.load(Ordering::Relaxed));
     if total > 0 && done < total {
-        import_dialog(ui, path, progress, done, total);
+        import_dialog(ui, path, progress, done, total, appending);
         return;
     }
     egui::Spinner::new().size(22.0).color(pal.text_dim).paint_at(ui, egui::Rect::from_center_size(egui::pos2(c.x, c.y - 22.0), egui::vec2(22.0, 22.0)));
@@ -430,7 +494,7 @@ fn opening_ui(ui: &mut egui::Ui, path: &std::path::Path, progress: &sf_project::
 }
 
 /// Modal shown while a Screen Studio project is copied in, framed like the export progress.
-fn import_dialog(ui: &mut egui::Ui, path: &std::path::Path, progress: &sf_project::ImportProgress, done: u64, total: u64) {
+fn import_dialog(ui: &mut egui::Ui, path: &std::path::Path, progress: &sf_project::ImportProgress, done: u64, total: u64, appending: bool) {
     use crate::widgets::{self, Icon};
     use egui::{vec2, CornerRadius, RichText};
     use std::sync::atomic::Ordering;
@@ -442,6 +506,9 @@ fn import_dialog(ui: &mut egui::Ui, path: &std::path::Path, progress: &sf_projec
     let started_id = egui::Id::new(("import_started", path));
     let started = ctx.data_mut(|d| *d.get_temp_mut_or_insert_with(started_id, std::time::Instant::now));
     let gb = |b: u64| b as f64 / 1e9;
+    // a video reports ms of video converted, a project bytes copied
+    let video = sf_recording::import::is_video(path);
+    let clock = |ms: u64| short_duration(ms as f64 / 1000.0);
 
     let frame = egui::Frame::NONE.fill(pal.bg).stroke(egui::Stroke::new(1.0, pal.border)).corner_radius(crate::theme::RADIUS).inner_margin(egui::Margin::symmetric(22, 20)).shadow(ctx.global_style().visuals.window_shadow);
     egui::Modal::new(egui::Id::new("import_progress")).frame(frame).show(&ctx, |ui| {
@@ -455,7 +522,7 @@ fn import_dialog(ui: &mut egui::Ui, path: &std::path::Path, progress: &sf_projec
             widgets::paint_icon(ui.painter(), egui::Rect::from_center_size(tile.center(), vec2(18.0, 18.0)), Icon::Folder, pal.accent);
             ui.vertical(|ui| {
                 ui.add_space(2.0);
-                ui.label(RichText::new("Importing project").size(15.0).strong().color(pal.text));
+                ui.label(RichText::new(if appending { "Adding video to project" } else if video { "Importing video" } else { "Importing project" }).size(15.0).strong().color(pal.text));
                 ui.add_space(3.0);
                 let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
                 ui.add(egui::Label::new(RichText::new(name).size(12.5).color(pal.text_dim)).truncate());
@@ -474,7 +541,8 @@ fn import_dialog(ui: &mut egui::Ui, path: &std::path::Path, progress: &sf_projec
         ui.add_space(10.0);
 
         ui.horizontal(|ui| {
-            ui.label(RichText::new(format!("{:.2} of {:.2} GB", gb(done), gb(total))).size(12.5).color(pal.text_dim));
+            let amount = if video { format!("{} of {}", clock(done), clock(total)) } else { format!("{:.2} of {:.2} GB", gb(done), gb(total)) };
+            ui.label(RichText::new(amount).size(12.5).color(pal.text_dim));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 let el = started.elapsed().as_secs_f64();
                 let eta = if cancelling { "Cancelling…".to_string() } else if frac > 0.02 && el > 1.0 { format!("About {}", short_duration(el / frac - el)) } else { "Estimating…".to_string() };
@@ -489,7 +557,7 @@ fn import_dialog(ui: &mut egui::Ui, path: &std::path::Path, progress: &sf_projec
         ui.horizontal(|ui| {
             ui.vertical(|ui| {
                 ui.set_max_width(ui.available_width() - 100.0);
-                widgets::hint(ui, "Your original project stays as it is. The copy is saved to ScreenForge Projects.");
+                widgets::hint(ui, if appending { "The video goes after the last clip on the timeline. Your video file stays as it is." } else if video { "Your video stays as it is. The new project is saved to ScreenForge Projects." } else { "Your original project stays as it is. The copy is saved to ScreenForge Projects." });
             });
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 let cancel = ui.add_enabled_ui(!cancelling, |ui| widgets::secondary_button(ui, "Cancel").on_hover_text("Esc")).inner;
@@ -504,6 +572,63 @@ fn import_dialog(ui: &mut egui::Ui, path: &std::path::Path, progress: &sf_projec
 }
 
 /// "12s left", "3 min left".
+/// What the empty project window asks for.
+enum BlankAction {
+    Choose,
+    Home,
+}
+
+/// The new, empty project: a drop zone for a screencast or video, or a file to choose.
+fn blank_ui(ui: &mut egui::Ui) -> Option<BlankAction> {
+    use crate::widgets;
+    let pal = crate::theme::p();
+    let rect = ui.max_rect();
+    ui.painter().rect_filled(rect, 0.0, pal.bg);
+    let zone = egui::Rect::from_center_size(rect.center(), egui::vec2((rect.width() - 120.0).min(640.0), (rect.height() - 160.0).min(360.0)));
+    // a dashed outline, like a drop target
+    let dash = |a: egui::Pos2, b: egui::Pos2| ui.painter().extend(egui::Shape::dashed_line(&[a, b], egui::Stroke::new(1.5, pal.border), 8.0, 6.0));
+    dash(zone.left_top(), zone.right_top());
+    dash(zone.right_top(), zone.right_bottom());
+    dash(zone.right_bottom(), zone.left_bottom());
+    dash(zone.left_bottom(), zone.left_top());
+    let c = zone.center();
+    widgets::paint_icon(ui.painter(), egui::Rect::from_center_size(egui::pos2(c.x, c.y - 70.0), egui::vec2(34.0, 34.0)), widgets::Icon::Plus, pal.text_dim);
+    ui.painter().text(egui::pos2(c.x, c.y - 22.0), egui::Align2::CENTER_CENTER, "Drop a screencast or video here", egui::FontId::proportional(18.0), pal.text);
+    ui.painter().text(egui::pos2(c.x, c.y + 6.0), egui::Align2::CENTER_CENTER, "A .mov, .mp4 or .m4v becomes a new project you can edit", egui::FontId::proportional(13.0), pal.text_dim);
+    let mut action = None;
+    let buttons = egui::Rect::from_center_size(egui::pos2(c.x, c.y + 56.0), egui::vec2(360.0, 36.0));
+    ui.scope_builder(egui::UiBuilder::new().max_rect(buttons).layout(egui::Layout::left_to_right(egui::Align::Center).with_main_justify(false)), |ui| {
+        ui.add_space(((buttons.width() - 300.0) / 2.0).max(0.0));
+        if widgets::accent_button(ui, "Choose a video…").clicked() {
+            action = Some(BlankAction::Choose);
+        }
+        if widgets::secondary_button(ui, "Back to projects").clicked() {
+            action = Some(BlankAction::Home);
+        }
+    });
+    action
+}
+
+/// While files are dragged over the window: what dropping them does.
+fn drop_hint(ctx: &egui::Context, editing: bool) {
+    let hovered: Vec<PathBuf> = ctx.input(|i| i.raw.hovered_files.iter().filter_map(|f| f.path.clone()).collect());
+    if hovered.is_empty() {
+        return;
+    }
+    let pal = crate::theme::p();
+    let video = hovered.iter().any(|p| sf_recording::import::is_video(p));
+    let text = match (video, editing) {
+        (true, true) => "Drop to add the video to the end of this project",
+        (true, false) => "Drop the video to make a project",
+        (false, _) => "Drop to open the project",
+    };
+    let rect = ctx.content_rect();
+    let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::new("drop_hint")));
+    painter.rect_filled(rect, 0.0, pal.bg.gamma_multiply(0.82));
+    painter.rect_stroke(rect.shrink(10.0), egui::CornerRadius::same(crate::theme::RADIUS), egui::Stroke::new(2.0, pal.accent), egui::StrokeKind::Inside);
+    painter.text(rect.center(), egui::Align2::CENTER_CENTER, text, egui::FontId::proportional(16.0), pal.text);
+}
+
 fn short_duration(secs: f64) -> String {
     if secs < 60.0 {
         format!("{:.0}s left", secs.max(1.0))
@@ -581,11 +706,23 @@ impl eframe::App for App {
             ctx.request_repaint();
         }
         self.tray_tick(ctx, &mut open_request);
+        let editing = matches!(self.screen, Screen::Editor(_));
+        let mut append_request: Option<PathBuf> = None;
         ctx.input(|i| {
             for f in &i.raw.dropped_files {
-                open_request = Some(f.path().to_path_buf());
+                let p = f.path().to_path_buf();
+                // a video dropped on an open project goes at the end of its timeline
+                if editing && sf_recording::import::is_video(&p) {
+                    append_request = Some(p);
+                } else {
+                    open_request = Some(p);
+                }
             }
         });
+        drop_hint(ctx, editing);
+        if let Some(v) = append_request {
+            self.begin_append(v, ctx);
+        }
 
         if !self.placed_once && matches!(self.screen, Screen::Picker(_)) {
             self.placed_once = true;
@@ -633,8 +770,17 @@ impl eframe::App for App {
                     self.prefs.touch(&p);
                 }
             }
+            Screen::Blank => match blank_ui(ui) {
+                Some(BlankAction::Choose) => {
+                    if let Some(p) = rfd::FileDialog::new().add_filter("Video", &sf_recording::import::VIDEO_EXTENSIONS).pick_file() {
+                        open_request = Some(p);
+                    }
+                }
+                Some(BlankAction::Home) => go_home = true,
+                None => {}
+            },
             Screen::Opening(path, rx, progress) => {
-                opening_ui(ui, path, progress);
+                opening_ui(ui, path, progress, self.appending);
                 match rx.try_recv() {
                     Ok(r) => loaded = Some((path.clone(), r)),
                     Err(std::sync::mpsc::TryRecvError::Empty) => {}
@@ -744,8 +890,18 @@ impl eframe::App for App {
                 p.set_status(format!("Moved “{name}” to the Trash"));
             }
         }
+        // SF_START_NEW opens the empty project window straight away (for screenshots)
+        if action.is_none() && !self.started_new && std::env::var_os("SF_START_NEW").is_some() {
+            self.started_new = true;
+            action = Some(PickerAction::NewProject);
+        }
         match action {
             Some(PickerAction::OpenProject(p)) => open_request = Some(p),
+            Some(PickerAction::NewProject) => {
+                self.screen = Screen::Blank;
+                self.set_window_mode(ctx, WindowMode::Editor);
+                ctx.send_viewport_cmd(egui::ViewportCommand::Title("New project".into()));
+            }
             Some(PickerAction::OpenProjectDialog) => {
                 if let Some(p) = project_dialog().pick_folder() {
                     open_request = Some(p);

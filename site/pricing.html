@@ -3,13 +3,13 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Pricing — ScreenForge</title>
-<meta name="description" content="ScreenForge is free to record and edit. The Creator license is US$49 once, never expires, is verified offline and has a 24-hour refund.">
+<title>Pricing — ScreenForge: free, Pro with the AI agent, or a one-time license</title>
+<meta name="description" content="ScreenForge is free to record and edit. Pro is US$20/month with the AI editing agent, 1,000 credits a month and unlimited export; the Creator license is US$49 once. 24-hour refund on unused purchases.">
 <link rel="canonical" href="https://screenforge.studio/pricing">
 <meta name="color-scheme" content="light dark">
 <meta property="og:type" content="website">
-<meta property="og:title" content="Pricing — ScreenForge">
-<meta property="og:description" content="ScreenForge is free to record and edit. The Creator license is US$49 once, never expires, is verified offline and has a 24-hour refund.">
+<meta property="og:title" content="Pricing — ScreenForge: free, Pro with the AI agent, or a one-time license">
+<meta property="og:description" content="ScreenForge is free to record and edit. Pro is US$20/month with the AI editing agent, 1,000 credits a month and unlimited export; the Creator license is US$49 once. 24-hour refund on unused purchases.">
 <meta property="og:image" content="https://screenforge.studio/og.png?v=3">
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
@@ -231,7 +231,7 @@
   @media (max-width: 560px) { .grid { grid-template-columns: minmax(0, 1fr); } }
 
   /* pricing: one card */
-  .plans { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 56px; margin-top: 44px; align-items: stretch; }
+  .plans { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 28px; margin-top: 44px; align-items: stretch; }
   .plans > * { display: flex; flex-direction: column; }
   .plans > * .foot { margin-top: auto; padding-top: 14px; }
   @media (max-width: 860px) { .plans { grid-template-columns: minmax(0, 1fr); gap: 36px; } }
@@ -362,6 +362,9 @@
 
   /* pricing: the two-option license card and the buy forms */
   .plan.lite { border-color: var(--line-2); }
+  .plan.pro { border-color: var(--jade); box-shadow: 0 0 0 1px var(--jade); }
+  .plan .name .tag { margin-left: 8px; vertical-align: middle; }
+  @media (max-width: 1080px) { .plans { grid-template-columns: minmax(0, 1fr); gap: 32px; } }
   .plan.lite .name { color: var(--jade); }
   .opt { padding-top: 22px; margin-top: 22px; border-top: 1px solid var(--line); }
   .opt:first-of-type { padding-top: 0; margin-top: 0; border-top: 0; }
@@ -437,7 +440,7 @@ gtag('config', 'G-ZYRJDJ736V');
 <main class="doc wide">
   <div class="eyebrow">Pricing</div>
   <h1>Pricing that fits <em>how you work.</em></h1>
-  <p class="stamp">US$49 once · no subscription · verified offline · 24-hour refund</p>
+  <p class="stamp">free to record and edit · Pro US$20/month with the AI agent · Creator US$49 once · 24-hour refund (Pro: before using credits)</p>
 
   <div class="plans" style="margin-top:0">
     <div class="plan lite">
@@ -452,6 +455,26 @@ gtag('config', 'G-ZYRJDJ736V');
       </ul>
       <a class="alt os-dl" href="download.html#mac" style="width:100%;justify-content:center"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1.5v8.3l2.7-2.7 1 1L8 11.8 4.3 8.1l1-1L8 9.8V1.5zM2.5 12h11v1.5h-11z"/></svg> <span class="os-label">Download for macOS</span></a>
       <p class="foot">Everything on the timeline works without paying. The fourth export from the official build is where the key comes in.</p>
+    </div>
+
+    <div class="plan pro">
+      <div class="name">Pro <span class="tag">AI agent</span></div>
+      <div class="opt">
+        <div class="fig">US$20<small>/month</small></div>
+        <div class="per">cancel anytime · credits refill every month</div>
+        <form class="form" data-plan="pro" novalidate>
+          <button class="buy" type="submit">Get Pro</button>
+        </form>
+        <p class="err" role="alert"></p>
+      </div>
+      <ul style="margin-top:24px">
+        <li>The AI editing agent: ask for edits in plain words, or Auto edit the whole video</li>
+        <li>1,000 agent credits every month</li>
+        <li>Top up anytime: credit packs never expire</li>
+        <li>Unlimited export, like Creator</li>
+        <li>Email support from a person, usually the same day</li>
+      </ul>
+      <p class="foot">Stripe takes the payment and asks for your email there. The key arrives by email; activate it in ScreenForge with the same email, and the credits show in the agent panel.</p>
     </div>
 
     <div class="plan">
@@ -475,6 +498,22 @@ gtag('config', 'G-ZYRJDJ736V');
     </div>
   </div>
 
+  <section class="studio" id="credits">
+    <div>
+      <div class="name">Agent credits</div>
+      <p>The AI agent runs on Claude. Each request uses credits for what it costs: one credit is about one cent of Claude usage, and a typical edit takes a few. Pro includes 1,000 a month; when they run out, add a pack. Packs never expire and are used after the monthly credits. The agent is part of Pro, so packs top up a Pro subscription.</p>
+      <p>Buy packs in ScreenForge, from the credits menu in the agent panel.</p>
+    </div>
+    <div class="perks">
+      <ul>
+        <li>500 credits: US$10</li>
+        <li>1,250 credits: US$25</li>
+        <li>2,500 credits: US$50</li>
+        <li>Monthly credits refill on your billing date and do not carry over</li>
+      </ul>
+    </div>
+  </section>
+
   <section class="studio" id="studios">
     <div>
       <div class="name">Studios &amp; teams</div>
@@ -495,6 +534,10 @@ gtag('config', 'G-ZYRJDJ736V');
   <h2>Questions</h2>
   <div class="faq">
     <div>
+      <h3>What does the AI agent cost?</h3>
+      <p>What Claude charges for it, in credits: a short edit takes a few credits, an Auto edit of a long video more. The agent uses Claude Sonnet 5.5 unless you pick another model: Opus 5.5 uses credits twice as fast, Haiku 5.5 about 20 times slower. Pro includes 1,000 credits a month, enough for daily editing; packs top it up and never expire. The agent panel shows your balance and what each conversation used.</p>
+    </div>
+    <div>
       <h3>How is the key checked?</h3>
       <p>On your computer. The app verifies the key's signature locally, so exporting works offline. When it is online it briefly checks in with the license server, so a license moved to another computer stops working on the old one.</p>
     </div>
@@ -508,7 +551,7 @@ gtag('config', 'G-ZYRJDJ736V');
     </div>
     <div>
       <h3>Can I get a refund?</h3>
-      <p>Yes, within 24 hours of the purchase. Email <a href="mailto:license@screenforge.studio">license@screenforge.studio</a> from the address you paid with and the payment is returned, no questions asked.</p>
+      <p>Within 24 hours: the Creator license, no questions asked; Pro and top-ups, if none of their agent credits have been used. Cancel Pro any time. Email <a href="mailto:license@screenforge.studio">license@screenforge.studio</a> from the address you paid with.</p>
     </div>
           <div>
         <h3>Why pay if the source is open?</h3>

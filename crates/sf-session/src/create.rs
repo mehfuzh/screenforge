@@ -20,6 +20,9 @@ pub struct CreateOptions {
     pub create_automatic_zooms: bool,
     /// Source-time ms of markers added while recording.
     pub markers_ms: Vec<f64>,
+    /// An iPhone or iPad screen recording: start in a device frame (a phone for tall or wide
+    /// phone-shaped recordings, else a tablet), on the wallpaper with room around it.
+    pub device_mockup: bool,
 }
 
 /// Default projects folder: `~/ScreenForge Projects`.
@@ -86,6 +89,16 @@ pub fn create_project_from_recording(recording_dir: &Path, opts: CreateOptions) 
     if matches!(bg, None | Some("macOS/san-francisco-dark.jpg") | Some(DEFAULT_WALLPAPER)) {
         let name = crate::assets::system_wallpapers::default_name().unwrap_or_else(|| DEFAULT_WALLPAPER.into());
         project.config.styles.background.system_name = Some(name);
+    }
+    if opts.device_mockup {
+        if let Some(b) = display.and_then(|d| d.sessions.first()).and_then(|s| s.bounds).or_else(|| display.and_then(|d| d.crop_rect())) {
+            let long = b.width.max(b.height) / b.width.min(b.height).max(1.0);
+            let kind = if long >= 1.6 { sf_engine::device::Kind::Phone } else { sf_engine::device::Kind::Tablet };
+            project.config.device.enable_mockup = true;
+            project.config.device.frame_key = Some(sf_engine::device::Frame { kind, finish: sf_engine::device::Finish::Black }.key());
+        }
+        project.config.output.padding_ratio01 = 0.08;
+        project.config.styles.screen_border_radius = 0.0;
     }
     let scene = &mut project.scenes[0];
     scene.slices = vec![Slice::new(0.0, duration)];
@@ -162,7 +175,7 @@ mod tests {
             }
             std::fs::write(&path, meta.to_string()).unwrap();
         }
-        let opts = CreateOptions { name: "Test".into(), projects_folder: tmp.join("projects"), default_config: None, create_automatic_zooms: false, markers_ms: Vec::new() };
+        let opts = CreateOptions { name: "Test".into(), projects_folder: tmp.join("projects"), default_config: None, create_automatic_zooms: false, markers_ms: Vec::new(), device_mockup: false };
         create_project_from_recording(&rec, opts).unwrap().project.config
     }
 

@@ -42,9 +42,11 @@ pub mod caret;
 pub mod clock;
 pub mod config;
 pub mod cursor;
+pub mod device;
 pub mod discover;
 pub mod display;
 pub mod ffmpeg;
+pub mod import;
 pub mod input;
 pub mod log;
 pub mod metadata;
@@ -272,7 +274,16 @@ mod imp {
                 return Err(Error::InvalidConfig("fps must be > 0".into()));
             }
             crate::ffmpeg::ffmpeg_path()?;
-            if !permissions::screen_recording().is_granted() {
+            // a device's screen comes through AVFoundation like a camera: camera access, not
+            // screen recording
+            if matches!(cfg.target, crate::CaptureTarget::Device { .. }) {
+                if !permissions::camera().is_granted() {
+                    permissions::request_camera();
+                    if !permissions::camera().is_granted() {
+                        return Err(Error::PermissionDenied("camera"));
+                    }
+                }
+            } else if !permissions::screen_recording().is_granted() {
                 return Err(Error::PermissionDenied("screenRecording"));
             }
             prepare_dir(&cfg.output_dir)?;
@@ -291,6 +302,17 @@ mod imp {
 
         fn start_inner(cfg: RecordingConfig, camera_capture: Option<Arc<CameraCapture>>, log: RecLog) -> Result<Self> {
             let discovery = discover::Discovery { displays: discover::displays(), windows: discover::windows(), microphones: Vec::new(), cameras: Vec::new() };
+            // a connected iPhone or iPad: started first, since its first frame sizes the recording
+            #[cfg(target_os = "macos")]
+            let device_display = match &cfg.target {
+                crate::CaptureTarget::Device { id } => Some(DisplayRecorder::start_device(&cfg, id, log.clone())?),
+                _ => None,
+            };
+            #[cfg(not(target_os = "macos"))]
+            let device_display: Option<DisplayRecorder> = match cfg.target {
+                crate::CaptureTarget::Device { .. } => return Err(Error::Unsupported),
+                _ => None,
+            };
             // a window picked in the screen-sharing dialog: its stream size gives the plan
             #[cfg(target_os = "linux")]
             let picked = match cfg.target {
@@ -303,11 +325,15 @@ mod imp {
                 None => display::plan(&cfg, &discovery)?,
             };
             #[cfg(not(target_os = "linux"))]
-            let plan = display::plan(&cfg, &discovery)?;
+            let plan = match &device_display {
+                Some(d) => d.plan.clone(),
+                None => display::plan(&cfg, &discovery)?,
+            };
             log.notice(COMPONENT, format!("Display plan: {plan:?}"));
 
             // Input + cursor
-            let (input, cursor) = if cfg.capture_input {
+            // no Mac pointer or keyboard drives a device's screen
+            let (input, cursor) = if cfg.capture_input && device_display.is_none() {
                 let input = InputRecorder::start(log.clone(), cfg.capture_keystrokes)?;
                 let cursor = CursorRecorder::start(&cfg.output_dir, log.clone(), input.cursor_change_sink())?;
                 (Some(input), Some(cursor))
@@ -333,8 +359,9 @@ mod imp {
                 }
                 None => None,
             };
+            // system audio comes with the ScreenCaptureKit stream, which a device recording has not
             #[cfg(target_os = "macos")]
-            let (system_audio, sys_handler) = if cfg.capture_system_audio {
+            let (system_audio, sys_handler) = if cfg.capture_system_audio && device_display.is_none() {
                 let h = PcmSink::spawn(48_000, 2, log.clone(), "SystemAudioRecorder")?;
                 let handler = SystemAudioHandler { sink: h.sink() };
                 audio_channels.push(AudioChannel { kind: "systemAudio", channel_index: next_channel, device_id: None });
@@ -390,7 +417,10 @@ mod imp {
                 None => DisplayRecorder::start(&cfg, plan.clone(), log.clone(), sys_handler)?,
             };
             #[cfg(not(target_os = "linux"))]
-            let display = DisplayRecorder::start(&cfg, plan.clone(), log.clone(), sys_handler)?;
+            let display = match device_display {
+                Some(d) => d,
+                None => DisplayRecorder::start(&cfg, plan.clone(), log.clone(), sys_handler)?,
+            };
             #[cfg(target_os = "linux")]
             if let (Some(i), true) = (&input, display.provides_pointer()) {
                 display.set_pointer_sink(i.pointer_sink());

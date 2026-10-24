@@ -25,6 +25,7 @@ pub fn display_inputs() -> Inputs {
 pub fn device_inputs() -> Inputs {
     Inputs {
         cameras: sf_recording::discover::cameras().iter().map(|c| InputDevice { id: c.id.clone(), name: c.name.clone() }).collect(),
+        phones: sf_recording::device::devices().into_iter().map(|d| InputDevice { id: d.id, name: d.name }).collect(),
         microphones: sf_recording::discover::microphones().iter().map(|m| InputDevice { id: m.id.clone(), name: m.name.clone() }).collect(),
         windows: discover_windows(),
         ..Inputs::default()
@@ -50,8 +51,22 @@ pub fn check_permissions(req: &mut RecordRequest) -> Option<String> {
     if let Some(why) = sf_recording::display::unsupported_reason() {
         return Some(why);
     }
-    if !p::screen_recording().is_granted() && !p::request_screen_recording().is_granted() {
+    // an iPhone or iPad's screen comes through the camera APIs: camera access, no screen
+    // recording, and no Mac pointer or keyboard to log
+    if req.mode == Mode::Device {
+        req.capture_input = false;
+        req.system_audio = false;
+        if matches!(p::request_camera(), sf_recording::PermissionStatus::Denied) {
+            return Some("permission:device".into());
+        }
+    } else if !p::screen_recording().is_granted() && !p::request_screen_recording().is_granted() {
         return Some("permission:screen".into());
+    }
+    if req.mode == Mode::Device {
+        if req.microphone.is_some() && matches!(p::microphone(), sf_recording::PermissionStatus::Denied) {
+            req.microphone = None;
+        }
+        return None;
     }
     if !p::input_monitoring().is_granted() {
         let _ = p::request_input_monitoring();
@@ -70,6 +85,7 @@ pub fn check_permissions(req: &mut RecordRequest) -> Option<String> {
 pub fn permission_help(msg: &str) -> Option<(&'static str, sf_recording::Permission)> {
     match msg {
         "permission:screen" => Some(("ScreenForge needs Screen Recording permission to capture the screen.\n\nEnable ScreenForge in System Settings → Privacy & Security → Screen Recording, then start the recording again. If you launched it from a terminal with cargo run, the permission applies to the terminal app instead.", sf_recording::Permission::ScreenRecording)),
+        "permission:device" => Some(("ScreenForge needs Camera permission to record an iPhone or iPad: macOS treats a connected device's screen like a camera.\n\nEnable ScreenForge in System Settings → Privacy & Security → Camera, then try again.", sf_recording::Permission::Camera)),
         "permission:camera" => Some(("ScreenForge needs Camera permission to record your camera.\n\nEnable ScreenForge in System Settings → Privacy & Security → Camera, or choose \"Don't record camera\" in the toolbar.", sf_recording::Permission::Camera)),
         _ => None,
     }
@@ -216,6 +232,7 @@ impl RecordingScreen {
                 CaptureTarget::Area { display_id: display.id, rect_points: sf_project::schema::common::Rect { x: x0.round(), y: y0.round(), width: w, height: h } }
             }
             (Mode::Window, None) if picks_window_in_portal() => CaptureTarget::PortalWindow,
+            (Mode::Device, _) => CaptureTarget::Device { id: self.req.device.clone().context("no iPhone or iPad chosen")? },
             _ => CaptureTarget::Display { display_id: display.id },
         };
         let mut cfg = RecordingConfig::new(&self.output_dir, target);
@@ -379,7 +396,7 @@ impl RecordingScreen {
                         return match rec.finish() {
                             Ok(_meta) => match sf_session::create::create_project_from_recording(
                                 &self.output_dir,
-                                sf_session::create::CreateOptions { name: self.output_dir.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "Recording".into()), projects_folder: sf_session::create::default_projects_folder(), default_config: None, create_automatic_zooms: true, markers_ms: markers },
+                                sf_session::create::CreateOptions { name: self.output_dir.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "Recording".into()), projects_folder: sf_session::create::default_projects_folder(), default_config: None, create_automatic_zooms: true, markers_ms: markers, device_mockup: self.req.mode == Mode::Device },
                             ) {
                                 Ok(pkg) => {
                                     sf_session::preview::write_quicklook_preview_async(&pkg.path);
@@ -446,7 +463,7 @@ fn icon_glyph(p: &egui::Painter, r: egui::Rect, icon: crate::widgets::Icon, size
 /// stop); `glyph` paints its label. Hover and press deepen the glass tint like the toolbar.
 fn tape_key(ui: &mut Ui, rect: egui::Rect, id: &str, face: Option<Color32>, glyph: impl FnOnce(&egui::Painter, egui::Rect), tooltip: &str) -> egui::Response {
     let pal = theme::p();
-    let resp = ui.interact(rect, ui.id().with(("tape-key", id)), egui::Sense::click());
+    let resp = ui.interact(rect, ui.id().with(("tape-key", id)), egui::Sense::click()).on_hover_cursor(egui::CursorIcon::PointingHand);
     let p = ui.painter();
     let fill = match face {
         Some(c) if resp.is_pointer_button_down_on() => c.gamma_multiply(0.8),
@@ -465,7 +482,7 @@ fn target_name(req: &RecordRequest) -> &'static str {
         Mode::Display => "Display",
         Mode::Window => "Window",
         Mode::Area => "Area",
-        Mode::Device => "Device",
+        Mode::Device => "iPhone",
     }
 }
 

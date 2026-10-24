@@ -305,6 +305,9 @@ impl Compositor {
                     draws.push((Params { out_size, mode: MODE_SPRITE, dst: rect4(&sp.dst), pivot: sp.pivot, rotation: sp.rotation_rad, alpha: sp.opacity, ..Default::default() }, sp.texture.clone(), None));
                 }
                 Layer::Solid(so) => {
+                    if let Some(sh) = so.shadow {
+                        draws.push((shadow_params(out_size, &so.dst, so.corner_radius, sh), self.white.clone(), None));
+                    }
                     draws.push((Params { out_size, mode: MODE_SOLID, dst: rect4(&so.dst), radius: so.corner_radius, color: color4(so.color), ..Default::default() }, self.white.clone(), None));
                 }
                 Layer::Mask(MaskLayer::Blur { texture, src01, clip01, dst, corner_radius, radius_px, cover, cover_mix }) => {
@@ -473,7 +476,7 @@ mod tests {
             background: BackgroundLayer::Gradient { start: [0.0, 0.0], end: [1.0, 1.0], stops: vec![(Color::from_hex("#4776e6").unwrap(), 0.0), (Color::from_hex("#8e54e9").unwrap(), 1.0)] },
             layers: vec![
                 Layer::Screen(ScreenLayer { texture: screen, src01: Rect::UNIT, dst: Rect { x: 8.0, y: 4.0, width: 48.0, height: 24.0 }, corner_radius: 4.0, shadow: Some(ShadowLayer { color: Color::BLACK, offset: [2.0, 2.0], blur: 4.0, opacity: 0.5, falloff: 0.0 }), inset: None }),
-                Layer::Solid(SolidLayer { dst: Rect { x: 0.0, y: 0.0, width: 4.0, height: 4.0 }, color: Color::WHITE, corner_radius: 0.0 }),
+                Layer::Solid(SolidLayer { dst: Rect { x: 0.0, y: 0.0, width: 4.0, height: 4.0 }, color: Color::WHITE, corner_radius: 0.0, shadow: None }),
                 // mirrored webcam in the bottom-left corner: its top-left quadrant shows the texture's top-right (green)
                 Layer::Camera(CameraLayer { texture: screen_tex.clone(), src01: Rect::UNIT, dst: Rect { x: 0.0, y: 16.0, width: 16.0, height: 16.0 }, corner_radius: 8.0, mirror: true, shadow: None, grade: None, lut: None }),
             ],

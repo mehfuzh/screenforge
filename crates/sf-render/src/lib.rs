@@ -231,6 +231,8 @@ pub struct SolidLayer {
     pub dst: Rect,
     pub color: Color,
     pub corner_radius: f32,
+    /// Cast under the shape (a device frame's body).
+    pub shadow: Option<ShadowLayer>,
 }
 
 /// Screen Studio masks (`scene.masks[]`), drawn over the screen layer.

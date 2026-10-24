@@ -48,7 +48,10 @@ impl AudioClip {
 /// ffmpeg audio filter for a microphone preset (`config.audio.microphoneAudioPreset`) plus an
 /// optional boost in dB. `voice` (Standard) is untouched; the others clean up and level speech.
 /// The boost comes after the preset (so noise reduction sees the mic as recorded) and is
-/// followed by a limiter so a loud passage cannot clip. `None` when nothing is to be done.
+/// followed by a soft-knee compressor that brings the boosted peaks down smoothly, then a
+/// limiter for what gets past it, so a loud passage neither clips nor is crushed flat (gain
+/// and a bare limiter alone put a normal take boosted by 12 dB 8 dB into the limiter, which
+/// is heard as distortion). `None` when nothing is to be done.
 pub fn microphone_filter(preset: &str, boost_db: f64) -> Option<String> {
     let preset = match preset {
         // rumble cut + FFT noise reduction
@@ -57,7 +60,9 @@ pub fn microphone_filter(preset: &str, boost_db: f64) -> Option<String> {
         "podcast" => Some("highpass=f=80,afftdn=nr=18:nf=-30:tn=1,equalizer=f=3500:t=q:w=1.2:g=3,acompressor=threshold=-20dB:ratio=3.5:attack=5:release=150:makeup=6,alimiter=limit=0.89"),
         _ => None,
     };
-    let boost = (boost_db > 0.0 && boost_db.is_finite()).then(|| format!("volume={boost_db:.1}dB,alimiter=limit=0.95"));
+    // `level=disabled`: the limiter only catches peaks, it does not raise the whole take
+    let boost = (boost_db > 0.0 && boost_db.is_finite())
+        .then(|| format!("volume={boost_db:.1}dB,acompressor=threshold=-10dB:ratio=4:knee=6:attack=5:release=150,alimiter=limit=0.89:attack=5:release=100:level=disabled"));
     match (preset, boost) {
         (None, None) => None,
         (Some(p), None) => Some(p.to_string()),
@@ -79,10 +84,13 @@ mod filter_tests {
 
     #[test]
     fn boost_is_limited_and_follows_the_preset() {
-        assert_eq!(microphone_filter("voice", 6.0).unwrap(), "volume=6.0dB,alimiter=limit=0.95");
+        let chain = microphone_filter("voice", 6.0).unwrap();
+        assert!(chain.starts_with("volume=6.0dB,acompressor="), "{chain}");
+        assert!(chain.ends_with(",alimiter=limit=0.89:attack=5:release=100:level=disabled"), "{chain}");
         let chain = microphone_filter("noise-reduction", 12.0).unwrap();
         assert!(chain.starts_with("highpass=f=80,afftdn="), "{chain}");
-        assert!(chain.ends_with(",volume=12.0dB,alimiter=limit=0.95"), "{chain}");
+        assert!(chain.contains(",volume=12.0dB,acompressor="), "{chain}");
+        assert!(chain.ends_with("level=disabled"), "{chain}");
     }
 }
 

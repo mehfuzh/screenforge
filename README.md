@@ -10,6 +10,8 @@
 [![Windows](https://img.shields.io/badge/Windows-10%2B%20x86__64-0078d4?logo=windows&logoColor=white)](https://github.com/mehfuzh/screenforge/releases/latest/download/ScreenForge-windows-x86_64-setup.exe)
 [![Status](https://img.shields.io/badge/Status-early%20alpha-ffe16b)](docs/STATUS.md)
 
+**Your AI screen editor: create professional screencasts in minutes.**
+
 Open source screen recorder and timeline editor for macOS, Windows and Linux, written in Rust, for
 tutorials, product demos and YouTube. Recordings come out polished: automatic zooms that follow your clicks and
 typing, a smooth cursor, backgrounds, and an audio track you can split, trim, move, mute and

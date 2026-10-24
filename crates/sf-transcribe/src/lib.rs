@@ -2,7 +2,8 @@
 //!
 //! The microphone track of each recording session is decoded to 16 kHz mono, run through a
 //! Whisper model with per-word timestamps, and saved as
-//! `transcripts/microphone-session-<n>.json` (see `sf_project::transcript`). Models are the
+//! `transcripts/microphone-session-<n>.json`; each voice-over file likewise as
+//! `transcripts/voice-over-<file stem>.json` (see `sf_project::transcript`). Models are the
 //! ggml files published with whisper.cpp, mirrored on the `models-v1` GitHub release; they are
 //! downloaded on first use into `<data dir>/ScreenForge/models` (or `$SF_WHISPER_MODELS`),
 //! from our release first and Hugging Face if that fails, and kept only if their SHA-256
@@ -256,16 +257,40 @@ pub fn transcribe_file(ctx: &WhisperContext, audio: &Path, opts: &Options, cance
     transcribe_samples(ctx, &clip.samples, opts, cancel, progress)
 }
 
-/// Transcribe every microphone session of a project and write its transcript files.
-/// Downloads the model first if needed. Returns each file written with its word count.
+/// What one transcript is made from.
+enum Part {
+    Microphone(u32, PathBuf),
+    /// A voice-over file (by name in `voiceovers/`) and its path.
+    VoiceOver(String, PathBuf),
+}
+
+/// Transcribe every microphone session and every voice-over file of a project and write
+/// their transcript files. Downloads the model first if needed. Returns each file written
+/// with its word count.
 pub fn transcribe_project(project: &Path, model: Model, opts: &Options, cancel: Arc<AtomicBool>, progress: impl Fn(Progress) + Send + Sync + 'static) -> Result<Vec<(PathBuf, usize)>> {
     let pkg = ProjectPackage::open(project)?;
-    let rec = pkg.recording.as_ref().context("the project has no recording")?;
-    let dir = pkg.recording_dir();
-    let mic = rec.microphone().context("no microphone was recorded")?;
-    let files: Vec<PathBuf> = mic.sessions.iter().filter_map(|s| s.media_path(&dir)).collect();
+    let mut files: Vec<Part> = vec![];
+    let mic = pkg.recording.as_ref().and_then(|r| r.microphone());
+    if let Some(mic) = mic {
+        let dir = pkg.recording_dir();
+        files.extend(mic.sessions.iter().enumerate().filter_map(|(i, s)| Some(Part::Microphone(i as u32, s.media_path(&dir)?))));
+    }
+    // takes split from one recording share its file: transcribed once; an AI voice's takes
+    // were written with their words
+    let vo_dir = pkg.path.join(sf_project::v4::VoiceOver::DIR);
+    let mut names: Vec<&str> = pkg.project.scenes.iter().flat_map(|s| &s.voice_overs).filter(|v| v.spoken_voice().is_none()).map(|v| v.file_name.as_str()).filter(|n| !n.is_empty()).collect();
+    names.sort_unstable();
+    names.dedup();
+    files.extend(names.into_iter().map(|n| (n, vo_dir.join(n))).filter(|(_, p)| p.is_file()).map(|(n, p)| Part::VoiceOver(n.to_string(), p)));
     if files.is_empty() {
-        bail!("the microphone recording is missing");
+        if mic.is_some() {
+            bail!("the microphone recording is missing");
+        }
+        // only AI narration: its takes were written with their words, nothing is left to do
+        if pkg.project.scenes.iter().flat_map(|s| &s.voice_overs).any(|v| v.spoken_voice().is_some()) {
+            return Ok(vec![]);
+        }
+        bail!("nothing to transcribe: no microphone was recorded and there are no voice-overs");
     }
     let progress = Arc::new(progress);
     let model_path = {
@@ -277,13 +302,20 @@ pub fn transcribe_project(project: &Path, model: Model, opts: &Options, cancel: 
     let generator = Generator { kind: "whisper".into(), model: Some(model.id().into()), language: opts.language.clone(), prompt: opts.prompt.clone(), extra: Extra::new() };
     let mut written = vec![];
     let sessions = files.len();
-    for (i, audio) in files.iter().enumerate() {
+    for (i, part) in files.iter().enumerate() {
         progress(Progress::Transcribing { session: i, sessions, percent: 0 });
         let p = progress.clone();
+        let audio = match part {
+            Part::Microphone(_, a) | Part::VoiceOver(_, a) => a,
+        };
         let items = transcribe_file(&ctx, audio, opts, cancel.clone(), move |percent| p(Progress::Transcribing { session: i, sessions, percent }))?;
         cancelled(&cancel)?;
         let n = items.len();
-        written.push((TranscriptFile::microphone(i as u32, generator.clone(), items).save(&pkg.path)?, n));
+        let file = match part {
+            Part::Microphone(index, _) => TranscriptFile::microphone(*index, generator.clone(), items),
+            Part::VoiceOver(name, _) => TranscriptFile::voice_over(name, generator.clone(), items),
+        };
+        written.push((file.save(&pkg.path)?, n));
     }
     Ok(written)
 }

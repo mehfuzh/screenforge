@@ -167,6 +167,7 @@ pub fn accent_button(ui: &mut Ui, text: &str) -> Response {
 /// quiet card fill at rest, accent only while hovered or pressed so it doesn't shout.
 pub fn accent_icon_button(ui: &mut Ui, icon: Icon, tip: &str) -> Response {
     let (rect, resp) = ui.allocate_exact_size(vec2(BUTTON_H + 4.0, BUTTON_H), Sense::click());
+    let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
     let pal = theme::p();
     let (fill, fg) = if !ui.is_enabled() {
         (pal.card_3, pal.text_dim)
@@ -200,7 +201,12 @@ pub fn accent_badge(ui: &mut Ui, text: &str) -> Response {
 }
 
 pub fn secondary_button(ui: &mut Ui, text: &str) -> Response {
-    ui.add(egui::Button::new(RichText::new(text).size(14.0).color(theme::p().text)).fill(theme::p().card_2).corner_radius(CornerRadius::same(BUTTON_RADIUS)).min_size(vec2(0.0, BUTTON_H)))
+    // a border as well as the fill: on a card of the same colour the fill alone vanishes and
+    // the button reads as a link
+    let pal = theme::p();
+    let border = if ui.is_enabled() { pal.text_faint } else { pal.border };
+    ui.add(egui::Button::new(RichText::new(text).size(14.0).color(pal.text)).fill(pal.card_3).stroke(Stroke::new(1.0, border)).corner_radius(CornerRadius::same(BUTTON_RADIUS)).min_size(vec2(0.0, BUTTON_H)))
+        .on_hover_cursor(egui::CursorIcon::PointingHand)
 }
 
 /// Single-line text field: roomy (38 px) with 4 px corners like the buttons, padded text and a
@@ -265,6 +271,8 @@ pub enum Icon {
     CameraLayout,
     CameraStyle,
     Captions,
+    /// A speech bubble with a voice's waveform in it (AI narration).
+    Narration,
     Audio,
     Keyboard,
     Animations,
@@ -284,6 +292,14 @@ pub enum Icon {
     Record,
     /// Filled square (stop recording).
     Stop,
+    /// Infinity sign (the editing agent, as Cursor marks its Agent mode).
+    Agent,
+    /// Arrow pointing up (send a message).
+    ArrowUp,
+    /// Check mark (the chosen item in a menu).
+    Check,
+    /// Plus sign (a new project).
+    Plus,
 }
 
 /// Live level as an equalizer: the most recent `levels` (0..1, oldest first) as bars that
@@ -408,6 +424,30 @@ pub fn paint_icon(p: &egui::Painter, rect: Rect, icon: Icon, color: Color32) {
         Icon::Stop => {
             p.rect_filled(rr(-0.6, -0.6, 0.6, 0.6), 1.0, color);
         }
+        Icon::Plus => {
+            line((0.0, -0.75), (0.0, 0.75));
+            line((-0.75, 0.0), (0.75, 0.0));
+        }
+        Icon::Check => {
+            line((-0.75, 0.05), (-0.25, 0.55));
+            line((-0.25, 0.55), (0.75, -0.55));
+        }
+        Icon::ArrowUp => {
+            line((0.0, 0.75), (0.0, -0.75));
+            line((-0.55, -0.2), (0.0, -0.75));
+            line((0.0, -0.75), (0.55, -0.2));
+        }
+        Icon::Agent => {
+            // lemniscate of Bernoulli: x = cos t / (1 + sin² t), y = sin t cos t / (1 + sin² t)
+            let pts: Vec<egui::Pos2> = (0..48)
+                .map(|i| {
+                    let t = i as f32 / 48.0 * std::f32::consts::TAU;
+                    let d = 1.0 + t.sin() * t.sin();
+                    pos2(c.x + 0.95 * r * t.cos() / d, c.y + 1.15 * r * t.sin() * t.cos() / d)
+                })
+                .collect();
+            p.add(egui::Shape::closed_line(pts, Stroke::new(1.8, color)));
+        }
         Icon::Pause => {
             p.rect_filled(rr(-0.6, -0.7, -0.2, 0.7), 1.0, color);
             p.rect_filled(rr(0.2, -0.7, 0.6, 0.7), 1.0, color);
@@ -472,6 +512,14 @@ pub fn paint_icon(p: &egui::Painter, rect: Rect, icon: Icon, color: Color32) {
             line((-0.4, 0.4), (-0.3, 0.85));
             line((-0.3, 0.85), (0.1, 0.4));
             line((-0.5, -0.15), (0.5, -0.15));
+        }
+        Icon::Narration => {
+            p.rect_stroke(rr(-0.9, -0.75, 0.9, 0.45), 4.0, s, egui::StrokeKind::Middle);
+            line((-0.45, 0.45), (-0.55, 0.9));
+            line((-0.55, 0.9), (-0.05, 0.45));
+            for (x, h) in [(-0.45, 0.18), (-0.15, 0.4), (0.15, 0.28), (0.45, 0.12)] {
+                line((x, -0.15 - h), (x, -0.15 + h));
+            }
         }
         Icon::Audio => {
             let pts = vec![pos2(c.x - 0.8 * r, c.y - 0.3 * r), pos2(c.x - 0.4 * r, c.y - 0.3 * r), pos2(c.x + 0.1 * r, c.y - 0.75 * r), pos2(c.x + 0.1 * r, c.y + 0.75 * r), pos2(c.x - 0.4 * r, c.y + 0.3 * r), pos2(c.x - 0.8 * r, c.y + 0.3 * r)];
@@ -550,6 +598,7 @@ pub fn paint_icon(p: &egui::Painter, rect: Rect, icon: Icon, color: Color32) {
 /// Icon-only button (quiet).
 pub fn icon_button(ui: &mut Ui, icon: Icon, size: f32, tooltip: &str) -> Response {
     let (rect, resp) = ui.allocate_exact_size(vec2(size + 12.0, size + 8.0), Sense::click());
+    let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
     if resp.hovered() {
         ui.painter().rect_filled(rect, CornerRadius::same(7), theme::p().card_2);
     }
@@ -561,6 +610,7 @@ pub fn icon_button(ui: &mut Ui, icon: Icon, size: f32, tooltip: &str) -> Respons
 /// Rail button drawn with a vector icon.
 pub fn rail_icon(ui: &mut Ui, icon: Icon, selected: bool, tooltip: &str) -> Response {
     let (rect, resp) = ui.allocate_exact_size(vec2(40.0, 40.0), Sense::click());
+    let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
     let painter = ui.painter();
     if selected || resp.hovered() {
         painter.rect_filled(rect, CornerRadius::same(9), if selected { theme::p().card_3 } else { theme::p().card_2 });
@@ -579,6 +629,7 @@ pub fn icon_text_button(ui: &mut Ui, icon: Option<Icon>, text: &str, chevron: bo
     let galley = ui.painter().layout_no_wrap(text.to_string(), font, theme::p().text);
     let w = galley.size().x + 24.0 + if icon.is_some() { 22.0 } else { 0.0 } + if chevron { 18.0 } else { 0.0 };
     let (rect, resp) = ui.allocate_exact_size(vec2(w, 32.0), Sense::click());
+    let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
     let p = ui.painter();
     if resp.hovered() {
         p.rect_filled(rect, CornerRadius::same(8), theme::p().card_2);

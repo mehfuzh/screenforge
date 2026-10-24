@@ -82,10 +82,14 @@ pub struct Editor {
     preview_stale: bool,
     /// Captions panel: Whisper transcription running in the background.
     pub transcribe: crate::captions::TranscribeJob,
+    /// Narration panel: the AI voice's downloads, previews and readings.
+    pub narration: crate::narration::NarrationJob,
     /// Crop tool open: the preview shows the whole recording with the crop frame over it.
     pub crop: Option<crate::crop::CropEditor>,
     /// "Save preset as…", "Rename preset" or "Delete preset" dialog.
     preset_dialog: Option<PresetDialog>,
+    /// Agent page of the sidebar: chat that edits the project.
+    pub agent: crate::agent_panel::AgentPanel,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -151,12 +155,18 @@ impl Editor {
             status: None,
             section: match std::env::var("SF_START_SECTION").as_deref() {
                 Ok("audio") => Section::Audio,
+                Ok("narration") => Section::Narration,
+                Ok("captions") => Section::Captions,
                 Ok("cursor") => Section::Cursor,
                 Ok("animations") => Section::Animations,
                 Ok("shortcuts") => Section::Shortcuts,
                 Ok("camera-layout") => Section::CameraLayout,
                 Ok("camera-style") => Section::CameraStyle,
-                _ => Section::General,
+                Ok("agent") => Section::Agent,
+                Ok("device") => Section::DeviceFrame,
+                Ok("general") => Section::General,
+                // the agent is the first thing to see (it offers the upgrade without Pro)
+                _ => Section::Agent,
             },
             sidebar_open: true,
             audio,
@@ -167,9 +177,11 @@ impl Editor {
             remove_requested: false,
             preview_stale: false,
             transcribe: Default::default(),
+            narration: Default::default(),
             // SF_START_CROP opens the crop tool straight away (for screenshots)
             crop: std::env::var_os("SF_START_CROP").map(|_| crop::CropEditor::new(session_crop)),
             preset_dialog: None,
+            agent: Default::default(),
         }
     }
 
@@ -212,6 +224,13 @@ impl Editor {
         }
         self.session.pkg.project = snapshot;
         self.edit(move |p| *p = current);
+    }
+
+    /// Replace the project with the agent's edit while its turn runs: no undo entry (the
+    /// turn becomes one with `commit_live_edit` when it ends).
+    pub fn apply_agent_project(&mut self, project: sf_project::Project) {
+        self.session.pkg.project = project;
+        self.after_edit();
     }
 
     /// Select a mask (and nothing else).
@@ -485,7 +504,7 @@ impl Editor {
         let dir = self.session.pkg.path.join(sf_project::v4::VoiceOver::DIR);
         match rec.finish(&dir) {
             Ok(Some(take)) => {
-                let silent = take.silent;
+                let (silent, clipped) = (take.silent, take.clipped);
                 let vo = sf_project::v4::VoiceOver::microphone(start, take.duration_ms, take.file_name);
                 let id = vo.id.clone();
                 self.edit(move |p| p.scenes[0].voice_overs.push(vo));
@@ -494,6 +513,9 @@ impl Editor {
                 if silent {
                     // kept so it can be checked, but say why it will play back as nothing
                     self.set_status(format!("Voice-over is silent: {device} sent no voice (muted, input volume too low, or in use by a call?). Choose another microphone in Audio, or raise its input volume in the system sound settings."));
+                } else if clipped {
+                    // the peaks are gone from the file: boosting or filtering cannot bring them back
+                    self.set_status(format!("Added voice-over, but it is distorted: {device} was too loud and cut off the peaks. Lower its input volume in the system sound settings (or move back from it) and record again."));
                 } else {
                     self.set_status("Added voice-over");
                 }
@@ -501,6 +523,33 @@ impl Editor {
             Ok(None) => self.set_status("Voice-over too short: discarded"),
             Err(e) => self.set_status(format!("Could not save the voice-over: {e}")),
         }
+    }
+
+    /// Put takes read by the AI voice on the timeline in one edit (see
+    /// [`crate::narration::place`]) and select the take when there is one.
+    fn place_narration(&mut self, made: Vec<crate::narration::Made>) {
+        let scene = &self.session.pkg.project.scenes[0];
+        // a take deleted while it was being read is not brought back
+        let (made, gone): (Vec<_>, Vec<_>) = made.into_iter().partition(|m| m.replaces.as_ref().is_none_or(|id| scene.voice_overs.iter().any(|v| &v.id == id)));
+        if made.is_empty() {
+            if !gone.is_empty() {
+                self.set_status("The take was deleted while it was being read");
+            }
+            return;
+        }
+        let (n, replaced) = (made.len(), made[0].replaces.is_some());
+        let mut ids = vec![];
+        let mut project = self.session.pkg.project.clone();
+        ids.extend(crate::narration::place(&mut project, made));
+        self.edit(move |p| *p = project);
+        if let [id] = ids.as_slice() {
+            self.select_voice_over(id.clone());
+        }
+        self.set_status(match (n, replaced) {
+            (1, false) => "Added the narration".to_string(),
+            (1, true) => "Read the take again".to_string(),
+            (n, _) => format!("Read {n} narration takes again"),
+        });
     }
 
     /// Cut voice-over `id` at output time `t`; the right-hand part is selected.
@@ -697,7 +746,9 @@ impl Editor {
 
     fn shortcuts(&mut self, ctx: &egui::Context) {
         // the export dialog is modal: its own keys (Esc) are handled in ExportDialog::poll
-        if ctx.memory(|m| m.focused().is_some()) || self.export.open || self.export.is_busy() {
+        // only typing in a text field (agent message, title, search) holds the keys back: a
+        // clicked button or slider also takes focus, and must not swallow Space and the rest
+        if ctx.egui_wants_keyboard_input() || self.export.open || self.export.is_busy() {
             return;
         }
         // while a voice-over records, Space and Esc stop it and nothing else edits the project
@@ -716,7 +767,9 @@ impl Editor {
         let mut section: Option<Section> = None;
         let mut layer_delta = 0i32;
         let mut record = false;
+        let mut agent = false;
         ctx.input_mut(|i| {
+            agent = i.consume_key(egui::Modifiers::COMMAND, egui::Key::L);
             if i.consume_key(egui::Modifiers::ALT, egui::Key::ArrowDown) { layer_delta = 1; }
             if i.consume_key(egui::Modifiers::ALT, egui::Key::ArrowUp) { layer_delta = -1; }
             toggle = i.consume_key(egui::Modifiers::NONE, egui::Key::Space);
@@ -763,6 +816,11 @@ impl Editor {
         if let Some(s) = section {
             self.section = s;
             self.sidebar_open = true;
+        }
+        if agent {
+            self.section = Section::Agent;
+            self.sidebar_open = true;
+            self.agent.focus_input = true;
         }
         if !self.playing {
             self.audio.seek(self.playhead_ms);
@@ -859,10 +917,19 @@ impl Editor {
         let mut go_home = false;
         self.tick(ctx);
         self.shortcuts(ctx);
+        let mut agent = std::mem::take(&mut self.agent);
+        agent.poll(self);
+        self.agent = agent;
         if self.transcribe.poll() {
             self.captions_changed();
         }
         if self.transcribe.is_running() {
+            ctx.request_repaint_after(std::time::Duration::from_millis(150));
+        }
+        if let Some(made) = self.narration.poll() {
+            self.place_narration(made);
+        }
+        if self.narration.working().is_some() || self.narration.is_playing() {
             ctx.request_repaint_after(std::time::Duration::from_millis(150));
         }
 
@@ -941,7 +1008,7 @@ impl Editor {
                         }
                     }
                     ui.add_space(6.0);
-                    widgets::icon_button(ui, widgets::Icon::Command, 16.0, "Shortcuts: Space play · S split · R record voice-over · ⌥↑↓ audio layer · ⌫ delete · ⌘Z undo · ⌘S save · ⌘⇧E export · [ ] jump cuts · ⌘1…⌘0 sidebar · ⌘\\ toggle sidebar");
+                    widgets::icon_button(ui, widgets::Icon::Command, 16.0, "Shortcuts: Space play · S split · R record voice-over · ⌥↑↓ audio layer · ⌫ delete · ⌘Z undo · ⌘S save · ⌘⇧E export · [ ] jump cuts · ⌘1…⌘0 sidebar · ⌘L agent · ⌘\\ toggle sidebar");
                     if let Some((s, t)) = &self.status {
                         if t.elapsed().as_secs() < 4 {
                             ui.label(RichText::new(s).color(theme::p().text_dim));
@@ -959,10 +1026,6 @@ impl Editor {
                     ui.add_space(8.0);
                     ui.spacing_mut().item_spacing.y = 6.0;
                     for s in Section::ALL {
-                        if s.is_roadmap() {
-                            widgets::roadmap(ui, |ui| widgets::rail_icon(ui, s.icon(), false, s.title()));
-                            continue;
-                        }
                         if widgets::rail_icon(ui, s.icon(), self.section == s, s.title()).clicked() {
                             self.section = s;
                         }
@@ -1100,6 +1163,8 @@ impl Editor {
         let elapsed = self.voice_rec.as_ref().map_or(0.0, |r| r.elapsed_ms());
         // nothing heard after a couple of seconds: the mic is muted, too quiet or held by a call
         let no_sound = elapsed > 2000.0 && self.voice_rec.as_ref().is_some_and(|r| r.is_silent());
+        // the microphone cut off the peaks: the take is distorting
+        let too_loud = self.voice_rec.as_ref().is_some_and(|r| r.is_clipping());
 
         // the bar can be dragged anywhere on the preview; where it was left is kept (as a
         // fraction of the preview, so a resized window keeps it in the same spot) across runs
@@ -1143,7 +1208,7 @@ impl Editor {
             x += 68.0;
         }
         let levels: Vec<f32> = self.voice_levels.iter().copied().collect();
-        widgets::paint_level_bars(ui.painter(), Rect::from_min_size(pos2(x, cy - 11.0), vec2(70.0, 22.0)), &levels, pal.meter, theme::glass_alpha(60));
+        widgets::paint_level_bars(ui.painter(), Rect::from_min_size(pos2(x, cy - 11.0), vec2(70.0, 22.0)), &levels, if too_loud { pal.danger } else { pal.meter }, theme::glass_alpha(60));
         x += 80.0;
 
         // right side: Record / Stop, and close while waiting
@@ -1158,7 +1223,13 @@ impl Editor {
             ui.fonts_mut(|f| f.layout_job(job))
         };
         if recording {
-            let (text, color) = if no_sound { (format!("No sound from {mic_name}"), pal.danger) } else { (mic_name, pal.on_glass) };
+            let (text, color) = if too_loud {
+                ("Too loud: lower the input volume".to_string(), pal.danger)
+            } else if no_sound {
+                (format!("No sound from {mic_name}"), pal.danger)
+            } else {
+                (mic_name, pal.on_glass)
+            };
             let galley = fit(text, name_rect.width(), color);
             ui.painter().galley(pos2(name_rect.left(), cy - galley.size().y / 2.0), galley, color);
         } else {
@@ -1508,9 +1579,12 @@ impl Editor {
             self.seek(0.0);
         }
         let (pr, presp) = mid.allocate_exact_size(vec2(36.0, 36.0), Sense::click());
+        let presp = presp.on_hover_cursor(egui::CursorIcon::PointingHand);
         let p = mid.painter();
         p.circle_stroke(pr.center(), 16.0, Stroke::new(1.5, theme::p().text));
-        p.text(pr.center() + vec2(if self.playing { 0.0 } else { 1.0 }, 0.0), Align2::CENTER_CENTER, if self.playing { "⏸" } else { "▶" }, FontId::proportional(14.0), theme::p().text);
+        // the play triangle sits a touch right of centre so it looks centred
+        let icon = if self.playing { widgets::Icon::Pause } else { widgets::Icon::Play };
+        widgets::paint_icon(p, Rect::from_center_size(pr.center() + vec2(if self.playing { 0.0 } else { 1.0 }, 0.0), vec2(13.0, 13.0)), icon, theme::p().text);
         if presp.clicked() {
             self.toggle_play();
         }
@@ -1587,8 +1661,8 @@ fn preset_row(ui: &mut egui::Ui, name: &str, width: f32) -> PresetRowAction {
     let icon = 14.0;
     let delete_rect = Rect::from_center_size(pos2(rect.right() - 14.0, rect.center().y), vec2(icon + 8.0, icon + 8.0));
     let rename_rect = delete_rect.translate(vec2(-(icon + 12.0), 0.0));
-    let delete = ui.interact(delete_rect, row.id.with("delete"), Sense::click());
-    let rename = ui.interact(rename_rect, row.id.with("rename"), Sense::click());
+    let delete = ui.interact(delete_rect, row.id.with("delete"), Sense::click()).on_hover_cursor(egui::CursorIcon::PointingHand);
+    let rename = ui.interact(rename_rect, row.id.with("rename"), Sense::click()).on_hover_cursor(egui::CursorIcon::PointingHand);
     let hovered = row.hovered() || delete.hovered() || rename.hovered();
     if hovered {
         ui.painter().rect_filled(rect, CornerRadius::same(4), pal.card_2);

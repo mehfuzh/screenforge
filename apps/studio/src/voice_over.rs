@@ -25,6 +25,16 @@ pub const VOICE_RMS: f64 = 0.005_62;
 /// while a single click or bump fills one stretch at most.
 pub const MIN_VOICE_WINDOWS: u32 = 4;
 
+/// A sample this close to full scale was cut off by the microphone's converter: the input is
+/// too hot, and no boost or filter can put the top of the wave back.
+pub const CLIP_LEVEL: f32 = 0.999;
+
+/// Clipped samples a take needs before it counts as clipped (a lone full-scale click does not).
+pub const MIN_CLIPPED: u32 = 16;
+
+/// How long the meter stays red after the input clipped.
+const CLIP_HOLD: std::time::Duration = std::time::Duration::from_millis(1500);
+
 /// Samples captured so far, cut into 50 ms stretches to count the ones with voice in them.
 #[derive(Default)]
 struct Capture {
@@ -34,6 +44,9 @@ struct Capture {
     win_sum_sq: f64,
     win_len: usize,
     voice_windows: u32,
+    clipped: u32,
+    /// When the input last clipped, for the meter.
+    clipped_at: Option<Instant>,
 }
 
 impl Capture {
@@ -43,6 +56,12 @@ impl Capture {
 
     fn push(&mut self, v: f32) {
         self.samples.push(v);
+        if v.abs() >= CLIP_LEVEL {
+            self.clipped += 1;
+            if self.clipped >= MIN_CLIPPED {
+                self.clipped_at = Some(Instant::now());
+            }
+        }
         self.win_sum_sq += (v as f64) * (v as f64);
         self.win_len += 1;
         if self.win_len >= self.window {
@@ -56,6 +75,10 @@ impl Capture {
 
     fn is_silent(&self) -> bool {
         self.voice_windows < MIN_VOICE_WINDOWS
+    }
+
+    fn is_clipped(&self) -> bool {
+        self.clipped >= MIN_CLIPPED
     }
 }
 
@@ -83,6 +106,8 @@ pub struct Take {
     pub duration_ms: f64,
     /// Nothing in the take was loud enough to be a voice (see [`MIN_VOICE_WINDOWS`]).
     pub silent: bool,
+    /// The microphone was too loud and cut off the peaks (see [`MIN_CLIPPED`]).
+    pub clipped: bool,
 }
 
 pub struct VoiceRecorder {
@@ -151,13 +176,18 @@ impl VoiceRecorder {
         self.capture.lock().is_silent()
     }
 
+    /// The input clipped within the last moment (the meter shows it in red).
+    pub fn is_clipping(&self) -> bool {
+        self.capture.lock().clipped_at.is_some_and(|t| t.elapsed() < CLIP_HOLD)
+    }
+
     /// Stop capturing and write the take to `dir` as a new WAV file, or `None` when the take
     /// was too short to keep.
     pub fn finish(self, dir: &Path) -> Result<Option<Take>> {
         let VoiceRecorder { rate, capture, _stream, .. } = self;
         drop(_stream);
         let capture = std::mem::take(&mut *capture.lock());
-        let silent = capture.is_silent();
+        let (silent, clipped) = (capture.is_silent(), capture.is_clipped());
         let samples = capture.samples;
         let duration_ms = samples.len() as f64 * 1000.0 / rate as f64;
         if duration_ms < MIN_MS {
@@ -166,7 +196,7 @@ impl VoiceRecorder {
         std::fs::create_dir_all(dir)?;
         let name = format!("voiceover-{}.wav", chrono::Local::now().format("%Y%m%d-%H%M%S-%3f"));
         write_wav(&dir.join(&name), rate, &samples)?;
-        Ok(Some(Take { file_name: name, duration_ms, silent }))
+        Ok(Some(Take { file_name: name, duration_ms, silent, clipped }))
     }
 }
 
@@ -216,6 +246,16 @@ mod tests {
             if i % 2 == 0 { a } else { -a }
         }));
         assert!(!c.is_silent());
+    }
+
+    #[test]
+    fn speech_at_full_scale_is_clipped_but_a_click_is_not() {
+        let click = take((0..48_000).map(|i| if i == 100 { 1.0 } else { 0.01 }));
+        assert!(!click.is_clipped());
+        // a loud word flattened at full scale for 2 ms
+        let hot = take((0..48_000).map(|i| if (1_000..1_096).contains(&i) { 1.0 } else { 0.3 }));
+        assert!(hot.is_clipped());
+        assert!(hot.clipped_at.is_some());
     }
 
     #[test]

@@ -22,7 +22,7 @@
 - Masks: the Mask button on the tool rail adds a blur mask at the playhead. Masks get their own timeline lane (move, resize, Blur / Highlight, disable, remove), an inspector (blur amount or dimming, several areas per mask), and their areas are moved and resized on the preview while the playhead is inside the mask.
 - Update available: on launch (at most daily, `prefs.check_updates`) or on request the app asks GitHub's releases API for the newest version; a dot on the toolbar's gear, an "Update to vX…" menu item and an editor title-bar button open the release page.
 - Export: MP4 (H.264/HEVC), ProRes, GIF, WebM with mixed audio and quality presets.
-- Recording: picker toolbar (Display/Window/Area/Device, camera/mic/system audio pickers,
+- Recording: picker toolbar (Display/Window/Area/Device — Device records an iPhone or iPad connected by cable through AVFoundation, `sf-recording::device`, camera/mic/system audio pickers,
   countdown), ScreenCaptureKit recorder writing the package's `recording/` layout
   (HLS fMP4, cursors, input logs, metadata), project creation with automatic zooms.
 - Camera picture (Camera Style page): face tracking keeps the face centred in the webcam window
@@ -45,7 +45,7 @@
 - Editing the transcript text, Apple Speech transcription, device frame compositing, cutout matting, motion blur.
 - Colour grading for the screen recording itself (the grade applies to the camera picture), Resolve's log wheels / curves / qualifiers, `.cube` LUTs with a non-unit `DOMAIN_MIN/MAX` (parsed, but the domain is not remapped yet).
 - Crop aspect presets, Unsplash, background audio library playback, click sounds in preview/export.
-- Device frames as bundled assets. (Cursor sets are drawn in `sf-session::cursor_sets`: Classic, Light, Pixel, Dot and Hand besides the recorded pointer.)
+- Device frames are drawn shapes (`sf-engine::device`: phone, punch-hole phone, tablet in four finishes), not bundled images. (Cursor sets are drawn in `sf-session::cursor_sets`: Classic, Light, Pixel, Dot and Hand besides the recorded pointer.)
 
 ## Appearance
 
@@ -60,5 +60,4 @@
 
 ## Roadmap items (disabled in the UI)
 
-- Device frames: iPhone/iPad recording and mockup frames
 - Unsplash backgrounds: online wallpaper search

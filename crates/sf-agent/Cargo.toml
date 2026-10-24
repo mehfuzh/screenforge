@@ -1,0 +1,15 @@
+[package]
+name = "sf-agent"
+description = "Editing agent: Claude edits a project's timeline through tools"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+sf-project.workspace = true
+sf-engine.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+ureq = { version = "2", features = ["json"] }
+base64 = "0.22"

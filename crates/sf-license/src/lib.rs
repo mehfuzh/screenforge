@@ -384,6 +384,31 @@ pub fn load_saved() -> Option<String> {
     std::fs::read_to_string(key_file()?).ok().map(|s| s.trim().to_string()).filter(|s| !s.is_empty())
 }
 
+/// Sign this computer out of its license: the backend forgets the activation (so the computer
+/// stops using the license's agent credits and the license is free to activate elsewhere), then
+/// the key and email are removed here. Offline, the computer is still signed out here and the
+/// error says the server was not told.
+pub fn sign_out() -> Result<(), String> {
+    let remote = match (load_email(), device_id()) {
+        (Some(email), Some(device)) => call_backend("license-deactivate", serde_json::json!({ "email": email, "device": device })).map(|_| ()),
+        _ => Ok(()),
+    };
+    forget().map_err(|e| e.to_string())?;
+    if let Some(p) = email_file().filter(|p| p.exists()) {
+        std::fs::remove_file(p).map_err(|e| e.to_string())?;
+    }
+    remote.map_err(|e| format!("Signed out on this computer, but the license server was not told ({e}). Sign in again and out when online to free the license."))
+}
+
+/// A link to Stripe's customer portal for the signed-in Pro subscription (cancel, change the
+/// card, invoices).
+pub fn billing_portal_url() -> Result<String, String> {
+    let email = load_email().ok_or("Sign in first.")?;
+    let device = device_id().ok_or("ScreenForge cannot identify this computer.")?;
+    let v = call_backend("billing-portal", serde_json::json!({ "email": email, "device": device }))?;
+    v.get("url").and_then(|u| u.as_str()).map(String::from).ok_or_else(|| "no portal url".to_string())
+}
+
 /// Remove the saved key (the license moved to another computer).
 pub fn forget() -> std::io::Result<()> {
     match key_file() {

@@ -52,6 +52,8 @@ pub struct DisplayEntry {
 #[allow(dead_code)]
 pub struct Inputs {
     pub cameras: Vec<InputDevice>,
+    /// iPhones and iPads connected by cable.
+    pub phones: Vec<InputDevice>,
     pub microphones: Vec<InputDevice>,
     pub displays: Vec<DisplayEntry>,
     pub windows: Vec<WindowEntry>,
@@ -62,6 +64,7 @@ impl Inputs {
     /// Take the device lists (cameras, microphones, windows) from a background discovery.
     pub fn merge_devices(&mut self, d: Inputs) {
         self.cameras = d.cameras;
+        self.phones = d.phones;
         self.microphones = d.microphones;
         self.windows = d.windows;
     }
@@ -117,6 +120,8 @@ impl Appearance {
 pub enum PickerAction {
     OpenProject(PathBuf),
     OpenProjectDialog,
+    /// An empty project window to drop a video into.
+    NewProject,
     StartRecording(RecordRequest),
     /// Open the drag-to-select overlay; the app starts the recording with the chosen rect.
     SelectArea(RecordRequest),
@@ -146,6 +151,8 @@ pub struct RecordRequest {
     pub countdown_ms: u64,
     /// Capture cursor + keystrokes (needs Input Monitoring; set by the permission check).
     pub capture_input: bool,
+    /// Device mode: the iPhone or iPad to record (`sf_recording::device::DeviceInfo::id`).
+    pub device: Option<String>,
 }
 
 /// Thumbnails decoded on a background thread (the QuickLook previews are full-size PNGs).
@@ -278,6 +285,11 @@ impl Picker {
     /// appears without waiting for device listing (cameras run ffmpeg).
     pub fn load_inputs(&mut self) {
         self.inputs = crate::recorder::display_inputs();
+        self.load_device_inputs();
+    }
+
+    /// List cameras, microphones, windows and connected iPhones/iPads on a background thread.
+    fn load_device_inputs(&mut self) {
         let (tx, rx) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
             let _ = tx.send(crate::recorder::device_inputs());
@@ -294,7 +306,7 @@ impl Picker {
         let mut texts: Vec<String> = [
             "Don't record camera", "Don't record microphone", "Don't record system audio", "Record system audio from all apps",
             "Recording countdown", "None", "3 seconds", "5 seconds", "10 seconds", "Appearance", "Match system", "Light", "Dark", "Osaka Jade", "Quit ScreenForge",
-            "RECENT PROJECTS", "Open", "No projects yet. Record something or open a project.", "Loading…", "No preview", "0123456789 min h d ago", "Move to Trash",
+            "RECENT PROJECTS", "Open", "New", "No projects yet. Record something or open a project.", "Loading…", "No preview", "0123456789 min h d ago", "Move to Trash",
         ]
         .map(String::from)
         .to_vec();
@@ -353,6 +365,7 @@ impl Picker {
 
         // close
         let (r, resp) = ui.allocate_exact_size(vec2(30.0, 30.0), Sense::click());
+        let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
         ui.painter().circle_filled(r.center(), 13.0, pal.glass_button);
         widgets::paint_icon(ui.painter(), egui::Rect::from_center_size(r.center(), vec2(11.0, 11.0)), widgets::Icon::Close, pal.glass_button_fg);
         if resp.clicked() {
@@ -362,7 +375,30 @@ impl Picker {
 
         for (mode, icon, label) in [(Mode::Display, widgets::Icon::Display, "Display"), (Mode::Window, widgets::Icon::Window, "Window"), (Mode::Area, widgets::Icon::Area, "Area"), (Mode::Device, widgets::Icon::Device, "Device")] {
             if mode == Mode::Device {
-                widgets::roadmap(ui, |ui| mode_button(ui, icon, label, false));
+                let tip = "Record an iPhone or iPad connected by cable";
+                let b = mode_button(ui, icon, label, self.mode == Some(mode)).on_hover_text(tip);
+                // several devices: choose one from a menu; one: record it; none: say how
+                if self.inputs.phones.len() > 1 {
+                    let phones = self.inputs.phones.clone();
+                    egui::Popup::menu(&b).show(|ui| {
+                        for p in &phones {
+                            if ui.button(&p.name).clicked() {
+                                action = Some(self.record_device(p));
+                            }
+                        }
+                    });
+                } else if b.clicked() {
+                    match self.inputs.phones.first().cloned() {
+                        Some(p) => action = Some(self.record_device(&p)),
+                        None => {
+                            self.set_status("Connect an iPhone or iPad with a cable, unlock it and tap Trust, then click Device again");
+                            // list again: the device appears once connected and trusted
+                            if self.devices_rx.is_none() {
+                                self.load_device_inputs();
+                            }
+                        }
+                    }
+                }
                 continue;
             }
             let b = mode_button(ui, icon, label, self.mode == Some(mode));
@@ -597,8 +633,11 @@ impl Picker {
         inner.horizontal(|ui| {
             ui.label(RichText::new("RECENT PROJECTS").small().color(theme::p().text_dim));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if open_button(ui).clicked() {
+                if open_button(ui, widgets::Icon::Folder, "Open", "Open a project, or import a Screen Studio project").clicked() {
                     *action = Some(PickerAction::OpenProjectDialog);
+                }
+                if open_button(ui, widgets::Icon::Plus, "New", "A new project from a screencast or video you already have").clicked() {
+                    *action = Some(PickerAction::NewProject);
                 }
             });
         });
@@ -661,7 +700,15 @@ impl Picker {
             system_audio: self.system_audio,
             countdown_ms: self.countdown_ms,
             capture_input: true,
+            device: None,
         }
+    }
+
+    fn record_device(&mut self, phone: &InputDevice) -> PickerAction {
+        self.mode = Some(Mode::Device);
+        let mut req = self.request(Mode::Device, None, None);
+        req.device = Some(phone.id.clone());
+        PickerAction::StartRecording(req)
     }
 
     fn start(&mut self, mode: Mode) -> Option<PickerAction> {
@@ -682,6 +729,7 @@ fn divider(ui: &mut Ui) {
 
 fn mode_button(ui: &mut Ui, icon: widgets::Icon, label: &str, selected: bool) -> egui::Response {
     let (rect, resp) = ui.allocate_exact_size(vec2(66.0, 46.0), Sense::click());
+    let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
     let p = ui.painter();
     if resp.hovered() || selected {
         p.rect_filled(rect, CornerRadius::same(2), theme::glass_alpha(if selected { 44 } else { 24 }));
@@ -708,6 +756,7 @@ fn input_menu_level(ui: &mut Ui, icon: widgets::Icon, label: &str, active: bool,
     let text_w = galley.size().x;
     let w = 12.0 + 16.0 + 8.0 + text_w + 6.0 + 10.0 + 10.0;
     let (rect, resp) = ui.allocate_exact_size(vec2(w, 34.0), Sense::click());
+    let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
     let p = ui.painter();
     let open = egui::Popup::is_id_open(ui.ctx(), egui::Popup::default_response_id(&resp));
     if resp.hovered() || open {
@@ -768,10 +817,11 @@ fn project_card(ui: &mut Ui, path: &std::path::Path, tex: Option<&egui::TextureH
     let name = path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
     let size = CARD_SIZE;
     let (rect, resp) = ui.allocate_exact_size(size, Sense::click());
+    let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
     let thumb = egui::Rect::from_min_size(rect.min, vec2(size.x, 110.0));
     // trash button in the thumbnail's top-right corner, only while the card is hovered
     let trash_rect = egui::Rect::from_min_size(pos2(thumb.right() - 30.0, thumb.top() + 6.0), vec2(24.0, 24.0));
-    let trash = ui.interact(trash_rect, resp.id.with("trash"), Sense::click());
+    let trash = ui.interact(trash_rect, resp.id.with("trash"), Sense::click()).on_hover_cursor(egui::CursorIcon::PointingHand);
     let card_hovered = resp.hovered() || trash.hovered();
     let p = ui.painter();
     if card_hovered {
@@ -825,18 +875,20 @@ fn project_card(ui: &mut Ui, path: &std::path::Path, tex: Option<&egui::TextureH
     (resp.on_hover_cursor(egui::CursorIcon::PointingHand), trash_clicked)
 }
 
-/// "Open" with a folder icon for the recent-projects panel: quiet on the glass, filled on hover.
-fn open_button(ui: &mut Ui) -> egui::Response {
+/// An icon and a word for the recent-projects panel ("Open", "New"): quiet on the glass,
+/// filled on hover.
+fn open_button(ui: &mut Ui, icon: widgets::Icon, text: &str, tip: &str) -> egui::Response {
     let pal = theme::p();
-    let galley = ui.painter().layout_no_wrap("Open".into(), egui::FontId::proportional(13.0), Color32::PLACEHOLDER);
+    let galley = ui.painter().layout_no_wrap(text.into(), egui::FontId::proportional(13.0), Color32::PLACEHOLDER);
     let (rect, resp) = ui.allocate_exact_size(egui::vec2(galley.size().x + 44.0, 28.0), egui::Sense::click());
+    let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
     let fg = if resp.hovered() { pal.glass_button_fg } else { pal.on_glass };
     if resp.hovered() {
         ui.painter().rect_filled(rect, CornerRadius::same(2), pal.glass_button);
     }
-    widgets::paint_icon(ui.painter(), egui::Rect::from_center_size(pos2(rect.left() + 17.0, rect.center().y), egui::vec2(14.0, 14.0)), widgets::Icon::Folder, fg);
+    widgets::paint_icon(ui.painter(), egui::Rect::from_center_size(pos2(rect.left() + 17.0, rect.center().y), egui::vec2(14.0, 14.0)), icon, fg);
     ui.painter().galley(pos2(rect.left() + 32.0, rect.center().y - galley.size().y / 2.0), galley, fg);
-    resp.on_hover_cursor(egui::CursorIcon::PointingHand).on_hover_text("Open a project, or import a Screen Studio project")
+    resp.on_hover_cursor(egui::CursorIcon::PointingHand).on_hover_text(tip)
 }
 
 /// A row of page dots centred on (`cx`, `cy`); returns the page whose dot was clicked.

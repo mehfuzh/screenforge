@@ -20,7 +20,19 @@ const RATE: u32 = 48_000;
 #[derive(Clone)]
 struct Track {
     kind: AudioTrack,
+    /// Decoded with this boost (dB): clips with different boosts play different decodes.
+    boost_db: f64,
     clip: Arc<AudioClip>,
+}
+
+/// Cache key of a voice-over file decoded at a boost: takes cut from one recording share a
+/// file but can each have their own boost.
+pub fn voice_key(file_name: &str, boost_db: f64) -> String {
+    if boost_db > 0.0 {
+        format!("{file_name}@{boost_db:.1}dB")
+    } else {
+        file_name.to_string()
+    }
 }
 
 /// A music clip as the mixer plays it: the clip, its effective fades, its track and level.
@@ -38,6 +50,8 @@ struct Shared {
     music_tracks: std::collections::HashMap<String, Arc<AudioClip>>,
     /// Decoded voice-overs by file name, and where they play.
     voice_clips: std::collections::HashMap<String, Arc<AudioClip>>,
+    /// The audio mode `voice_clips` were decoded with (each take adds its own boost).
+    voice_filter: Option<String>,
     voice_spans: Vec<VoiceOverSpan>,
     /// Where the background music plays (it loops inside each clip).
     music: Vec<MusicPlay>,
@@ -69,7 +83,7 @@ pub struct AudioPlayer {
 
 impl AudioPlayer {
     pub fn new() -> Self {
-        let shared = Arc::new(Mutex::new(Shared { tracks: vec![], spans: vec![], music_tracks: Default::default(), voice_clips: Default::default(), voice_spans: vec![], music: vec![], playing: false, output_ms: 0.0, callback_at: None, callback_ms: 0.0, duration_ms: 0.0, master_volume: 1.0 }));
+        let shared = Arc::new(Mutex::new(Shared { tracks: vec![], spans: vec![], music_tracks: Default::default(), voice_clips: Default::default(), voice_filter: None, voice_spans: vec![], music: vec![], playing: false, output_ms: 0.0, callback_at: None, callback_ms: 0.0, duration_ms: 0.0, master_volume: 1.0 }));
         let stream = Self::open_stream(shared.clone());
         if let Err(e) = &stream {
             tracing::warn!("audio output unavailable: {e}");
@@ -101,7 +115,10 @@ impl AudioPlayer {
                             for span in s.spans.iter().filter(|sp| !sp.muted && sp.contains_output(t_out)) {
                                 let src_ms = span.output_to_source(t_out);
                                 let vol = span.volume as f32 * master;
-                                for t in s.tracks.iter().filter(|t| t.kind == span.track) {
+                                // the decode at the span's boost; until it lands, any of the track
+                                let same = |t: &&Track| t.kind == span.track && (t.boost_db - span.boost_db).abs() < 0.05;
+                                let boost = if s.tracks.iter().any(|t| same(&t)) { span.boost_db } else { s.tracks.iter().find(|t| t.kind == span.track).map_or(0.0, |t| t.boost_db) };
+                                for t in s.tracks.iter().filter(|t| t.kind == span.track && (t.boost_db - boost).abs() < 0.05) {
                                     let i = t.clip.frame_at_ms(src_ms);
                                     let ch = t.clip.channels as usize;
                                     if i < t.clip.frames() {
@@ -111,7 +128,7 @@ impl AudioPlayer {
                                 }
                             }
                             for vo in s.voice_spans.iter().filter(|v| !v.muted && v.contains_output(t_out)) {
-                                if let Some(clip) = s.voice_clips.get(&vo.file_name) {
+                                if let Some(clip) = s.voice_clips.get(&voice_key(&vo.file_name, vo.boost_db)) {
                                     let i = clip.frame_at_ms(vo.file_ms_at(t_out));
                                     let ch = clip.channels as usize;
                                     if i < clip.frames() {
@@ -159,7 +176,22 @@ impl AudioPlayer {
             .chain(session.source.system_audio.iter().map(|p| (p.clone(), AudioTrack::SystemAudio)))
             .collect();
         let audio_cfg = &session.pkg.project.config.audio;
-        let mic_filter = sf_media::microphone_filter(&audio_cfg.microphone_audio_preset, audio_cfg.microphone_boost_db());
+        // each track at no boost (the waveform) and at every boost its clips use
+        let spans = sf_engine::audio::audio_spans(&session.pkg.project.scenes[0], &Self::available_tracks(session), audio_cfg);
+        let preset = audio_cfg.microphone_audio_preset.clone();
+        let decodes: Vec<(std::path::PathBuf, AudioTrack, f64, Option<String>)> = sources
+            .into_iter()
+            .flat_map(|(path, kind)| {
+                let mut boosts = vec![0.0];
+                for sp in spans.iter().filter(|sp| sp.track == kind) {
+                    if !boosts.iter().any(|b: &f64| (b - sp.boost_db).abs() < 0.05) {
+                        boosts.push(sp.boost_db);
+                    }
+                }
+                let preset = if kind == AudioTrack::Microphone { preset.clone() } else { "voice".to_string() };
+                boosts.into_iter().map(move |b| (path.clone(), kind.clone(), b, sf_media::microphone_filter(&preset, b)))
+            })
+            .collect();
         let (shared, generation, load_seq, pending) = (self.shared.clone(), self.generation.clone(), self.load_seq.clone(), self.pending.clone());
         self.update_timeline(session);
         self.load_voice_overs(session);
@@ -174,10 +206,9 @@ impl AudioPlayer {
             }
             let _done = Done(pending);
             let mut tracks = vec![];
-            for (path, kind) in sources {
-                let filter = if kind == AudioTrack::Microphone { mic_filter.as_deref() } else { None };
-                match sf_media::decode_audio_filtered(&path, RATE, 2, filter) {
-                    Ok(clip) => tracks.push(Track { kind, clip: Arc::new(clip) }),
+            for (path, kind, boost_db, filter) in decodes {
+                match sf_media::decode_audio_filtered(&path, RATE, 2, filter.as_deref()) {
+                    Ok(clip) => tracks.push(Track { kind, boost_db, clip: Arc::new(clip) }),
                     Err(e) => tracing::warn!("audio decode failed for {}: {e}", path.display()),
                 }
             }
@@ -194,12 +225,19 @@ impl AudioPlayer {
     /// Decode the voice-overs not decoded yet (a new take) on a background thread.
     pub fn load_voice_overs(&self, session: &sf_session::Session) {
         use std::sync::atomic::Ordering;
-        let missing: Vec<(String, std::path::PathBuf)> = {
-            let s = self.shared.lock();
-            let mut names: Vec<String> = session.pkg.project.scenes[0].voice_overs.iter().map(|v| v.file_name.clone()).filter(|n| !n.is_empty() && !s.voice_clips.contains_key(n)).collect();
-            names.sort_unstable();
-            names.dedup();
-            names.into_iter().map(|n| (session.voice_over_path(&n), n)).filter(|(p, _)| p.is_file()).map(|(p, n)| (n, p)).collect()
+        let preset = session.pkg.project.config.audio.microphone_audio_preset.clone();
+        // (cache key, file, filter): a file once per boost its takes use
+        let missing: Vec<(String, std::path::PathBuf, Option<String>)> = {
+            let mut s = self.shared.lock();
+            // the audio mode changed: decode every take again
+            if s.voice_filter.as_deref() != Some(preset.as_str()) {
+                s.voice_clips.clear();
+                s.voice_filter = Some(preset.clone());
+            }
+            let mut wanted: Vec<(String, String, f64)> = session.pkg.project.scenes[0].voice_overs.iter().filter(|v| !v.file_name.is_empty()).map(|v| (voice_key(&v.file_name, v.boost()), v.file_name.clone(), v.boost())).filter(|(k, _, _)| !s.voice_clips.contains_key(k)).collect();
+            wanted.sort_by(|a, b| a.0.cmp(&b.0));
+            wanted.dedup_by(|a, b| a.0 == b.0);
+            wanted.into_iter().map(|(k, n, boost)| (k, session.voice_over_path(&n), sf_media::microphone_filter(&preset, boost))).filter(|(_, p, _)| p.is_file()).collect()
         };
         if missing.is_empty() {
             return;
@@ -207,10 +245,10 @@ impl AudioPlayer {
         let (shared, generation, pending) = (self.shared.clone(), self.generation.clone(), self.pending.clone());
         pending.fetch_add(1, Ordering::Relaxed);
         std::thread::spawn(move || {
-            for (name, path) in missing {
-                match sf_media::decode_audio(&path, RATE, 2) {
+            for (key, path, filter) in missing {
+                match sf_media::decode_audio_filtered(&path, RATE, 2, filter.as_deref()) {
                     Ok(clip) => {
-                        shared.lock().voice_clips.insert(name, Arc::new(clip));
+                        shared.lock().voice_clips.insert(key, Arc::new(clip));
                     }
                     Err(e) => tracing::warn!("voice-over decode failed for {}: {e}", path.display()),
                 }
@@ -272,7 +310,7 @@ impl AudioPlayer {
     pub fn update_timeline(&self, session: &sf_session::Session) {
         let cfg = &session.pkg.project.config;
         let scene = &session.pkg.project.scenes[0];
-        let spans = sf_engine::audio::audio_spans(scene, &Self::available_tracks(session), cfg.audio.volume, cfg.audio.mute_microphone, cfg.audio.mute_system_audio);
+        let spans = sf_engine::audio::audio_spans(scene, &Self::available_tracks(session), &cfg.audio);
         let mut s = self.shared.lock();
         s.spans = spans;
         s.voice_spans = session.voice_over_spans();
@@ -289,20 +327,22 @@ impl AudioPlayer {
             })
             .collect();
         drop(s);
-        // a part may have just been given a track that is not decoded yet
+        // a part may have just been given a track that is not decoded yet, and a take (one
+        // the agent narrated) or a boost may be new
         self.load_music(session);
+        self.load_voice_overs(session);
     }
 
     /// Waveform peaks of a track over the whole recording (source time), `buckets` wide.
     pub fn peaks(&self, kind: &AudioTrack, buckets: usize) -> Option<Vec<f32>> {
         let s = self.shared.lock();
-        let t = s.tracks.iter().find(|t| &t.kind == kind)?;
+        let t = s.tracks.iter().find(|t| &t.kind == kind && t.boost_db == 0.0)?;
         Some(t.clip.peaks(buckets))
     }
 
-    /// Waveform peaks of a voice-over file, `buckets` across the whole take.
-    pub fn voice_peaks(&self, file_name: &str, buckets: usize) -> Option<Vec<f32>> {
-        self.shared.lock().voice_clips.get(file_name).map(|c| c.peaks(buckets))
+    /// Waveform peaks of a voice-over file at a boost (`voice_key`), across the whole take.
+    pub fn voice_peaks(&self, key: &str, buckets: usize) -> Option<Vec<f32>> {
+        self.shared.lock().voice_clips.get(key).map(|c| c.peaks(buckets))
     }
 
     /// Waveform peaks of music track `name`, `buckets` across the whole track, and its length
@@ -313,14 +353,14 @@ impl AudioPlayer {
         Some((t.peaks(buckets), t.duration_ms()))
     }
 
-    /// Length of a decoded voice-over file (ms).
-    pub fn voice_duration_ms(&self, file_name: &str) -> Option<f64> {
-        self.shared.lock().voice_clips.get(file_name).map(|c| c.duration_ms())
+    /// Length of a decoded voice-over file (ms), by `voice_key`.
+    pub fn voice_duration_ms(&self, key: &str) -> Option<f64> {
+        self.shared.lock().voice_clips.get(key).map(|c| c.duration_ms())
     }
 
     pub fn track_duration_ms(&self, kind: &AudioTrack) -> Option<f64> {
         let s = self.shared.lock();
-        s.tracks.iter().find(|t| &t.kind == kind).map(|t| t.clip.duration_ms())
+        s.tracks.iter().find(|t| &t.kind == kind && t.boost_db == 0.0).map(|t| t.clip.duration_ms())
     }
 
     pub fn play_from(&self, output_ms: f64) {

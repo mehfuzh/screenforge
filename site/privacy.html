@@ -4,12 +4,12 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Privacy Policy — ScreenForge</title>
-<meta name="description" content="ScreenForge goes online only when you press Activate or Buy, or download a speech model for captions. The app has no analytics or telemetry; recordings and exports stay on your computer. The website uses Google Analytics.">
+<meta name="description" content="ScreenForge goes online when you press Activate or Buy, use the AI agent, search Unsplash or download a speech model for captions or a voice model for narration. The app has no analytics or telemetry; recordings and exports stay on your computer. The website uses Google Analytics.">
 <link rel="canonical" href="https://screenforge.studio/privacy">
 <meta name="color-scheme" content="light dark">
 <meta property="og:type" content="website">
 <meta property="og:title" content="Privacy Policy — ScreenForge">
-<meta property="og:description" content="ScreenForge goes online only when you press Activate or Buy, or download a speech model for captions. The app has no analytics or telemetry; recordings and exports stay on your computer. The website uses Google Analytics.">
+<meta property="og:description" content="ScreenForge goes online when you press Activate or Buy, use the AI agent, search Unsplash or download a speech model for captions or a voice model for narration. The app has no analytics or telemetry; recordings and exports stay on your computer. The website uses Google Analytics.">
 <meta property="og:image" content="https://screenforge.studio/og.png?v=3">
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
@@ -412,45 +412,51 @@ gtag('config', 'G-ZYRJDJ736V');
 <main class="doc">
   <div class="eyebrow">Legal</div>
   <h1>Privacy Policy</h1>
-  <p class="stamp">Last updated 15 October 2026</p>
+  <p class="stamp">Last updated 23 October 2026</p>
 
   <div class="tldr">
     <div class="k">The short version</div>
-    <p>ScreenForge runs on your computer. It contacts a server only when you press <strong>Activate</strong> or <strong>Buy</strong>, which send your email address (and, for Activate, a one-way device code), when you open a project on an activated computer, to check the license has not moved to another one, when you first make captions, which downloads a speech model and sends nothing about you, and once a day to ask GitHub whether a newer version is out, which you can turn off. There are no analytics and no crash reports. Your recordings, transcripts and exports never leave your computer unless you move them yourself.</p>
+    <p>ScreenForge runs on your computer. It contacts a server only when you press <strong>Activate</strong> or <strong>Buy</strong>, which send your email address (and, for Activate, a one-way device code), when you open a project on an activated computer, to check the license has not moved to another one, when you <strong>ask the AI agent</strong> for an edit, which sends the project's edit settings and transcript to Claude through our server, when you search Unsplash, when you first make captions, which downloads a speech model and sends nothing about you, and once a day to ask GitHub whether a newer version is out, which you can turn off. There are no analytics and no crash reports. Your recordings, audio and exports never leave your computer unless you move them yourself.</p>
   </div>
 
   <h2><span class="n">01</span>What stays on your computer</h2>
-  <p>Everything the app makes: recordings, projects, the audio track, transcripts and captions, exports, and the license key once it has been activated. ScreenForge writes them to the folders you choose and reads them back. None of it is uploaded, synced or copied anywhere by the app.</p>
+  <p>Everything the app makes: recordings, projects, the audio track, transcripts and captions, exports, and the license key once it has been activated. ScreenForge writes them to the folders you choose and reads them back. None of it is uploaded, synced or copied anywhere by the app, except what the AI agent needs when you use it (see below): never the video or the audio themselves.</p>
 
   <h2><span class="n">02</span>When the app talks to a server</h2>
-  <p>These four, and nothing else:</p>
+  <p>These, and nothing else:</p>
   <ul>
     <li><strong>Activate</strong> sends the email you typed and a device code to the license server. The device code is a one-way hash (SHA-256) of the computer's hardware ID; the ID itself never leaves the computer. The first time on a computer, the server emails a 6-digit code to the license address, and the key is only returned once that code is entered, so knowing someone's email is not enough to use their license. The key is then verified on your computer, and the app does not need the server again.</li>
     <li><strong>Buy</strong> sends the email you typed to the license server to open a Stripe checkout page. The purchase itself happens on Stripe's site.</li>
+    <li><strong>The AI agent</strong>, only when you send it a message, sends each request to Claude (Anthropic) through our server: your message, the project file (clips, zooms, masks, settings and names, not the video or audio), the words of the transcript with their times, where the playhead is and what is selected, and the conversation so far. Our server adds the Claude key, forwards the request and passes the answer back; it does not store your messages or project. It records, per device code and day, how many requests were made and what they cost, and takes the cost from your credits.</li>
+    <li><strong>Unsplash</strong>: a background search sends the words you searched for to our server, which asks Unsplash and keeps the results for a few hours so the same search is answered without asking again. Choosing a photo downloads it into the project.</li>
+    <li><strong>Free exports</strong>: the app counts the exports you made without a license, with the device code described above, so the free exports are not reset by reinstalling. It sends nothing else.</li>
     <li><strong>Generate transcript</strong>, the first time you use a speech model, downloads that model (142 MB or 466 MB) from our GitHub releases, or from Hugging Face if GitHub is unreachable. It is a plain file download: nothing about you or your recording is sent. The file is checked against a known checksum, kept on your computer, and not downloaded again. Transcription itself runs on your computer, and your audio never leaves it.</li>
+    <li><strong>Narration</strong>, the first time you use an AI voice or press <em>Download voice model</em>, downloads the Kokoro voice model, its voices and pronunciation dictionaries (about 335 MB) from our GitHub releases, or from Hugging Face and GitHub's copy of the dictionaries if ours is unreachable. Like the speech models, it is a plain file download checked against known checksums and kept on your computer. The voice runs on your computer: a script you type in the Narration panel never leaves it. When the agent narrates, it writes the script itself, as part of the agent conversation described above.</li>
     <li><strong>Update check</strong>: at launch, at most once a day, the app asks GitHub's public releases API for the newest version number, and shows "Update available" when it is newer than yours. It is one plain request with no account, no identifier and nothing about you or your projects; GitHub sees it like any other visit. Turn it off with <em>Check automatically</em> in the toolbar's settings menu; <em>Check for updates now</em> does the same once, on request. Updating is up to you: the app only opens the release page.</li>
   </ul>
-  <p>All four go over HTTPS. Apart from the update check, opening the app, recording, editing, captioning with a model you already have, and exporting make no network requests at all.</p>
+  <p>All of them go over HTTPS. Apart from the update check, opening the app, recording, editing by hand, captioning with a model you already have, and exporting make no network requests at all.</p>
 
   <h2><span class="n">03</span>What we keep</h2>
-  <p>If you buy a license: the email address you paid with, the plan, and the key issued to it, plus the device code of the computer the license is active on and when it was last used. That record exists so the key can be resent or refunded and kept to one computer. Pending activation codes are stored only as hashes and expire after 15 minutes. We do not keep a profile, a usage history or anything about the recordings you make.</p>
+  <p>If you buy a license: the email address you paid with, the plan, and the key issued to it, plus the device code of the computer the license is active on and when it was last used. That record exists so the key can be resent or refunded and kept to one computer. Pending activation codes are stored only as hashes and expire after 15 minutes. For the AI agent: the credit balance of your license email and a list of what added or used credits (purchases, monthly grants, and each request's cost), and per device code and day the number of agent requests and their cost. We do not keep your messages to the agent, a profile, or anything about the recordings you make.</p>
 
   <h2><span class="n">04</span>Who else is involved</h2>
   <ul>
     <li><strong>Stripe</strong> processes the payment. Your card details go to Stripe, never to us; see <a href="https://stripe.com/privacy">Stripe's privacy policy</a>.</li>
     <li><strong>Resend</strong> delivers the license email and the activation codes. It sees your address and what is in the message it sends; see <a href="https://resend.com/legal/privacy-policy">Resend's privacy policy</a>.</li>
     <li><strong>Supabase</strong> hosts the license server and its database.</li>
+    <li><strong>Anthropic</strong> runs Claude, the model behind the AI agent. It receives what the agent sends, as described above, under its commercial terms, under which API data is not used to train its models; see <a href="https://www.anthropic.com/legal/privacy">Anthropic's privacy policy</a>.</li>
+    <li><strong>Unsplash</strong> provides the background photos. It sees the searches our server makes for you, not who made them; downloading a photo comes from its image servers; see <a href="https://unsplash.com/privacy">Unsplash's privacy policy</a>.</li>
     <li><strong>Google Analytics</strong> counts visits to this website: pages viewed, referrer, and approximate location and device, using a cookie in your browser. It runs on the website only, never in the app. Blocking it does not affect anything; see <a href="https://policies.google.com/privacy">Google's privacy policy</a>.</li>
     <li><strong>GitHub</strong> hosts the source, the release downloads and the speech models. The download page asks GitHub's public API which release is newest; that request, like a model download, carries no data about you beyond what any web request does.</li>
-    <li><strong>Hugging Face</strong> hosts the original whisper.cpp speech models. The app downloads from it only if our GitHub copy is unreachable, and sends nothing beyond what any web request does; see <a href="https://huggingface.co/privacy">Hugging Face's privacy policy</a>.</li>
+    <li><strong>Hugging Face</strong> hosts the original whisper.cpp speech models and the Kokoro voice model. The app downloads from it only if our GitHub copy is unreachable, and sends nothing beyond what any web request does; see <a href="https://huggingface.co/privacy">Hugging Face's privacy policy</a>.</li>
   </ul>
 
   <h2><span class="n">05</span>What we do not do</h2>
   <ul>
     <li>No telemetry, usage analytics or crash reporting in the app. The website uses Google Analytics only, as described above.</li>
-    <li>No install counters and no identifiers. The only request at launch is the daily update check described above, which carries nothing about you and can be turned off.</li>
+    <li>No install counters. The device code is sent only for activation, the free-export count and the AI agent, as described above. The only request at launch is the daily update check, which carries nothing about you and can be turned off.</li>
     <li>No selling, sharing or transferring your data, ever.</li>
-    <li>No account. We hold no record that you exist until you buy a key, and then only the email you used.</li>
+    <li>No account. We hold no record that you exist until you buy a key or use the AI agent, and then only what is listed above.</li>
   </ul>
 
   <h2><span class="n">06</span>Deleting your data</h2>

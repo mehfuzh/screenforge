@@ -11,6 +11,8 @@ members = [
     "crates/sf-export",
     "crates/sf-transcribe",
     "crates/sf-vision",
+    "crates/sf-agent",
+    "crates/sf-tts",
     "apps/studio",
     "apps/sf-cli",
 ]
@@ -33,6 +35,8 @@ sf-recording = { path = "crates/sf-recording" }
 sf-export = { path = "crates/sf-export" }
 sf-transcribe = { path = "crates/sf-transcribe" }
 sf-vision = { path = "crates/sf-vision" }
+sf-agent = { path = "crates/sf-agent" }
+sf-tts = { path = "crates/sf-tts" }
 
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order", "float_roundtrip"] }

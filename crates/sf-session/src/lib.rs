@@ -33,7 +33,7 @@ use sf_media::Frame;
 use sf_project::schema::common::Rect;
 use sf_project::v4::{ClickEffect, Mask};
 use sf_project::ProjectPackage;
-use sf_render::{BackgroundLayer, CameraGrade, CameraLayer, Color, FrameDesc, Gpu, Layer, LutTexture, MaskLayer, RingLayer, ScreenLayer, ShadowLayer, SpriteLayer, Texture};
+use sf_render::{BackgroundLayer, CameraGrade, CameraLayer, Color, FrameDesc, Gpu, Layer, LutTexture, MaskLayer, RingLayer, ScreenLayer, ShadowLayer, SolidLayer, SpriteLayer, Texture};
 
 use crate::layout::{CameraSlot, ResolvedLayout};
 pub use source::SourceInfo;
@@ -103,7 +103,7 @@ impl Session {
         let geometry = Self::geometry_for(&pkg, &source);
         let (camera, cursor_smoother) = Self::solvers(&pkg, &source, &cursor_track, geometry);
         let camera_rect = SpringVec::new(SpringParams::from(pkg.project.config.animations.screen_movement_spring), [0.0; 4]);
-        let captions = captions::Captions::load(&pkg, source.process_time_start_ms);
+        let captions = captions::Captions::load(&pkg, source.process_time_start_ms, &timeline);
         let shortcuts = shortcuts::Shortcuts::load(&pkg, &cursor_track);
         let mut s = Session {
             pkg,
@@ -418,12 +418,31 @@ impl Session {
             let i = &cfg.styles.screen_inset;
             ((i.size * s) as f32, Color::from_hex(&i.color).unwrap_or(Color::BLACK).with_alpha(i.alpha as f32))
         });
-        let corner_radius = (cfg.styles.screen_border_radius * zoom_factor * s) as f32;
+        let mut corner_radius = (cfg.styles.screen_border_radius * zoom_factor * s) as f32;
+        // a device frame fills the screen's rect and casts its shadow; the recording sits
+        // inside its bezel (the cursor, masks and clicks follow it there)
+        let device = cfg.device.frame_key.as_deref().filter(|_| cfg.device.enable_mockup && screen_visible).and_then(sf_engine::device::Frame::parse).map(|f| sf_engine::device::layout(f, screen_px));
+        let (screen_px, shadow, inset) = match &device {
+            Some(d) => {
+                // the shadow goes under the body (its first full-size shape), not the buttons
+                let body = d.under.iter().position(|p| p.rect == d.body);
+                for (i, part) in d.under.iter().enumerate() {
+                    let cast = if Some(i) == body { shadow } else { None };
+                    layers.push(Layer::Solid(SolidLayer { dst: part.rect, color: Color::from_hex(part.color).unwrap_or(Color::BLACK), corner_radius: part.radius as f32, shadow: cast }));
+                }
+                corner_radius = d.screen_radius as f32;
+                (d.screen, None, None)
+            }
+            None => (screen_px, shadow, inset),
+        };
         self.last_screen_px = screen_visible.then_some(screen_px);
         if screen_visible {
             layers.push(Layer::Screen(ScreenLayer { texture: self.screen.texture.clone(), src01: crop, dst: screen_px, corner_radius, shadow, inset }));
             self.push_masks(&mut layers, source_ms, screen_px, corner_radius);
             self.push_click_effects(&mut layers, source_ms, screen_px, zoom_factor * s, &cfg.cursor.click_effect, to_crop01);
+            for part in device.iter().flat_map(|d| &d.over) {
+                layers.push(Layer::Solid(SolidLayer { dst: part.rect, color: Color::from_hex(part.color).unwrap_or(Color::BLACK), corner_radius: part.radius as f32, shadow: None }));
+            }
         }
 
         // ── webcam ──
@@ -547,7 +566,7 @@ impl Session {
 
     /// Re-read the transcripts (after generating one, or toggling sound labels).
     pub fn reload_captions(&mut self) {
-        self.captions = captions::Captions::load(&self.pkg, self.source.process_time_start_ms);
+        self.captions = captions::Captions::load(&self.pkg, self.source.process_time_start_ms, &self.timeline);
     }
 
     /// SubRip captions for the edited timeline (empty when there is no transcript).
