@@ -19,7 +19,7 @@ then tell the agent what you want: "cut the ums and the long pauses", "zoom on m
 project on the timeline while you watch, and everything it does can be changed or undone by
 hand. Projects are saved as `.screenforge` packages.
 
-![ScreenForge editor](docs/demo.gif)
+![The ScreenForge agent editing a recording from one prompt](docs/demo.gif)
 
 ## AI features
 
