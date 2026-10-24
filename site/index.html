@@ -5,14 +5,14 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>ScreenForge — AI video editor and screen recorder for screencasts</title>
 <meta name="description" content="Record your screen and let an AI agent edit it: cuts, zooms, captions and AI voice-over. A free, open-source Screen Studio alternative for Mac, Windows and Linux.">
-<meta name="keywords" content="AI video editor, AI screen recorder, screen recorder, screencast software, screen recording editor, Screen Studio alternative, CapCut alternative, AI voice-over, text to speech narration, automatic captions, auto zoom, product demo video, tutorial video maker, open source screen recorder, Mac screen recorder, Windows screen recorder, Linux screen recorder">
+<meta name="keywords" content="AI video editor, AI screen recorder, MP4 video editor, MOV editor, screen recorder, screencast software, screen recording editor, Screen Studio alternative, CapCut alternative, AI voice-over, text to speech narration, automatic captions, auto zoom, product demo video, tutorial video maker, open source screen recorder, Mac screen recorder, Windows screen recorder, Linux screen recorder">
 <link rel="canonical" href="https://screenforge.studio/">
 <meta name="color-scheme" content="light dark">
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="ScreenForge">
 <meta property="og:url" content="https://screenforge.studio/">
 <meta property="og:title" content="ScreenForge — AI video editor and screen recorder for screencasts">
-<meta property="og:description" content="Record your screen and let an AI agent edit it: cuts, zooms, captions and AI voice-over. A free, open-source Screen Studio alternative for Mac, Windows and Linux. Imports Screen Studio projects.">
+<meta property="og:description" content="Record your screen and let an AI agent edit it: cuts, zooms, captions and AI voice-over. A free, open-source Screen Studio alternative for Mac, Windows and Linux. Drop in any MP4 or MOV to edit it.">
 <meta property="og:image" content="https://screenforge.studio/og.png?v=3">
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
@@ -30,9 +30,9 @@
       "url": "https://screenforge.studio/",
       "image": "https://screenforge.studio/og.png?v=3",
       "alternateName": "ScreenForge AI screen editor",
-      "description": "AI video editor and screen recorder for screencasts, tutorials and product demos. An AI agent edits from plain-language requests: cuts, zooms, speed, music and backgrounds. AI voice-over narration and captions run on your computer. An open-source alternative to Screen Studio and CapCut that imports Screen Studio projects.",
+      "description": "AI video editor and screen recorder for screencasts, tutorials and product demos. An AI agent edits from plain-language requests: cuts, zooms, speed, music and backgrounds. AI voice-over narration and captions run on your computer. Edits your own MP4 and MOV videos as well as its recordings. An open-source alternative to Screen Studio and CapCut.",
       "keywords": "AI video editor, AI screen recorder, screencast software, Screen Studio alternative, CapCut alternative, AI voice-over, automatic captions",
-      "featureList": ["AI editing agent", "AI voice-over narration, on-device", "Automatic captions with on-device Whisper", "Automatic zooms", "Voice-over recording", "Smooth cursor", "Backgrounds", "Separate voice track", "Blur and highlight masks", "Crop", "Keyboard shortcut overlay", "Imports Screen Studio projects"],
+      "featureList": ["AI editing agent", "AI voice-over narration, on-device", "Automatic captions with on-device Whisper", "Automatic zooms", "Voice-over recording", "Smooth cursor", "Backgrounds", "Separate voice track", "Blur and highlight masks", "Crop", "Keyboard shortcut overlay", "Edit any MP4, MOV or M4V video"],
       "applicationCategory": "MultimediaApplication",
       "operatingSystem": "macOS 14 or later, Windows 10 or later, Linux",
       "license": "https://www.apache.org/licenses/LICENSE-2.0",
@@ -223,15 +223,11 @@
     background: var(--ink);
     box-shadow: inset 0 0 .35em color-mix(in srgb, var(--jade) 22%, transparent);
   }
-  h1 .scr::before {
-    content: ''; position: absolute; left: 50%; bottom: 100%;
-    width: .95em; height: .5em; transform: translateX(-50%);
-    background:
-      radial-gradient(circle at .04em .04em, var(--tv) .045em, transparent .05em) left top / .1em .1em no-repeat,
-      radial-gradient(circle at .06em .04em, var(--tv) .045em, transparent .05em) right top / .1em .1em no-repeat,
-      linear-gradient(to top right, transparent calc(50% - .025em), var(--tv) calc(50% - .025em), var(--tv) calc(50% + .025em), transparent calc(50% + .025em)) left / 50% 100% no-repeat,
-      linear-gradient(to top left, transparent calc(50% - .025em), var(--tv) calc(50% - .025em), var(--tv) calc(50% + .025em), transparent calc(50% + .025em)) right / 50% 100% no-repeat;
-  }
+  /* the word sits on a little TV: antennas above, feet below (inline SVG, in --tv) */
+  h1 .scr svg { position: absolute; left: 50%; transform: translateX(-50%); overflow: visible; fill: none; stroke: var(--tv); stroke-linecap: round; }
+  h1 .scr .ant { bottom: 100%; width: .95em; height: .5em; stroke-width: 2.6; }
+  h1 .scr .ant circle { fill: var(--tv); stroke: none; }
+  h1 .scr .feet { top: 100%; width: 62%; height: .16em; stroke-width: 3; }
   .lede { margin-top: 22px; max-width: 58ch; font-size: 17px; color: var(--dim); }
   .lede b { color: var(--fg); font-weight: 500; }
   .lede a, .card p a { color: var(--jade); border-bottom: 1px solid color-mix(in srgb, var(--jade) 35%, transparent); }
@@ -421,7 +417,7 @@ gtag('config', 'G-ZYRJDJ736V');
     <div class="badges" aria-label="project badges">
       <span class="badge gold"><span class="k">status</span><span class="v">beta</span></span>
     </div>
-    <h1>Your AI <span class="scr">screen</span> editor.<br><em>Professional screencasts<br>in minutes.</em></h1>
+    <h1>Your AI <span class="scr">video<svg class="ant" viewBox="0 0 38 20" preserveAspectRatio="none" aria-hidden="true"><path d="M19 20 9 4M19 20 29 4"/><circle cx="8.5" cy="3.2" r="3.2"/><circle cx="29.5" cy="3.2" r="3.2"/></svg><svg class="feet" viewBox="0 0 40 8" preserveAspectRatio="none" aria-hidden="true"><path d="M5 1 2 7M35 1 38 7"/></svg></span> editor.<br><em>Professional screencasts<br>in minutes.</em></h1>
     <div class="panel" aria-hidden="true">
       <ol class="steps">
         <li><div><b>Record</b><span>Hit record, show your screen, talk it through.</span></div></li>
@@ -461,9 +457,9 @@ gtag('config', 'G-ZYRJDJ736V');
         <p>Tell the agent what you want, like <code>cut the ums</code> or <code>zoom where I click</code>, and watch the timeline change as it works. Auto edit tightens the whole video; one <code>⌘Z</code> undoes a whole answer.</p>
       </div>
       <div class="card">
-        <div class="k">Compatibility</div>
-        <h3>Imports your Screen Studio projects</h3>
-        <p>Import your existing projects (<code>.screenstudio</code>), so recordings you already have keep working here. <a href="comparison.html">Compare with Screen Studio</a></p>
+        <div class="k">Any video</div>
+        <h3>Edit any MP4 or MOV</h3>
+        <p>Drop a video (<code>.mp4</code>, <code>.mov</code>, <code>.m4v</code>) on ScreenForge to start a project, or on an open project to add it to the timeline, then edit by hand or ask the agent. Screen Studio projects open too.</p>
       </div>
       <div class="card">
         <div class="k">Zoom</div>
