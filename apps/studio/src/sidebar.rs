@@ -1122,11 +1122,18 @@ fn spoken_take_ui(ed: &mut Editor, ui: &mut egui::Ui, id: &str) {
 fn narration_status(ed: &mut Editor, ui: &mut egui::Ui) {
     let Some(status) = ed.narration.status() else { return };
     ui.add_space(4.0);
+    // a download with a known size has its bar; the spinner is only for work without one
+    let download = match ed.narration.progress.clone().filter(|_| ed.narration.is_downloading()) {
+        Some(sf_tts::Progress::Downloading { done, total: Some(t) }) => Some((done, t)),
+        _ => None,
+    };
     ui.horizontal(|ui| {
-        ui.spinner();
+        if download.is_none() {
+            ui.spinner();
+        }
         widgets::hint(ui, &status);
     });
-    if let Some(sf_tts::Progress::Downloading { done, total: Some(t) }) = ed.narration.progress.clone().filter(|_| ed.narration.is_downloading()) {
+    if let Some((done, t)) = download {
         ui.add(egui::ProgressBar::new((done as f64 / t.max(1) as f64) as f32).desired_height(6.0).corner_radius(2.0).fill(theme::p().accent));
     }
     if widgets::secondary_button(ui, "Cancel").clicked() {

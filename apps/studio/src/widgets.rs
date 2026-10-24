@@ -201,7 +201,12 @@ pub fn accent_badge(ui: &mut Ui, text: &str) -> Response {
 }
 
 pub fn secondary_button(ui: &mut Ui, text: &str) -> Response {
-    ui.add(egui::Button::new(RichText::new(text).size(14.0).color(theme::p().text)).fill(theme::p().card_2).corner_radius(CornerRadius::same(BUTTON_RADIUS)).min_size(vec2(0.0, BUTTON_H)))
+    // a border as well as the fill: on a card of the same colour the fill alone vanishes and
+    // the button reads as a link
+    let pal = theme::p();
+    let border = if ui.is_enabled() { pal.text_faint } else { pal.border };
+    ui.add(egui::Button::new(RichText::new(text).size(14.0).color(pal.text)).fill(pal.card_3).stroke(Stroke::new(1.0, border)).corner_radius(CornerRadius::same(BUTTON_RADIUS)).min_size(vec2(0.0, BUTTON_H)))
+        .on_hover_cursor(egui::CursorIcon::PointingHand)
 }
 
 /// Single-line text field: roomy (38 px) with 4 px corners like the buttons, padded text and a
