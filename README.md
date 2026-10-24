@@ -17,8 +17,7 @@ written in Rust. Record your screen, your camera or an iPhone, or drop in any MP
 then tell the agent what you want: "cut the ums and the long pauses", "zoom on my clicks",
 "get this under a minute", "add calm music and a mountain photo behind it". It edits the
 project on the timeline while you watch, and everything it does can be changed or undone by
-hand. Projects are saved as `.screenforge` packages; Screen Studio projects (`.screenstudio`)
-can be imported.
+hand. Projects are saved as `.screenforge` packages.
 
 ![ScreenForge editor](docs/demo.gif)
 
@@ -102,7 +101,7 @@ your own `ANTHROPIC_API_KEY`. See `backend/README.md` for how keys and credits a
 
 | crate | purpose |
 |---|---|
-| `crates/sf-project`  | `.screenforge` package model (and `.screenstudio` import): superjson envelope, v4 schema, v3→v4 migration, recording metadata, input event logs |
+| `crates/sf-project`  | `.screenforge` package model: superjson envelope, v4 schema, v3→v4 migration, recording metadata, input event logs |
 | `crates/sf-engine`   | timeline (output↔source time), react-spring compatible springs, cursor smoothing, zoom camera, layout, auto zoom |
 | `crates/sf-media`    | ffmpeg-driven decode (HLS fMP4 → RGBA) and encode (rawvideo → H.264/HEVC/ProRes/GIF/WebM + audio mix) |
 | `crates/sf-render`   | wgpu compositor (WGSL): background, shadow, rounded screen, camera (Resolve style grade, 3D LUTs), cursor sprites |
@@ -142,7 +141,6 @@ your own `ANTHROPIC_API_KEY`. See `backend/README.md` for how keys and credits a
 cargo run -p sf-cli -- inspect "My Recording.screenforge"
 cargo run -p sf-cli -- frame   "…/My Recording.screenforge" --at-ms 12000 -o frame.png
 cargo run -p sf-cli -- export  "…/My Recording.screenforge" -o out.mp4 --fps 60 --height 1080
-cargo run -p sf-cli -- import  "…/My Recording.screenstudio"   # copy to ~/ScreenForge Projects
 cargo run -p studio -- "…/My Recording.screenforge"   # editor
 cargo run -p studio                                      # recording picker
 ANTHROPIC_API_KEY=sk-ant-… cargo run -p studio -- "…/My Recording.screenforge"   # agent without the backend (debug builds)
