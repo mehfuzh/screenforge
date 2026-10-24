@@ -428,7 +428,7 @@ mod windows_impl {
     }
 
     pub struct DisplayRecorder {
-        plan: DisplayPlan,
+        pub plan: DisplayPlan,
         fps: u32,
         quality: f64,
         backend: Backend,
