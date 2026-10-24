@@ -4,12 +4,12 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Privacy Policy — ScreenForge</title>
-<meta name="description" content="ScreenForge goes online when you press Activate or Buy, use the AI agent, search Unsplash or download a speech model for captions. The app has no analytics or telemetry; recordings and exports stay on your computer. The website uses Google Analytics.">
+<meta name="description" content="ScreenForge goes online when you press Activate or Buy, use the AI agent, search Unsplash or download a speech model for captions or a voice model for narration. The app has no analytics or telemetry; recordings and exports stay on your computer. The website uses Google Analytics.">
 <link rel="canonical" href="https://screenforge.studio/privacy">
 <meta name="color-scheme" content="light dark">
 <meta property="og:type" content="website">
 <meta property="og:title" content="Privacy Policy — ScreenForge">
-<meta property="og:description" content="ScreenForge goes online when you press Activate or Buy, use the AI agent, search Unsplash or download a speech model for captions. The app has no analytics or telemetry; recordings and exports stay on your computer. The website uses Google Analytics.">
+<meta property="og:description" content="ScreenForge goes online when you press Activate or Buy, use the AI agent, search Unsplash or download a speech model for captions or a voice model for narration. The app has no analytics or telemetry; recordings and exports stay on your computer. The website uses Google Analytics.">
 <meta property="og:image" content="https://screenforge.studio/og.png?v=3">
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
@@ -431,6 +431,7 @@ gtag('config', 'G-ZYRJDJ736V');
     <li><strong>Unsplash</strong>: a background search sends the words you searched for to our server, which asks Unsplash and keeps the results for a few hours so the same search is answered without asking again. Choosing a photo downloads it into the project.</li>
     <li><strong>Free exports</strong>: the app counts the exports you made without a license, with the device code described above, so the free exports are not reset by reinstalling. It sends nothing else.</li>
     <li><strong>Generate transcript</strong>, the first time you use a speech model, downloads that model (142 MB or 466 MB) from our GitHub releases, or from Hugging Face if GitHub is unreachable. It is a plain file download: nothing about you or your recording is sent. The file is checked against a known checksum, kept on your computer, and not downloaded again. Transcription itself runs on your computer, and your audio never leaves it.</li>
+    <li><strong>Narration</strong>, the first time you use an AI voice or press <em>Download voice model</em>, downloads the Kokoro voice model, its voices and pronunciation dictionaries (about 335 MB) from our GitHub releases, or from Hugging Face and GitHub's copy of the dictionaries if ours is unreachable. Like the speech models, it is a plain file download checked against known checksums and kept on your computer. The voice runs on your computer: a script you type in the Narration panel never leaves it. When the agent narrates, it writes the script itself, as part of the agent conversation described above.</li>
     <li><strong>Update check</strong>: at launch, at most once a day, the app asks GitHub's public releases API for the newest version number, and shows "Update available" when it is newer than yours. It is one plain request with no account, no identifier and nothing about you or your projects; GitHub sees it like any other visit. Turn it off with <em>Check automatically</em> in the toolbar's settings menu; <em>Check for updates now</em> does the same once, on request. Updating is up to you: the app only opens the release page.</li>
   </ul>
   <p>All of them go over HTTPS. Apart from the update check, opening the app, recording, editing by hand, captioning with a model you already have, and exporting make no network requests at all.</p>
@@ -447,7 +448,7 @@ gtag('config', 'G-ZYRJDJ736V');
     <li><strong>Unsplash</strong> provides the background photos. It sees the searches our server makes for you, not who made them; downloading a photo comes from its image servers; see <a href="https://unsplash.com/privacy">Unsplash's privacy policy</a>.</li>
     <li><strong>Google Analytics</strong> counts visits to this website: pages viewed, referrer, and approximate location and device, using a cookie in your browser. It runs on the website only, never in the app. Blocking it does not affect anything; see <a href="https://policies.google.com/privacy">Google's privacy policy</a>.</li>
     <li><strong>GitHub</strong> hosts the source, the release downloads and the speech models. The download page asks GitHub's public API which release is newest; that request, like a model download, carries no data about you beyond what any web request does.</li>
-    <li><strong>Hugging Face</strong> hosts the original whisper.cpp speech models. The app downloads from it only if our GitHub copy is unreachable, and sends nothing beyond what any web request does; see <a href="https://huggingface.co/privacy">Hugging Face's privacy policy</a>.</li>
+    <li><strong>Hugging Face</strong> hosts the original whisper.cpp speech models and the Kokoro voice model. The app downloads from it only if our GitHub copy is unreachable, and sends nothing beyond what any web request does; see <a href="https://huggingface.co/privacy">Hugging Face's privacy policy</a>.</li>
   </ul>
 
   <h2><span class="n">05</span>What we do not do</h2>
