@@ -23,7 +23,30 @@ pub trait Host: Send + Sync {
     fn screen_motion(&self) -> Result<Vec<(f64, f64, crate::motion::Motion)>, String>;
     /// JPEG stills of the screen video at source times (ms), one per time.
     fn screen_frames(&self, source_ms: &[f64]) -> Result<Vec<Vec<u8>>, String>;
+    /// Read `text` aloud with AI voice `voice` (a [`VOICES`] id) at `speed`, saved in the
+    /// project's voice-over folder with its words for captions.
+    fn speak(&self, text: &str, voice: &str, speed: f64) -> Result<Spoken, String> {
+        let _ = (text, voice, speed);
+        Err("AI voices are not available here".into())
+    }
 }
+
+/// A take read by an AI voice: its file in the voice-over folder and its length.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Spoken {
+    pub file_name: String,
+    pub duration_ms: f64,
+}
+
+/// The AI voices `add_narration` offers: (id, description). The first is the default.
+pub const VOICES: [(&str, &str); 6] = [
+    ("am_fenrir", "male, warm and clear (default)"),
+    ("am_michael", "male, calm"),
+    ("am_puck", "male, lively"),
+    ("af_heart", "female, warm"),
+    ("af_bella", "female, bright"),
+    ("af_nicole", "female, soft"),
+];
 
 /// Something only the editor can do, asked for by a tool and run when the round's edits are
 /// applied.

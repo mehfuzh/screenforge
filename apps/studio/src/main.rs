@@ -12,6 +12,7 @@ mod editor;
 mod export;
 mod masks;
 mod mic_meter;
+mod narration;
 mod open_docs;
 mod os;
 mod permissions;

@@ -223,6 +223,7 @@ pub enum Section {
     CameraStyle,
     Captions,
     Audio,
+    Narration,
     Shortcuts,
     Animations,
     Agent,
@@ -230,7 +231,7 @@ pub enum Section {
 }
 
 impl Section {
-    pub const ALL: [Section; 10] = [Section::Agent, Section::General, Section::Cursor, Section::CameraLayout, Section::CameraStyle, Section::Captions, Section::Audio, Section::Shortcuts, Section::Animations, Section::DeviceFrame];
+    pub const ALL: [Section; 11] = [Section::Agent, Section::General, Section::Cursor, Section::CameraLayout, Section::CameraStyle, Section::Captions, Section::Audio, Section::Narration, Section::Shortcuts, Section::Animations, Section::DeviceFrame];
 
     pub fn icon(self) -> widgets::Icon {
         match self {
@@ -240,6 +241,7 @@ impl Section {
             Section::CameraStyle => widgets::Icon::CameraStyle,
             Section::Captions => widgets::Icon::Captions,
             Section::Audio => widgets::Icon::Audio,
+            Section::Narration => widgets::Icon::Narration,
             Section::Shortcuts => widgets::Icon::Keyboard,
             Section::Animations => widgets::Icon::Animations,
             Section::Agent => widgets::Icon::Agent,
@@ -255,6 +257,7 @@ impl Section {
             Section::CameraStyle => "Camera Style",
             Section::Captions => "Captions",
             Section::Audio => "Audio",
+            Section::Narration => "Narration",
             Section::Shortcuts => "Keyboard Shortcuts",
             Section::Animations => "Animations",
             Section::Agent => "Agent (⌘L)",
@@ -324,6 +327,7 @@ pub fn ui(ed: &mut Editor, ui: &mut egui::Ui, section: Section) {
             Section::CameraStyle => camera_style_ui(ed, ui),
             Section::Captions => captions_ui(ed, ui),
             Section::Audio => audio_ui(ed, ui),
+            Section::Narration => narration_ui(ed, ui),
             Section::Shortcuts => shortcuts_ui(ed, ui),
             Section::Animations => animations_ui(ed, ui),
             Section::Agent => {}
@@ -806,16 +810,8 @@ fn grade_slider(ed: &mut Editor, ui: &mut egui::Ui, label: &str, get: impl Fn(&s
     }
 }
 
-fn captions_ui(ed: &mut Editor, ui: &mut egui::Ui) {
-    widgets::title(ui, "Captions");
-    let has_mic = ed.session.pkg.recording.as_ref().and_then(|r| r.microphone()).is_some_and(|m| !m.sessions.is_empty());
-    if !has_mic {
-        widgets::hint(ui, "No microphone recorded");
-        return;
-    }
-    let has_transcript = !ed.session.captions.is_empty();
-
-    // ── transcript ──
+/// Whisper transcription of the recorded speech (microphone and recorded voice-overs).
+fn transcript_ui(ed: &mut Editor, ui: &mut egui::Ui, has_transcript: bool) {
     widgets::hint(ui, "Transcribed on this computer with Whisper. The model is downloaded once.");
     ui.add_space(4.0);
     ui.add_enabled_ui(!ed.transcribe.is_running(), |ui| {
@@ -849,7 +845,7 @@ fn captions_ui(ed: &mut Editor, ui: &mut egui::Ui) {
             widgets::hint(ui, "Re-generating replaces the current transcript.");
         }
         match &ed.transcribe.result {
-            Some(Ok(0)) => widgets::hint(ui, "No speech was found in the microphone recording."),
+            Some(Ok(0)) => widgets::hint(ui, "No speech was found in the microphone recording or voice-overs."),
             Some(Ok(n)) => widgets::hint(ui, &format!("Transcribed {n} words.")),
             Some(Err(e)) if e == "cancelled" => widgets::hint(ui, "Cancelled."),
             Some(Err(e)) => {
@@ -857,6 +853,25 @@ fn captions_ui(ed: &mut Editor, ui: &mut egui::Ui) {
             }
             None => {}
         }
+    }
+}
+
+fn captions_ui(ed: &mut Editor, ui: &mut egui::Ui) {
+    widgets::title(ui, "Captions");
+    let has_mic = ed.session.pkg.recording.as_ref().and_then(|r| r.microphone()).is_some_and(|m| !m.sessions.is_empty());
+    let has_voice_over = ed.session.pkg.project.scenes.iter().any(|s| !s.voice_overs.is_empty());
+    if !has_mic && !has_voice_over {
+        widgets::hint(ui, "No microphone recorded. Record a voice-over to caption it.");
+        return;
+    }
+    let has_transcript = !ed.session.captions.is_empty();
+
+    // takes read by the AI voice carry their words; only recorded speech is transcribed
+    let has_recorded = has_mic || ed.session.pkg.project.scenes.iter().flat_map(|s| &s.voice_overs).any(|v| v.spoken_voice().is_none());
+    if has_recorded {
+        transcript_ui(ed, ui, has_transcript);
+    } else {
+        widgets::hint(ui, "The captions come from the narration script, so there is nothing to transcribe. Record a voice-over or a microphone to transcribe it with Whisper.");
     }
     if !has_transcript {
         return;
@@ -1060,6 +1075,191 @@ fn voice_over_item_ui(ed: &mut Editor, ui: &mut egui::Ui) {
         }
     });
     widgets::hint(ui, "Drag the take along the voice-over lane to move it, or drag its edges to trim it. Split it (S) to cut out a part: select the piece and press ⌫. It stays with the frame it starts on when you cut or speed up clips before it.");
+    spoken_take_ui(ed, ui, &id);
+}
+
+/// A take read by the AI voice: its voice and script, read again on a change.
+fn spoken_take_ui(ed: &mut Editor, ui: &mut egui::Ui, id: &str) {
+    let Some(take) = ed.session.pkg.project.scenes[0].voice_overs.iter().find(|v| v.id == id) else { return };
+    let Some(voice) = take.spoken_voice().map(str::to_string) else { return };
+    let text = take.source.get("text").and_then(|t| t.as_str()).unwrap_or_default().to_string();
+    let source_ms = take.source_start_ms;
+    ui.add_space(8.0);
+    widgets::title(ui, "AI voice");
+    let busy = ed.narration.working().is_some();
+    let speed = ed.session.pkg.project.config.audio.narration_speed();
+    let mut read = None;
+    ui.add_enabled_ui(!busy, |ui| {
+        if let Some(v) = voice_picker(ui, &voice) {
+            read = Some((v.to_string(), text.clone()));
+        }
+    });
+    widgets::title(ui, "Script");
+    if ed.narration.take_draft.as_ref().is_none_or(|(d, _)| d != id) {
+        ed.narration.take_draft = Some((id.to_string(), text.clone()));
+    }
+    if let Some((_, draft)) = ed.narration.take_draft.as_mut() {
+        script_box(ui, draft, "What the voice says");
+        let changed = draft.trim() != text.trim() && !draft.trim().is_empty();
+        let draft = draft.clone();
+        ui.add_enabled_ui(changed && !busy, |ui| {
+            if widgets::accent_button(ui, "Read again").on_hover_text("Replace this take with the new script, in the same place").clicked() {
+                read = Some((voice.clone(), draft));
+            }
+        });
+    }
+    if let Some((voice, text)) = read {
+        let req = crate::narration::TakeRequest { text, voice, speed, replaces: Some(id.to_string()), source_ms };
+        ed.narration.read(ed.path.clone(), vec![req]);
+    }
+    // a download it waits for shows under Narration → Voice model
+    if ed.narration.rereading() == Some(id) && !ed.narration.is_downloading() {
+        narration_status(ed, ui);
+    }
+}
+
+/// What the narration job is doing, with Cancel.
+fn narration_status(ed: &mut Editor, ui: &mut egui::Ui) {
+    let Some(status) = ed.narration.status() else { return };
+    ui.add_space(4.0);
+    ui.horizontal(|ui| {
+        ui.spinner();
+        widgets::hint(ui, &status);
+    });
+    if let Some(sf_tts::Progress::Downloading { done, total: Some(t) }) = ed.narration.progress.clone().filter(|_| ed.narration.is_downloading()) {
+        ui.add(egui::ProgressBar::new((done as f64 / t.max(1) as f64) as f32).desired_height(6.0).corner_radius(2.0).fill(theme::p().accent));
+    }
+    if widgets::secondary_button(ui, "Cancel").clicked() {
+        ed.narration.cancel();
+    }
+}
+
+/// The AI voices in two rows, male and female. Returns the voice picked.
+fn voice_picker(ui: &mut egui::Ui, current: &str) -> Option<&'static str> {
+    let mut picked = None;
+    for female in [false, true] {
+        let voices: Vec<&sf_tts::Voice> = sf_tts::VOICES.iter().filter(|v| v.female == female).collect();
+        let names: Vec<&str> = voices.iter().map(|v| v.name).collect();
+        ui.label(RichText::new(if female { "Female" } else { "Male" }).size(13.0).color(theme::p().text_dim));
+        let idx = voices.iter().position(|v| v.id == current).unwrap_or(usize::MAX);
+        if let Some(i) = widgets::pills(ui, idx, &names) {
+            picked = Some(voices[i].id);
+        }
+    }
+    picked
+}
+
+/// A few lines of script.
+fn script_box(ui: &mut egui::Ui, text: &mut String, hint: &str) {
+    let pal = theme::p();
+    egui::Frame::NONE.fill(pal.bg).stroke(egui::Stroke::new(1.0, pal.border)).corner_radius(egui::CornerRadius::same(2)).inner_margin(egui::Margin::same(8)).show(ui, |ui| {
+        ui.add(egui::TextEdit::multiline(text).hint_text(RichText::new(hint).color(pal.text_faint)).font(egui::FontId::proportional(14.0)).text_color(pal.text).frame(egui::Frame::NONE).desired_rows(5).desired_width(f32::INFINITY));
+    });
+}
+
+/// Narration: the AI voice (Kokoro, on this computer), its model, and text read into
+/// voice-over takes at the playhead.
+fn narration_ui(ed: &mut Editor, ui: &mut egui::Ui) {
+    let pal = theme::p();
+    widgets::title(ui, "Narration");
+    widgets::hint(ui, "An AI voice reads what you write, on this computer. Each reading is a voice-over take with captions. The agent narrates with the same voice and speed.");
+
+    // ── the model ──
+    widgets::title(ui, "Voice model");
+    let work = ed.narration.working();
+    let size_mb = sf_tts::download_size() as f64 / 1e6;
+    // each run's status shows once, by what started it (a download under the model, even
+    // when a reading started it; a take read again in that take's section while it is
+    // selected)
+    let downloading = ed.narration.is_downloading();
+    let reread_shown = ed.narration.rereading().is_some_and(|id| ed.selected_voice_over.as_deref() == Some(id));
+    let here = |w: crate::narration::Work| !downloading && !reread_shown && work == Some(w);
+    let (by_preview, by_add) = (here(crate::narration::Work::Preview), here(crate::narration::Work::Takes(1)) && ed.narration.rereading().is_none());
+    let by_takes = !downloading && !reread_shown && !by_add && matches!(work, Some(crate::narration::Work::Takes(_)));
+    if downloading {
+        narration_status(ed, ui);
+    } else if ed.narration.is_downloaded() {
+        widgets::hint(ui, &format!("Kokoro is downloaded ({size_mb:.0} MB) and works offline."));
+        if ui.add_enabled_ui(work.is_none(), |ui| widgets::secondary_button(ui, "Remove download")).inner.on_hover_text("Free the space; it is downloaded again when you next narrate").clicked() {
+            ed.narration.remove();
+        }
+    } else {
+        widgets::hint(ui, &format!("Kokoro, about {size_mb:.0} MB, is downloaded once. Without it, the first narration downloads it."));
+        if widgets::accent_button(ui, "Download voice model").clicked() {
+            ed.narration.download();
+        }
+    }
+
+    // ── voice and speed ──
+    let audio = &ed.session.pkg.project.config.audio;
+    let voice = audio.narration_voice.clone().filter(|v| sf_tts::voice(v).is_some()).unwrap_or_else(|| sf_tts::DEFAULT_VOICE.to_string());
+    let speed = audio.narration_speed();
+    widgets::title(ui, "Voice");
+    if let Some(v) = voice_picker(ui, &voice) {
+        ed.edit(move |p| p.config.audio.narration_voice = Some(v.to_string()));
+    }
+    ui.add_space(4.0);
+    let playing = ed.narration.is_playing();
+    let label = if playing { "Stop" } else { "Preview" };
+    if ui.add_enabled(work.is_none(), egui::Button::new(label)).on_hover_text("Hear a line in this voice").clicked() {
+        if playing {
+            ed.narration.stop_preview();
+        } else {
+            ed.narration.preview(&voice, speed);
+        }
+    }
+    if by_preview {
+        narration_status(ed, ui);
+    }
+    let r = sf_project::v4::AudioConfig::NARRATION_SPEEDS;
+    cfg_slider(ed, ui, "Speed", |p| p.config.audio.narration_speed(), |p, v| p.config.audio.narration_speed = Some((v * 20.0).round() / 20.0), r, Some(1.0), "×");
+
+    // ── a new take ──
+    widgets::title(ui, "Script");
+    script_box(ui, &mut ed.narration.draft, "Type what the voice should say…");
+    widgets::hint(ui, "A blank line makes a longer pause. Numbers like 2× or 1.5 are read out.");
+    ui.add_space(6.0);
+    let can = !ed.narration.draft.trim().is_empty() && work.is_none();
+    let at = ed.playhead_ms;
+    ui.add_enabled_ui(can, |ui| {
+        if widgets::accent_button(ui, &format!("Add at {}", crate::editor::fmt_clock(at))).on_hover_text("Read the script into a voice-over take starting at the playhead").clicked() {
+            let source_ms = ed.session.timeline.output_to_source(at).unwrap_or(0.0);
+            let req = crate::narration::TakeRequest { text: ed.narration.draft.trim().to_string(), voice: voice.clone(), speed, replaces: None, source_ms };
+            ed.narration.read(ed.path.clone(), vec![req]);
+        }
+    });
+    if by_add {
+        narration_status(ed, ui);
+    }
+
+    // ── takes already read ──
+    let takes: Vec<(String, String, String, f64)> = ed.session.pkg.project.scenes[0]
+        .voice_overs
+        .iter()
+        .filter_map(|v| Some((v.id.clone(), v.spoken_voice()?.to_string(), v.source.get("text")?.as_str()?.to_string(), v.source_start_ms)))
+        .collect();
+    if !takes.is_empty() {
+        widgets::title(ui, "Narration takes");
+        let other = takes.iter().filter(|t| t.1 != voice).count();
+        let name = sf_tts::voice(&voice).map_or(voice.clone(), |v| v.name.to_string());
+        widgets::hint(ui, &match (takes.len(), other) {
+            (n, 0) => format!("{n} take{} read by {name}. Select one on the timeline to change its script or voice.", if n == 1 { "" } else { "s" }),
+            (n, o) => format!("{o} of {n} takes use another voice."),
+        });
+        ui.add_enabled_ui(work.is_none(), |ui| {
+            if widgets::secondary_button(ui, &format!("Read all with {name}")).on_hover_text("Read every narration take again with this voice and speed, in the same places").clicked() {
+                let reqs = takes.into_iter().map(|(id, _, text, source_ms)| crate::narration::TakeRequest { text, voice: voice.clone(), speed, replaces: Some(id), source_ms }).collect();
+                ed.narration.read(ed.path.clone(), reqs);
+            }
+        });
+    }
+    if by_takes {
+        narration_status(ed, ui);
+    }
+    if let Some(e) = &ed.narration.error {
+        ui.add_space(6.0);
+        ui.label(RichText::new(e).size(13.0).color(pal.danger));
+    }
 }
 
 fn audio_ui(ed: &mut Editor, ui: &mut egui::Ui) {

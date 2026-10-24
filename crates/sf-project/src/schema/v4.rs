@@ -200,12 +200,25 @@ pub struct AudioConfig {
     /// mode and followed by a limiter. `None` = 0 (off).
     #[serde(default, rename = "sfMicrophoneBoostDb", skip_serializing_if = "Option::is_none")]
     pub microphone_boost_db: Option<f64>,
+    /// ScreenForge extension: the AI voice that reads narration (a Kokoro voice id, as in the
+    /// Narration panel). `None` = the default voice.
+    #[serde(default, rename = "sfNarrationVoice", skip_serializing_if = "Option::is_none")]
+    pub narration_voice: Option<String>,
+    /// ScreenForge extension: how fast the AI voice reads (0.7..1.3). `None` = 1.
+    #[serde(default, rename = "sfNarrationSpeed", skip_serializing_if = "Option::is_none")]
+    pub narration_speed: Option<f64>,
     #[serde(flatten)]
     pub extra: Extra,
 }
 
 impl AudioConfig {
     pub const MAX_MICROPHONE_BOOST_DB: f64 = 24.0;
+    pub const NARRATION_SPEEDS: std::ops::RangeInclusive<f64> = 0.7..=1.3;
+
+    /// Narration speed, 1 when unset.
+    pub fn narration_speed(&self) -> f64 {
+        self.narration_speed.filter(|s| s.is_finite()).unwrap_or(1.0).clamp(*Self::NARRATION_SPEEDS.start(), *Self::NARRATION_SPEEDS.end())
+    }
 
     /// Microphone boost in dB, 0 when unset.
     pub fn microphone_boost_db(&self) -> f64 {
@@ -227,6 +240,8 @@ impl Default for AudioConfig {
             click_sound_effect: None,
             click_sound_effect_volume: 0.25,
             microphone_boost_db: None,
+            narration_voice: None,
+            narration_speed: None,
             extra: Extra::new(),
         }
     }
@@ -870,7 +885,8 @@ pub struct VoiceOver {
     pub time_scale: f64,
     #[serde(default = "one_f")]
     pub volume: f64,
-    /// `{type:"microphone"}` or `{type:"speechify", text, voiceId, language, speechMarks}`
+    /// `{type:"microphone"}`, `{type:"kokoro", text, voiceId}` (an AI voice, made on this
+    /// computer) or Screen Studio's `{type:"speechify", text, voiceId, language, speechMarks}`
     #[serde(default)]
     pub source: Value,
     #[serde(default = "first_frame")]
@@ -922,6 +938,17 @@ impl VoiceOver {
             boost_db: 0.0,
             extra: Extra::new(),
         }
+    }
+
+    /// Narration read by an AI voice (`voice_id` of Kokoro), starting at source time
+    /// `source_start_ms`.
+    pub fn spoken(source_start_ms: f64, duration_ms: f64, file_name: impl Into<String>, text: &str, voice_id: &str) -> Self {
+        VoiceOver { source: serde_json::json!({ "type": "kokoro", "text": text, "voiceId": voice_id }), ..Self::microphone(source_start_ms, duration_ms, file_name) }
+    }
+
+    /// The AI voice that read this take, `None` for a recorded one.
+    pub fn spoken_voice(&self) -> Option<&str> {
+        (self.source.get("type").and_then(|t| t.as_str()) == Some("kokoro")).then(|| self.source.get("voiceId").and_then(|v| v.as_str())).flatten()
     }
 
     /// The boost in dB, clamped to what the editor offers.

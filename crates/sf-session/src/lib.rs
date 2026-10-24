@@ -103,7 +103,7 @@ impl Session {
         let geometry = Self::geometry_for(&pkg, &source);
         let (camera, cursor_smoother) = Self::solvers(&pkg, &source, &cursor_track, geometry);
         let camera_rect = SpringVec::new(SpringParams::from(pkg.project.config.animations.screen_movement_spring), [0.0; 4]);
-        let captions = captions::Captions::load(&pkg, source.process_time_start_ms);
+        let captions = captions::Captions::load(&pkg, source.process_time_start_ms, &timeline);
         let shortcuts = shortcuts::Shortcuts::load(&pkg, &cursor_track);
         let mut s = Session {
             pkg,
@@ -566,7 +566,7 @@ impl Session {
 
     /// Re-read the transcripts (after generating one, or toggling sound labels).
     pub fn reload_captions(&mut self) {
-        self.captions = captions::Captions::load(&self.pkg, self.source.process_time_start_ms);
+        self.captions = captions::Captions::load(&self.pkg, self.source.process_time_start_ms, &self.timeline);
     }
 
     /// SubRip captions for the edited timeline (empty when there is no transcript).

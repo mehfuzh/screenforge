@@ -327,8 +327,10 @@ impl AudioPlayer {
             })
             .collect();
         drop(s);
-        // a part may have just been given a track that is not decoded yet
+        // a part may have just been given a track that is not decoded yet, and a take (one
+        // the agent narrated) or a boost may be new
         self.load_music(session);
+        self.load_voice_overs(session);
     }
 
     /// Waveform peaks of a track over the whole recording (source time), `buckets` wide.

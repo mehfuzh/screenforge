@@ -266,6 +266,8 @@ pub enum Icon {
     CameraLayout,
     CameraStyle,
     Captions,
+    /// A speech bubble with a voice's waveform in it (AI narration).
+    Narration,
     Audio,
     Keyboard,
     Animations,
@@ -505,6 +507,14 @@ pub fn paint_icon(p: &egui::Painter, rect: Rect, icon: Icon, color: Color32) {
             line((-0.4, 0.4), (-0.3, 0.85));
             line((-0.3, 0.85), (0.1, 0.4));
             line((-0.5, -0.15), (0.5, -0.15));
+        }
+        Icon::Narration => {
+            p.rect_stroke(rr(-0.9, -0.75, 0.9, 0.45), 4.0, s, egui::StrokeKind::Middle);
+            line((-0.45, 0.45), (-0.55, 0.9));
+            line((-0.55, 0.9), (-0.05, 0.45));
+            for (x, h) in [(-0.45, 0.18), (-0.15, 0.4), (0.15, 0.28), (0.45, 0.12)] {
+                line((x, -0.15 - h), (x, -0.15 + h));
+            }
         }
         Icon::Audio => {
             let pts = vec![pos2(c.x - 0.8 * r, c.y - 0.3 * r), pos2(c.x - 0.4 * r, c.y - 0.3 * r), pos2(c.x + 0.1 * r, c.y - 0.75 * r), pos2(c.x + 0.1 * r, c.y + 0.75 * r), pos2(c.x - 0.4 * r, c.y + 0.3 * r), pos2(c.x - 0.8 * r, c.y + 0.3 * r)];

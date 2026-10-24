@@ -118,6 +118,20 @@ pub fn definitions() -> Vec<Value> {
             }
         }),
         json!({
+            "name": "add_narration",
+            "description": "Read text aloud with an AI voice (made on this computer) and add it as a voice-over take starting at start_ms; its words become captions. Write it as spoken sentences, and use one call per passage you place (one per section of the video); the result gives the take's end, so the next starts after it. Keep each passage within the part of the video it describes. Voices: am_fenrir male, am_michael male, am_puck male, af_heart female, af_bella female, af_nicole female; leave voice and speed out to use the ones the user chose in the Narration panel, and keep one voice for the whole video unless asked. speed 0.7–1.3 (1 = normal). The first narration downloads the voice model (about 330 MB) and can take a minute. Lower the music (set_music volume 0.2–0.3) so the voice is heard.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "text": { "type": "string" },
+                    "start_ms": { "type": "number" },
+                    "voice": { "type": "string", "enum": crate::host::VOICES.iter().map(|(id, _)| *id).collect::<Vec<_>>() },
+                    "speed": { "type": "number" }
+                },
+                "required": ["text", "start_ms"]
+            }
+        }),
+        json!({
             "name": "set_music",
             "description": "Background music for the whole video: track (a name from get_options music, a file brought in with import_file, or null for no music), volume 0–1 (0.2–0.3 sits under a voice), muted. Choosing a track replaces the music parts' own tracks.",
             "input_schema": {
@@ -278,6 +292,7 @@ impl Workspace {
                 }
             })(),
             "update_audio" => self.update_audio(input),
+            "add_narration" => self.add_narration(input),
             "set_music" => (|| {
                 let audio = &mut self.project.config.audio;
                 let mut changed = vec![];
@@ -492,6 +507,38 @@ impl Workspace {
         Err(format!("no audio clip, voice-over or music part {id}"))
     }
 
+    fn add_narration(&mut self, input: &Value) -> Result<Outcome, String> {
+        let text = input.get("text").and_then(Value::as_str).map(str::trim).filter(|t| !t.is_empty()).ok_or("`text` is required")?;
+        let t = num(input, "start_ms")?;
+        // the voice and speed chosen in the Narration panel, unless asked for another
+        let audio = &self.project.config.audio;
+        let default_voice = audio.narration_voice.clone().filter(|v| crate::host::VOICES.iter().any(|(id, _)| id == v)).unwrap_or_else(|| crate::host::VOICES[0].0.to_string());
+        let voice = input.get("voice").and_then(Value::as_str).unwrap_or(&default_voice).to_string();
+        let voice = voice.as_str();
+        if !crate::host::VOICES.iter().any(|(id, _)| *id == voice) {
+            return Err(format!("unknown voice {voice}"));
+        }
+        let speed = opt_num(input, "speed")?.unwrap_or(audio.narration_speed());
+        if !(0.5..=2.0).contains(&speed) {
+            return Err("`speed` is 0.7–1.3 (1 = normal)".into());
+        }
+        let tl = self.timeline();
+        if t < 0.0 || t >= tl.duration_ms() {
+            return Err(format!("{} is not on the timeline (it is {} long)", clock(t), clock(tl.duration_ms())));
+        }
+        let source = tl.output_to_source(t).ok_or_else(|| format!("{} is not on the timeline", clock(t)))?;
+        let spoken = self.host.as_deref().ok_or("not available here (no editor)")?.speak(text, voice, speed)?;
+        let vo = sf_project::v4::VoiceOver::spoken(source, spoken.duration_ms, spoken.file_name, text, voice);
+        let id = vo.id.clone();
+        self.project.scenes[0].voice_overs.push(vo);
+        let end = t + spoken.duration_ms;
+        let mut result = json!({ "id": id, "startMs": t.round(), "endMs": end.round(), "voice": voice });
+        if end > tl.duration_ms() {
+            result["note"] = json!(format!("The narration runs {:.1} s past the end of the video and is cut there; shorten the text, speed it up, or start it earlier.", (end - tl.duration_ms()) / 1000.0));
+        }
+        Ok(Outcome::edit(result, format!("Narration {} – {}", clock(t), clock(end.min(tl.duration_ms())))))
+    }
+
     /// Audio, music and voice-overs for `get_project`.
     pub(crate) fn audio_overview(&self, tl: &Timeline) -> Value {
         let ms = |v: f64| (v * 10.0).round() / 10.0;
@@ -499,7 +546,18 @@ impl Workspace {
         let a = &self.project.config.audio;
         let clips: Vec<Value> = scene.audio_clips().unwrap_or_default().iter().map(|c| json!({ "id": c.id, "track": c.track, "startMs": ms(c.output_start_ms), "endMs": ms(c.output_end_ms()), "volume": c.volume, "muted": c.muted, "speed": c.speed, "boostDb": c.boost_db })).collect();
         let music: Vec<Value> = sf_engine::lanes::music_clips(&self.project, tl).iter().map(|m| json!({ "id": m.id, "startMs": ms(m.output_start_ms), "endMs": ms(m.output_end_ms()), "track": m.file_name, "volume": m.volume, "muted": m.muted, "fadeInMs": m.fade_in_ms, "fadeOutMs": m.fade_out_ms })).collect();
-        let voice: Vec<Value> = sf_engine::audio::voice_over_spans(scene, tl).iter().map(|v| json!({ "id": v.id, "startMs": ms(v.output_start_ms), "endMs": ms(v.output_end_ms), "volume": v.volume, "boostDb": v.boost_db, "disabled": v.muted })).collect();
+        let voice: Vec<Value> = sf_engine::audio::voice_over_spans(scene, tl)
+            .iter()
+            .map(|v| {
+                let mut o = json!({ "id": v.id, "startMs": ms(v.output_start_ms), "endMs": ms(v.output_end_ms), "volume": v.volume, "boostDb": v.boost_db, "disabled": v.muted });
+                // an AI voice's take: what it says, to change it (remove, then add_narration)
+                if let Some(take) = scene.voice_overs.iter().find(|t| t.id == v.id).filter(|t| t.spoken_voice().is_some()) {
+                    o["aiVoice"] = json!(take.spoken_voice());
+                    o["text"] = take.source.get("text").cloned().unwrap_or(Value::Null);
+                }
+                o
+            })
+            .collect();
         json!({
             "recordedTracks": self.audio_tracks,
             "detached": scene.is_audio_detached(),
@@ -552,6 +610,56 @@ mod tests {
         assert!(w.run("add_layout", &json!({ "start_ms": 5000, "end_ms": 6000, "type": "nope" })).is_err());
         w.run("update_layout", &json!({ "id": id(&o, "id"), "type": "split-screen" })).unwrap();
         assert_eq!(w.project.scenes[0].layouts[0].kind, "split-screen");
+    }
+
+    /// A host that "speaks" by length: 100 ms per character.
+    struct Voice;
+    impl crate::Host for Voice {
+        fn options(&self) -> Value {
+            json!({})
+        }
+        fn apply_preset(&self, _: &str, _: &mut Project) -> Result<(), String> {
+            Err("no".into())
+        }
+        fn search_photos(&self, _: &str) -> Result<Value, String> {
+            Err("no".into())
+        }
+        fn download_photo(&self, _: &str) -> Result<Value, String> {
+            Err("no".into())
+        }
+        fn import_file(&self, _: &str) -> Result<String, String> {
+            Err("no".into())
+        }
+        fn screen_motion(&self) -> Result<Vec<(f64, f64, crate::motion::Motion)>, String> {
+            Err("no".into())
+        }
+        fn screen_frames(&self, _: &[f64]) -> Result<Vec<Vec<u8>>, String> {
+            Err("no".into())
+        }
+        fn speak(&self, text: &str, voice: &str, _: f64) -> Result<crate::host::Spoken, String> {
+            Ok(crate::host::Spoken { file_name: format!("{voice}.wav"), duration_ms: text.len() as f64 * 100.0 })
+        }
+    }
+
+    #[test]
+    fn narration_is_placed_where_asked_and_listed_with_its_text() {
+        let mut w = ws();
+        // 2–4 s cut: output 5 s is source 7 s
+        w.project.scenes[0].slices = vec![Slice::new(0.0, 2_000.0), Slice::new(4_000.0, 10_000.0)];
+        assert!(w.run("add_narration", &json!({ "text": "Hi", "start_ms": 1000 })).is_err(), "no voice without an editor");
+        w.host = Some(std::sync::Arc::new(Voice));
+        let o = w.run("add_narration", &json!({ "text": "Hello there", "start_ms": 5000, "voice": "af_heart" })).unwrap();
+        let v = &w.project.scenes[0].voice_overs[0];
+        assert_eq!((v.source_start_ms, v.voiceover_duration_ms, v.file_name.as_str(), v.spoken_voice()), (7_000.0, 1_100.0, "af_heart.wav", Some("af_heart")));
+        assert_eq!(serde_json::from_str::<Value>(&o.result).unwrap()["endMs"], 6100.0);
+        let listed = &w.audio_overview(&w.timeline())["voiceOvers"][0];
+        assert_eq!((listed["aiVoice"].as_str(), listed["text"].as_str()), (Some("af_heart"), Some("Hello there")));
+        // past the end: placed, with a note to shorten it
+        let o = w.run("add_narration", &json!({ "text": "x".repeat(40), "start_ms": 6000 })).unwrap();
+        assert!(o.result.contains("past the end"), "{}", o.result);
+        assert_eq!(w.project.scenes[0].voice_overs[1].spoken_voice(), Some("am_fenrir"));
+        assert!(w.run("add_narration", &json!({ "text": "Hi", "start_ms": 1000, "voice": "nobody" })).is_err());
+        assert!(w.run("add_narration", &json!({ "text": "Hi", "start_ms": 9000 })).is_err(), "the timeline is 8 s");
     }
 
     #[test]

@@ -82,6 +82,8 @@ pub struct Editor {
     preview_stale: bool,
     /// Captions panel: Whisper transcription running in the background.
     pub transcribe: crate::captions::TranscribeJob,
+    /// Narration panel: the AI voice's downloads, previews and readings.
+    pub narration: crate::narration::NarrationJob,
     /// Crop tool open: the preview shows the whole recording with the crop frame over it.
     pub crop: Option<crate::crop::CropEditor>,
     /// "Save preset as…", "Rename preset" or "Delete preset" dialog.
@@ -153,6 +155,8 @@ impl Editor {
             status: None,
             section: match std::env::var("SF_START_SECTION").as_deref() {
                 Ok("audio") => Section::Audio,
+                Ok("narration") => Section::Narration,
+                Ok("captions") => Section::Captions,
                 Ok("cursor") => Section::Cursor,
                 Ok("animations") => Section::Animations,
                 Ok("shortcuts") => Section::Shortcuts,
@@ -173,6 +177,7 @@ impl Editor {
             remove_requested: false,
             preview_stale: false,
             transcribe: Default::default(),
+            narration: Default::default(),
             // SF_START_CROP opens the crop tool straight away (for screenshots)
             crop: std::env::var_os("SF_START_CROP").map(|_| crop::CropEditor::new(session_crop)),
             preset_dialog: None,
@@ -499,7 +504,7 @@ impl Editor {
         let dir = self.session.pkg.path.join(sf_project::v4::VoiceOver::DIR);
         match rec.finish(&dir) {
             Ok(Some(take)) => {
-                let silent = take.silent;
+                let (silent, clipped) = (take.silent, take.clipped);
                 let vo = sf_project::v4::VoiceOver::microphone(start, take.duration_ms, take.file_name);
                 let id = vo.id.clone();
                 self.edit(move |p| p.scenes[0].voice_overs.push(vo));
@@ -508,6 +513,9 @@ impl Editor {
                 if silent {
                     // kept so it can be checked, but say why it will play back as nothing
                     self.set_status(format!("Voice-over is silent: {device} sent no voice (muted, input volume too low, or in use by a call?). Choose another microphone in Audio, or raise its input volume in the system sound settings."));
+                } else if clipped {
+                    // the peaks are gone from the file: boosting or filtering cannot bring them back
+                    self.set_status(format!("Added voice-over, but it is distorted: {device} was too loud and cut off the peaks. Lower its input volume in the system sound settings (or move back from it) and record again."));
                 } else {
                     self.set_status("Added voice-over");
                 }
@@ -515,6 +523,33 @@ impl Editor {
             Ok(None) => self.set_status("Voice-over too short: discarded"),
             Err(e) => self.set_status(format!("Could not save the voice-over: {e}")),
         }
+    }
+
+    /// Put takes read by the AI voice on the timeline in one edit (see
+    /// [`crate::narration::place`]) and select the take when there is one.
+    fn place_narration(&mut self, made: Vec<crate::narration::Made>) {
+        let scene = &self.session.pkg.project.scenes[0];
+        // a take deleted while it was being read is not brought back
+        let (made, gone): (Vec<_>, Vec<_>) = made.into_iter().partition(|m| m.replaces.as_ref().is_none_or(|id| scene.voice_overs.iter().any(|v| &v.id == id)));
+        if made.is_empty() {
+            if !gone.is_empty() {
+                self.set_status("The take was deleted while it was being read");
+            }
+            return;
+        }
+        let (n, replaced) = (made.len(), made[0].replaces.is_some());
+        let mut ids = vec![];
+        let mut project = self.session.pkg.project.clone();
+        ids.extend(crate::narration::place(&mut project, made));
+        self.edit(move |p| *p = project);
+        if let [id] = ids.as_slice() {
+            self.select_voice_over(id.clone());
+        }
+        self.set_status(match (n, replaced) {
+            (1, false) => "Added the narration".to_string(),
+            (1, true) => "Read the take again".to_string(),
+            (n, _) => format!("Read {n} narration takes again"),
+        });
     }
 
     /// Cut voice-over `id` at output time `t`; the right-hand part is selected.
@@ -891,6 +926,12 @@ impl Editor {
         if self.transcribe.is_running() {
             ctx.request_repaint_after(std::time::Duration::from_millis(150));
         }
+        if let Some(made) = self.narration.poll() {
+            self.place_narration(made);
+        }
+        if self.narration.working().is_some() || self.narration.is_playing() {
+            ctx.request_repaint_after(std::time::Duration::from_millis(150));
+        }
 
         // ── title bar ──
         egui::Panel::top("titlebar").exact_size(56.0).frame(egui::Frame::default().fill(theme::p().bg).inner_margin(egui::Margin::symmetric(16, 0))).show(root, |ui| {
@@ -1122,6 +1163,8 @@ impl Editor {
         let elapsed = self.voice_rec.as_ref().map_or(0.0, |r| r.elapsed_ms());
         // nothing heard after a couple of seconds: the mic is muted, too quiet or held by a call
         let no_sound = elapsed > 2000.0 && self.voice_rec.as_ref().is_some_and(|r| r.is_silent());
+        // the microphone cut off the peaks: the take is distorting
+        let too_loud = self.voice_rec.as_ref().is_some_and(|r| r.is_clipping());
 
         // the bar can be dragged anywhere on the preview; where it was left is kept (as a
         // fraction of the preview, so a resized window keeps it in the same spot) across runs
@@ -1165,7 +1208,7 @@ impl Editor {
             x += 68.0;
         }
         let levels: Vec<f32> = self.voice_levels.iter().copied().collect();
-        widgets::paint_level_bars(ui.painter(), Rect::from_min_size(pos2(x, cy - 11.0), vec2(70.0, 22.0)), &levels, pal.meter, theme::glass_alpha(60));
+        widgets::paint_level_bars(ui.painter(), Rect::from_min_size(pos2(x, cy - 11.0), vec2(70.0, 22.0)), &levels, if too_loud { pal.danger } else { pal.meter }, theme::glass_alpha(60));
         x += 80.0;
 
         // right side: Record / Stop, and close while waiting
@@ -1180,7 +1223,13 @@ impl Editor {
             ui.fonts_mut(|f| f.layout_job(job))
         };
         if recording {
-            let (text, color) = if no_sound { (format!("No sound from {mic_name}"), pal.danger) } else { (mic_name, pal.on_glass) };
+            let (text, color) = if too_loud {
+                ("Too loud: lower the input volume".to_string(), pal.danger)
+            } else if no_sound {
+                (format!("No sound from {mic_name}"), pal.danger)
+            } else {
+                (mic_name, pal.on_glass)
+            };
             let galley = fit(text, name_rect.width(), color);
             ui.painter().galley(pos2(name_rect.left(), cy - galley.size().y / 2.0), galley, color);
         } else {

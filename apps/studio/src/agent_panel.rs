@@ -185,6 +185,10 @@ impl Host for StudioHost {
         std::fs::copy(&src, &dest).map_err(|e| format!("could not copy it into the project: {e}"))?;
         Ok(name)
     }
+
+    fn speak(&self, text: &str, voice: &str, speed: f64) -> Result<sf_agent::host::Spoken, String> {
+        crate::narration::speak_into(&self.project_dir, text, voice, speed)
+    }
 }
 
 /// Signing in (or switching account) with the emailed code, as Export → Activate does.
@@ -976,8 +980,9 @@ impl AgentPanel {
         let top = ui.cursor().top();
         let id = egui::Id::new("agent_input");
         let focused = ui.memory(|m| m.has_focus(id));
-        // Enter sends, Shift+Enter starts a new line
-        let mut send = focused && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter));
+        // Enter sends, Shift+Enter starts a new line (consume_key ignores an extra Shift, so
+        // it is checked first and the key left to the text box)
+        let mut send = focused && ui.input_mut(|i| !i.modifiers.shift && i.consume_key(egui::Modifiers::NONE, egui::Key::Enter));
         let hint = if self.job.is_some() { "The agent is working… (you can type the next request)" } else { "Type your prompt here, e.g. cut the first 5 seconds" };
         egui::Frame::NONE
             .fill(pal.card_2)
@@ -991,6 +996,8 @@ impl AgentPanel {
                     let resp = ui.add(
                         egui::TextEdit::multiline(&mut self.input)
                             .id(id)
+                            // plain Enter is taken above to send; Shift+Enter is the new line
+                            .return_key(egui::KeyboardShortcut::new(egui::Modifiers::SHIFT, egui::Key::Enter))
                             .desired_rows(2)
                             .desired_width(f32::INFINITY)
                             .frame(egui::Frame::NONE)
