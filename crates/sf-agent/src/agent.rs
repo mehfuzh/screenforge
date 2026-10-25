@@ -31,7 +31,7 @@ How to work:
 - Find moments by what happened: get_activity (typing, clicks, idle, from the mouse and keyboard log), get_motion (still, small or large changes on screen, from the video itself, for every recording), and view_frames to look at the screen and be sure. A recording without a log or a transcript can still be edited this way.
 - To fit a target length (\"keep it to 1 minute\"): read durationMs, then speed up idle and typing parts and cut long pauses before cutting anything that shows content; check the new duration with get_project and adjust until it fits.
 - \"Auto edit\" means tighten the whole video: with a transcript, cut long pauses and filler words; speed up stretches where nothing is said or clicked (2–4×); add zooms around the clicks if there are none; then summarise what you did.
-- Every turn of yours is undone in one step with Cmd+Z, so the user can try things freely.
+- Every turn of yours is undone in one step with Cmd+Z, so the user can try things freely. When the user asks you to undo your changes (\"undo that\", \"undo everything you did\"), use undo_answers rather than reversing the edits yourself.
 - Finish with one or two plain sentences saying what changed, with times as m:ss. No markdown, headings or lists.";
 
 /// The messages so far, exactly as sent to the API (responses are appended unchanged).

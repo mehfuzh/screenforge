@@ -49,6 +49,9 @@ pub struct Workspace {
     pub host: Option<Arc<dyn Host>>,
     /// App actions asked for since the editor last took them.
     pub actions: Vec<Action>,
+    /// The project before each of the agent's earlier answers in this chat that changed it,
+    /// oldest first, for `undo_answers`.
+    pub earlier: Vec<Project>,
 }
 
 /// Result of a tool that ran.
@@ -267,6 +270,11 @@ fn timeline_definitions() -> Value {
             "input_schema": { "type": "object", "properties": {} }
         },
         {
+            "name": "undo_answers",
+            "description": "Undo your own earlier answers in this chat: the project goes back to how it was before the last `count` answers that changed it (default 1), or before your first one with all: true. Use it for \"undo that\", \"undo all your changes\" or \"go back to how it was\" instead of reversing edits one by one. Edits the user made by hand after those answers are undone too, so say so when there were any. get_project's answersToUndo says how many there are.",
+            "input_schema": { "type": "object", "properties": { "count": { "type": "integer", "minimum": 1 }, "all": { "type": "boolean" } } }
+        },
+        {
             "name": "seek",
             "description": "Move the editor's playhead, e.g. to show the user a moment you changed.",
             "input_schema": { "type": "object", "properties": { "at_ms": { "type": "number" } }, "required": ["at_ms"] }
@@ -313,7 +321,7 @@ fn subtract(a: f64, b: f64, holes: &mut [(f64, f64)]) -> Vec<(f64, f64)> {
 
 impl Workspace {
     pub fn new(project: Project) -> Self {
-        Workspace { project, words: vec![], auto_zooms: vec![], activity: None, seek_to: None, content_px: (1920.0, 1080.0), audio_tracks: vec![], host: None, actions: vec![] }
+        Workspace { project, words: vec![], auto_zooms: vec![], activity: None, seek_to: None, content_px: (1920.0, 1080.0), audio_tracks: vec![], host: None, actions: vec![], earlier: vec![] }
     }
 
     pub(crate) fn timeline(&self) -> Timeline {
@@ -550,6 +558,18 @@ impl Workspace {
                 self.actions.push(Action::OpenExport);
                 Ok(Outcome::read(json!({ "ok": true }), "Opened the export dialog"))
             }
+            "undo_answers" => {
+                let n = self.earlier.len();
+                if n == 0 {
+                    return Err("there is nothing of yours to undo in this chat".into());
+                }
+                let count = if input.get("all").and_then(Value::as_bool) == Some(true) { n } else { opt_num(input, "count")?.map_or(1, |c| c.max(1.0) as usize).min(n) };
+                // a further undo in the same turn goes back from here
+                self.project = self.earlier[n - count].clone();
+                self.earlier.truncate(n - count);
+                let what = if count == 1 { "your last answer".to_string() } else { format!("your last {count} answers") };
+                Ok(Outcome::edit(json!({ "undone": count, "durationMs": self.timeline().duration_ms().round(), "answersToUndo": self.earlier.len() }), format!("Undid {what}")))
+            }
             "seek" => {
                 let t = num(input, "at_ms")?.clamp(0.0, self.timeline().duration_ms());
                 self.seek_to = Some(t);
@@ -620,6 +640,7 @@ impl Workspace {
             "audio": self.audio_overview(&tl),
             "hasTranscript": !self.words.is_empty(),
             "hasClicksForAutoZoom": !self.auto_zooms.is_empty(),
+            "answersToUndo": self.earlier.len(),
         })
     }
 
@@ -1004,6 +1025,66 @@ mod tests {
         assert_eq!(subtract(0.0, 1000.0, &mut [(150.0, 300.0), (100.0, 200.0)]), vec![(0.0, 100.0), (300.0, 1000.0)]);
         // a piece shorter than a frame is not kept
         assert_eq!(subtract(0.0, 1000.0, &mut [(5.0, 1000.0)]), vec![]);
+    }
+
+    #[test]
+    fn camera_and_output_settings_as_documented() {
+        // the neutral grade the guide gives (`key value`), warmed up, is a valid sfColorGrade
+        let neutral = crate::host::SETTINGS.split("Neutral: ").nth(1).and_then(|r| r.split(".\n").next()).unwrap();
+        let (mut quoted, mut word) = (String::new(), String::new());
+        for c in neutral.chars() {
+            if c.is_ascii_alphabetic() {
+                word.push(c);
+                continue;
+            }
+            if !word.is_empty() {
+                quoted.push_str(&format!("\"{}\":", std::mem::take(&mut word)));
+            }
+            quoted.push(c);
+        }
+        let mut grade: Value = serde_json::from_str(&quoted).unwrap();
+        grade["temperature"] = json!(30);
+        let mut w = ws();
+        // the output aspect ratio is a number, as the guide says, not "9:16"
+        w.run("patch_project", &json!({ "ops": [{ "op": "replace", "path": "/config/output/aspectRatio", "value": 0.5625 }] })).unwrap();
+        assert_eq!(w.project.config.output.aspect_ratio.as_f64(), Some(0.5625));
+        assert!(w.run("patch_project", &json!({ "ops": [{ "op": "replace", "path": "/config/output/aspectRatio", "value": "9:16" }] })).is_err());
+        w.run("patch_project", &json!({ "ops": [
+            { "op": "add", "path": "/config/camera/sfColorGrade", "value": grade },
+            { "op": "add", "path": "/config/camera/sfFaceTrackingZoom", "value": 1.4 }
+        ] })).unwrap();
+        let cam = &w.project.config.camera;
+        assert_eq!(cam.grade().temperature, 30.0);
+        assert!(!cam.grade().is_neutral());
+        assert_eq!(cam.face_tracking_zoom(), 1.4);
+        w.run("patch_project", &json!({ "ops": [{ "op": "remove", "path": "/config/camera/sfColorGrade" }] })).unwrap();
+        assert!(w.project.config.camera.color_grade.is_none());
+    }
+
+    #[test]
+    fn undo_answers_goes_back_to_before_them() {
+        let mut w = ws();
+        // three earlier answers: cut 1 s, cut another, sped up; each saved the project before it
+        let start = w.project.clone();
+        w.run("cut", &json!({ "ranges": [{ "start_ms": 0, "end_ms": 1000 }] })).unwrap();
+        let after_one = w.project.clone();
+        w.run("cut", &json!({ "ranges": [{ "start_ms": 0, "end_ms": 1000 }] })).unwrap();
+        let after_two = w.project.clone();
+        w.run("set_speed", &json!({ "start_ms": 0, "end_ms": 8000, "speed": 2 })).unwrap();
+        w.earlier = vec![start.clone(), after_one.clone(), after_two.clone()];
+        let v: Value = serde_json::from_str(&w.run("get_project", &json!({})).unwrap().result).unwrap();
+        assert_eq!(v["answersToUndo"], 3);
+
+        let o = w.run("undo_answers", &json!({})).unwrap();
+        assert!(o.changed && w.project == after_two && duration(&w) == 8000.0);
+        // the rest in one go
+        w.run("undo_answers", &json!({ "all": true })).unwrap();
+        assert!(w.project == start && duration(&w) == 10_000.0);
+        assert!(w.run("undo_answers", &json!({})).is_err(), "nothing left");
+        // more than there are: as far back as it goes
+        w.earlier = vec![start.clone(), after_one];
+        w.run("undo_answers", &json!({ "count": 5 })).unwrap();
+        assert!(w.project == start && w.earlier.is_empty());
     }
 
     #[test]

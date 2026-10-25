@@ -235,6 +235,9 @@ pub struct AgentPanel {
     /// Calls Claude with a local key instead of the backend (worked out on first use).
     local: Option<bool>,
     conversation: Conversation,
+    /// The project before each answer in this chat that changed it, oldest first: what the
+    /// agent's `undo_answers` goes back to.
+    earlier: Vec<Project>,
     log: Vec<Entry>,
     input: String,
     job: Option<Job>,
@@ -479,6 +482,7 @@ impl AgentPanel {
         self.credits = None;
         self.credits_error = None;
         self.conversation = Conversation::default();
+        self.earlier.clear();
         self.log.clear();
         self.notice = note;
         self.license_changed = true;
@@ -754,6 +758,7 @@ impl AgentPanel {
             audio_tracks: crate::audio::AudioPlayer::available_tracks(&ed.session),
             host: Some(Arc::new(StudioHost::new(ed, ctx))),
             actions: vec![],
+            earlier: self.earlier.clone(),
         };
         let context = editor_context(ed);
         let (tx, rx) = mpsc::channel();
@@ -830,6 +835,7 @@ impl AgentPanel {
         if !job.overridden && !same_edit(&job.before, now) {
             let (b, n) = (&job.before.scenes[0], &now.scenes[0]);
             let audio_changed = job.before.config.audio != now.config.audio || b.voice_overs != n.voice_overs || b.extra != n.extra;
+            self.earlier.push(job.before.clone());
             ed.commit_live_edit(job.before);
             if audio_changed {
                 ed.reload_audio();
@@ -863,6 +869,7 @@ impl AgentPanel {
                 let can_reset = !self.log.is_empty() && self.job.is_none();
                 if ui.add_enabled_ui(can_reset, |ui| widgets::icon_button(ui, widgets::Icon::Restart, 16.0, "Clear chat")).inner.clicked() {
                     self.conversation = Conversation::default();
+                    self.earlier.clear();
                     self.log.clear();
                     self.usage = Usage::default();
                 }
