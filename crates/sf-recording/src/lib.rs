@@ -439,6 +439,7 @@ mod imp {
                     bounds: plan.bounds,
                     display_refresh_rate: plan.refresh_rate,
                     recording_scale: plan.recording_scale,
+                    bounds_moves: vec![],
                 },
                 audio: audio_channels,
                 camera: camera.as_ref().map(|c| CameraChannel { channel_index: next_channel, device_id: c.device_id().to_string() }),
@@ -541,6 +542,7 @@ mod imp {
             });
             self.state = RecorderState::Paused;
             self.log.notice(COMPONENT, format!("Session {} ended. durationMs={}", open.index, process_end_ms - open.process_start_ms));
+            self.sync_bounds_moves();
             if let Err(e) = self.meta.write(&self.cfg.output_dir, "partial") {
                 self.log.warning(COMPONENT, format!("Could not update metadata: {e}"));
             }
@@ -586,6 +588,14 @@ mod imp {
             self.state.clone()
         }
 
+        /// A window recording's moves so far (the capture follows the window), for the metadata.
+        fn sync_bounds_moves(&mut self) {
+            #[cfg(target_os = "macos")]
+            {
+                self.meta.display.bounds_moves = self.display.bounds_moves();
+            }
+        }
+
         fn stop_all(&mut self) {
             self.display.stop();
             if let Some(c) = self.cursor.as_mut() {
@@ -614,6 +624,7 @@ mod imp {
             self.stop_all();
             self.finished = true;
             let stream_err = self.display.error();
+            self.sync_bounds_moves();
             let meta = self.meta.write(&self.cfg.output_dir, "complete")?;
             self.log.notice(COMPONENT, format!("Recording complete. sessions={} durationMs={}", meta.sessions.len(), meta.duration_ms()));
             end?;

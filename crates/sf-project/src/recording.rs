@@ -109,6 +109,17 @@ impl Recorder {
     pub fn crop_rect(&self) -> Option<Rect> {
         serde_json::from_value(self.configuration.get("cropRect")?.clone()).ok()
     }
+    /// A window recording that followed the window: `[processTimeMs, x, y]`, the recorded
+    /// rect's new top-left in global points from that time on (empty when it never moved).
+    pub fn bounds_moves(&self) -> Vec<[f64; 3]> {
+        let mut moves: Vec<[f64; 3]> = self.configuration.get("sfBoundsMoves").and_then(|v| serde_json::from_value(v.clone()).ok()).unwrap_or_default();
+        moves.sort_by(|a, b| a[0].total_cmp(&b[0]));
+        moves
+    }
+    /// Videos appended to this recording: `[start ms, length ms]` in source time.
+    pub fn appended(&self) -> Vec<[f64; 2]> {
+        self.configuration.get("sfAppended").and_then(|v| serde_json::from_value(v.clone()).ok()).unwrap_or_default()
+    }
     pub fn display_id(&self) -> Option<u64> {
         self.configuration.get("displayId")?.as_u64()
     }

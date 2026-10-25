@@ -42,6 +42,9 @@ pub struct RecordingConfig {
     pub camera: Option<String>,
     /// `CGWindowID`s to remove from the capture (the app's own windows).
     pub exclude_window_ids: Vec<u32>,
+    /// macOS: a window recorded as an [`CaptureTarget::Area`] around it; the area follows the
+    /// window when it moves (as it does for [`CaptureTarget::Window`]).
+    pub follow_window: Option<u32>,
     /// Record keyboard events into `keystrokes-S.json`.
     pub capture_keystrokes: bool,
     /// Record mouse/keyboard events and cursor images at all. Requires Input Monitoring.
@@ -67,6 +70,7 @@ impl RecordingConfig {
             capture_system_audio: false,
             camera: None,
             exclude_window_ids: Vec::new(),
+            follow_window: None,
             capture_keystrokes: true,
             capture_input: true,
             hide_desktop_icons: false,

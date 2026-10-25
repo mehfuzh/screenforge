@@ -258,6 +258,31 @@ pub fn windows_with(on_screen_only: bool) -> Vec<WindowInfo> {
         .collect()
 }
 
+/// Where window `id` is now, in global points (top-left origin); `None` when it is gone or
+/// not on screen. Cheap enough to poll while recording.
+#[cfg(target_os = "macos")]
+pub fn window_bounds(id: u32) -> Option<Rect> {
+    use core_foundation::array::CFArray;
+    use core_foundation::base::{CFType, TCFType};
+    use core_foundation::boolean::CFBoolean;
+    use core_foundation::dictionary::{CFDictionary, CFDictionaryRef};
+    use core_foundation::string::CFString;
+    use core_graphics::geometry::CGRect;
+    use core_graphics::window::{create_description_from_array, kCGWindowBounds, kCGWindowIsOnscreen};
+    extern "C" {
+        fn CGRectMakeWithDictionaryRepresentation(dict: CFDictionaryRef, rect: *mut CGRect) -> bool;
+    }
+    let list = create_description_from_array(CFArray::from_copyable(&[id]))?;
+    let info: CFDictionary<CFString, CFType> = list.get(0).map(|d| d.clone())?;
+    let on_screen = info.find(unsafe { CFString::wrap_under_get_rule(kCGWindowIsOnscreen) }).and_then(|v| v.downcast::<CFBoolean>()).map(bool::from).unwrap_or(false);
+    if !on_screen {
+        return None;
+    }
+    let bounds = info.find(unsafe { CFString::wrap_under_get_rule(kCGWindowBounds) })?;
+    let mut r = CGRect::new(&core_graphics::geometry::CGPoint::new(0.0, 0.0), &core_graphics::geometry::CGSize::new(0.0, 0.0));
+    unsafe { CGRectMakeWithDictionaryRepresentation(bounds.as_CFTypeRef() as CFDictionaryRef, &mut r) }.then_some(Rect { x: r.origin.x, y: r.origin.y, width: r.size.width, height: r.size.height })
+}
+
 #[cfg(target_os = "macos")]
 pub fn microphones() -> Vec<AudioDevice> {
     screencapturekit::audio_devices::AudioInputDevice::list()

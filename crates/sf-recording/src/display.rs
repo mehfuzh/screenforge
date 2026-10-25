@@ -108,6 +108,16 @@ pub fn plan(cfg: &RecordingConfig, discovery: &Discovery) -> Result<DisplayPlan>
     })
 }
 
+/// Where a window recording's crop goes when the window is at `window` (global points): the
+/// same `size`, its top-left on the window's, kept inside `display` (global points). The result
+/// is display-relative, like [`DisplayPlan::crop`].
+pub fn follow_crop(window: Rect, size: (f64, f64), display: Rect) -> Rect {
+    let (w, h) = (size.0.min(display.width), size.1.min(display.height));
+    let x = (window.x - display.x).clamp(0.0, display.width - w).floor();
+    let y = (window.y - display.y).clamp(0.0, display.height - h).floor();
+    Rect { x, y, width: w, height: h }
+}
+
 /// Geometry for a window stream from the screen-cast portal: `width`×`height` points recorded
 /// at `scale` pixels per point. Its position on screen is unknown, so the bounds (and the
 /// cursor positions recorded with them) are relative to the window's top-left corner.
@@ -202,16 +212,26 @@ pub fn hls_encode_args_for(channel: &str, bitrate: u64, encoder: &str, session: 
             "-colorspace", "bt709", "-color_primaries", "bt709", "-color_trc", "bt709", "-color_range", "tv",
             // videotoolbox does not always put the colour description into the SPS VUI; rewrite it.
             "-bsf:v", "h264_metadata=video_full_range_flag=0:colour_primaries=1:transfer_characteristics=1:matrix_coefficients=1",
-            "-f", "hls", "-hls_time", "2", "-hls_playlist_type", "vod", "-hls_segment_type", "fmp4",
-            "-hls_flags", "independent_segments", "-hls_list_size", "0", "-start_number", "1",
-            "-hls_fmp4_init_filename", &format!("{base}-0000.mp4"),
-            "-hls_segment_filename", &format!("{base}-%04d.m4s"),
-            &format!("{base}.m3u8"),
         ]
         .iter()
         .map(|s| s.to_string()),
     );
+    args.extend(hls_muxer_args(&base));
     args
+}
+
+/// The HLS muxer writing `<base>.m3u8`, its init segment and ~2 s fMP4 segments.
+pub fn hls_muxer_args(base: &str) -> Vec<String> {
+    [
+        "-f", "hls", "-hls_time", "2", "-hls_playlist_type", "vod", "-hls_segment_type", "fmp4",
+        "-hls_flags", "independent_segments", "-hls_list_size", "0", "-start_number", "1",
+        "-hls_fmp4_init_filename", &format!("{base}-0000.mp4"),
+        "-hls_segment_filename", &format!("{base}-%04d.m4s"),
+        &format!("{base}.m3u8"),
+    ]
+    .iter()
+    .map(|s| s.to_string())
+    .collect()
 }
 
 #[cfg(target_os = "macos")]
@@ -580,7 +600,7 @@ mod windows_impl {
 #[cfg(target_os = "macos")]
 mod imp {
     use std::path::Path;
-    use std::sync::atomic::Ordering;
+    use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Arc;
     use std::thread::JoinHandle;
     use std::time::Duration;
@@ -601,7 +621,7 @@ mod imp {
 
     use super::{target_bitrate, DisplayPlan};
     use crate::audio::SystemAudioHandler;
-    use crate::config::RecordingConfig;
+    use crate::config::{CaptureTarget, RecordingConfig};
     use crate::log::RecLog;
     use crate::permissions;
     use crate::repeater::{Cmd, FrameStore, RawInput, Repeater};
@@ -654,8 +674,59 @@ mod imp {
         tx: Sender<Cmd>,
         repeater: Option<JoinHandle<()>>,
         error: Arc<Mutex<Option<String>>>,
+        follow: Option<Follow>,
         pub plan: DisplayPlan,
         pub encoder: &'static str,
+    }
+
+    /// How often a window recording looks for the window having moved.
+    const FOLLOW_INTERVAL: Duration = Duration::from_millis(33);
+
+    /// A window recording's capture following the window: a thread that moves the stream's
+    /// source rect to the window and notes each move.
+    struct Follow {
+        stop: Arc<AtomicBool>,
+        thread: Option<JoinHandle<()>>,
+        moves: Arc<Mutex<Vec<[f64; 3]>>>,
+    }
+
+    impl Follow {
+        fn start(stream: SCStream, config: SCStreamConfiguration, window_id: u32, plan: &DisplayPlan, log: RecLog) -> Option<Self> {
+            let mut crop = plan.crop?;
+            let display = crate::discover::displays().into_iter().find(|d| d.id == plan.display_id)?.bounds_points;
+            let (stop, moves) = (Arc::new(AtomicBool::new(false)), Arc::new(Mutex::new(Vec::new())));
+            let (stop_t, moves_t) = (stop.clone(), moves.clone());
+            let thread = std::thread::Builder::new()
+                .name("sf-window-follow".into())
+                .spawn(move || {
+                    let mut config = config;
+                    while !stop_t.load(Ordering::Relaxed) {
+                        std::thread::sleep(FOLLOW_INTERVAL);
+                        // gone (closed, or on another Space): keep the last place
+                        let Some(window) = crate::discover::window_bounds(window_id) else { continue };
+                        let next = super::follow_crop(window, (crop.width, crop.height), display);
+                        if next == crop {
+                            continue;
+                        }
+                        config.set_source_rect(CGRect::new(next.x, next.y, next.width, next.height));
+                        if let Err(e) = stream.update_configuration(&config) {
+                            log.warning(COMPONENT, format!("Could not follow the window: {e}"));
+                            break;
+                        }
+                        crop = next;
+                        moves_t.lock().push([crate::clock::process_time_ms(), display.x + next.x, display.y + next.y]);
+                    }
+                })
+                .ok()?;
+            Some(Follow { stop, thread: Some(thread), moves })
+        }
+
+        fn stop(&mut self) {
+            self.stop.store(true, Ordering::Relaxed);
+            if let Some(t) = self.thread.take() {
+                let _ = t.join();
+            }
+        }
     }
 
     impl DisplayRecorder {
@@ -706,6 +777,7 @@ mod imp {
                     .with_excludes_current_process_audio(true);
             }
 
+            let follow_config = config.clone();
             let error: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
             let err_slot = error.clone();
             let err_log = log.clone();
@@ -756,7 +828,16 @@ mod imp {
                 .name("sf-frame-repeater".into())
                 .spawn(move || rep.run())
                 .map_err(|source| Error::Io { path: "thread".into(), source })?;
-            Ok(DisplayRecorder { source: Source::Screen(stream), store, tx, repeater: Some(repeater), error, plan, encoder })
+            let follow_id = match cfg.target {
+                CaptureTarget::Window { window_id } => Some(window_id),
+                CaptureTarget::Area { .. } => cfg.follow_window,
+                _ => None,
+            };
+            let follow = follow_id.and_then(|id| Follow::start(stream.clone(), follow_config, id, &plan, log.clone()));
+            if let Some(id) = follow_id {
+                log.notice(COMPONENT, format!("Following window {id}: {}", if follow.is_some() { "on" } else { "could not start" }));
+            }
+            Ok(DisplayRecorder { source: Source::Screen(stream), store, tx, repeater: Some(repeater), error, follow, plan, encoder })
         }
 
         /// Record a connected iPhone or iPad's screen ([`crate::CaptureTarget::Device`]). Its
@@ -797,7 +878,7 @@ mod imp {
                 .name("sf-frame-repeater".into())
                 .spawn(move || rep.run())
                 .map_err(|source| Error::Io { path: "thread".into(), source })?;
-            Ok(DisplayRecorder { source: Source::Device(capture), store, tx, repeater: Some(repeater), error: Arc::new(Mutex::new(None)), plan, encoder })
+            Ok(DisplayRecorder { source: Source::Device(capture), store, tx, repeater: Some(repeater), error: Arc::new(Mutex::new(None)), follow: None, plan, encoder })
         }
 
         /// The connected device being recorded, if this is a device recording.
@@ -832,8 +913,17 @@ mod imp {
             self.error.lock().clone()
         }
 
+        /// A window recording's moves so far: `[processTimeMs, x, y]`, the recorded rect's
+        /// top-left in global points from then on.
+        pub fn bounds_moves(&self) -> Vec<[f64; 3]> {
+            self.follow.as_ref().map(|f| f.moves.lock().clone()).unwrap_or_default()
+        }
+
         /// Stop the stream and the repeater.
         pub fn stop(&mut self) {
+            if let Some(f) = self.follow.as_mut() {
+                f.stop();
+            }
             let _ = self.tx.send(Cmd::Stop);
             if let Some(t) = self.repeater.take() {
                 let _ = t.join();
@@ -892,6 +982,16 @@ mod tests {
         assert_eq!((p.width_px, p.height_px), (4096, 2304));
         assert!((p.recording_scale - 0.625).abs() < 1e-9);
         assert!(p.crop.is_none());
+    }
+
+    #[test]
+    fn crop_follows_the_window_inside_the_display() {
+        let display = Rect { x: 1440.0, y: 0.0, width: 2560.0, height: 1440.0 };
+        // moved right and down: same size, on the window's corner, display-relative
+        assert_eq!(follow_crop(Rect { x: 1640.0, y: 300.0, width: 900.0, height: 700.0 }, (800.0, 600.0), display), Rect { x: 200.0, y: 300.0, width: 800.0, height: 600.0 });
+        // dragged partly off the display: stops at its edges
+        assert_eq!(follow_crop(Rect { x: 3800.0, y: -40.0, width: 800.0, height: 600.0 }, (800.0, 600.0), display), Rect { x: 1760.0, y: 0.0, width: 800.0, height: 600.0 });
+        assert_eq!(follow_crop(Rect { x: 1000.0, y: 1200.0, width: 800.0, height: 600.0 }, (800.0, 600.0), display), Rect { x: 0.0, y: 840.0, width: 800.0, height: 600.0 });
     }
 
     #[test]

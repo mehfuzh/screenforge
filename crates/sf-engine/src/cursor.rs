@@ -53,7 +53,14 @@ pub struct CaretSample {
 }
 
 impl CursorTrack {
-    pub fn build(moves: &[InputEvent], clicks: &[InputEvent], keys: &[InputEvent], bounds: Rect, process_time_start_ms: f64, shake_threshold: f64) -> Self {
+    /// `bounds` is the recorded rect in global points; `bounds_moves` (`[processTimeMs, x, y]`,
+    /// sorted) are its new top-left corners when a window recording followed the window.
+    pub fn build(moves: &[InputEvent], clicks: &[InputEvent], keys: &[InputEvent], bounds: Rect, bounds_moves: &[[f64; 3]], process_time_start_ms: f64, shake_threshold: f64) -> Self {
+        // the recorded rect's top-left at process time `t`
+        let origin = |t: f64| match bounds_moves.partition_point(|m| m[0] <= t) {
+            0 => (bounds.x, bounds.y),
+            i => (bounds_moves[i - 1][1], bounds_moves[i - 1][2]),
+        };
         let mut ids: Vec<String> = Vec::new();
         let mut id_index = |id: &str| -> usize {
             if let Some(i) = ids.iter().position(|x| x == id) {
@@ -72,8 +79,9 @@ impl CursorTrack {
         let mut events: Vec<Ev> = Vec::with_capacity(moves.len() + clicks.len());
         for e in moves.iter().chain(clicks.iter()) {
             let (Some(x), Some(y)) = (e.x, e.y) else { continue };
+            let (ox, oy) = origin(e.process_time_ms);
             events.push(Ev {
-                s: CursorSample { x: x - bounds.x, y: y - bounds.y, cursor_id_index: id_index(e.cursor_id.as_deref().unwrap_or("arrow")), time_ms: e.process_time_ms - process_time_start_ms },
+                s: CursorSample { x: x - ox, y: y - oy, cursor_id_index: id_index(e.cursor_id.as_deref().unwrap_or("arrow")), time_ms: e.process_time_ms - process_time_start_ms },
                 down: e.kind.ends_with("Down") && e.kind.starts_with("mouse") || e.kind == "rightMouseDown",
                 up: e.kind.ends_with("Up") && e.kind.starts_with("mouse") || e.kind == "rightMouseUp",
             });
@@ -107,10 +115,11 @@ impl CursorTrack {
         let click_samples = clicks
             .iter()
             .filter_map(|e| {
+                let (ox, oy) = origin(e.process_time_ms);
                 Some(ClickSample {
                     time_ms: e.process_time_ms - process_time_start_ms,
-                    x: e.x? - bounds.x,
-                    y: e.y? - bounds.y,
+                    x: e.x? - ox,
+                    y: e.y? - oy,
                     down: e.kind == "mouseDown" || e.kind == "rightMouseDown",
                     right_button: e.button.as_deref() == Some("right") || e.kind.starts_with("right"),
                 })
@@ -124,7 +133,10 @@ impl CursorTrack {
             .collect();
         let mut carets: Vec<CaretSample> = keys
             .iter()
-            .filter_map(|k| Some(CaretSample { time_ms: k.process_time_ms - process_time_start_ms, x: k.caret_x? - bounds.x, y: k.caret_y? - bounds.y }))
+            .filter_map(|k| {
+                let (ox, oy) = origin(k.process_time_ms);
+                Some(CaretSample { time_ms: k.process_time_ms - process_time_start_ms, x: k.caret_x? - ox, y: k.caret_y? - oy })
+            })
             // keep carets on the recorded area only (typing in another window is not on screen)
             .filter(|c| c.x >= 0.0 && c.y >= 0.0 && c.x <= bounds.width && c.y <= bounds.height)
             .collect();
@@ -264,15 +276,27 @@ mod tests {
     #[test]
     fn removes_spikes() {
         let moves = vec![ev("mouseMoved", 0.0, 10.0, 10.0), ev("mouseMoved", 10.0, 900.0, 900.0), ev("mouseMoved", 20.0, 12.0, 11.0), ev("mouseMoved", 30.0, 13.0, 11.0)];
-        let t = CursorTrack::build(&moves, &[], &[], Rect { x: 0.0, y: 0.0, width: 1000.0, height: 1000.0 }, 0.0, 500.0);
+        let t = CursorTrack::build(&moves, &[], &[], Rect { x: 0.0, y: 0.0, width: 1000.0, height: 1000.0 }, &[], 0.0, 500.0);
         assert_eq!(t.samples.len(), 3);
         assert!(t.samples.iter().all(|s| s.x < 100.0));
     }
 
     #[test]
+    fn positions_follow_a_moved_window() {
+        // the window recording's rect starts at (100, 50) and moves to (400, 250) at 1 s
+        let bounds = Rect { x: 100.0, y: 50.0, width: 800.0, height: 600.0 };
+        let moves = vec![ev("mouseMoved", 500.0, 150.0, 80.0), ev("mouseMoved", 1500.0, 450.0, 280.0)];
+        let clicks = vec![ev("mouseDown", 1600.0, 460.0, 290.0)];
+        let t = CursorTrack::build(&moves, &clicks, &[], bounds, &[[1000.0, 400.0, 250.0]], 0.0, 0.0);
+        let at = |i: usize| (t.samples[i].x, t.samples[i].y);
+        assert_eq!((at(0), at(1)), ((50.0, 30.0), (50.0, 30.0)));
+        assert_eq!((t.clicks[0].x, t.clicks[0].y), (60.0, 40.0));
+    }
+
+    #[test]
     fn smoother_follows() {
         let moves: Vec<InputEvent> = (0..50).map(|i| ev("mouseMoved", i as f64 * 16.0, i as f64 * 10.0, 100.0)).collect();
-        let t = CursorTrack::build(&moves, &[], &[], Rect::UNIT, 0.0, 0.0);
+        let t = CursorTrack::build(&moves, &[], &[], Rect::UNIT, &[], 0.0, 0.0);
         let mut s = CursorSmoother::new(SpringParams::CURSOR_SMOOTH);
         let mut last = None;
         for i in 0..60 {

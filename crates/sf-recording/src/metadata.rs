@@ -55,6 +55,9 @@ pub struct DisplayChannel {
     pub display_refresh_rate: f64,
     /// Points per output pixel.
     pub recording_scale: f64,
+    /// Window recordings follow the window: `[processTimeMs, x, y]`, the recorded rect's new
+    /// top-left in global points from that time on (`bounds` until the first one).
+    pub bounds_moves: Vec<[f64; 3]>,
 }
 
 /// Static description of an audio channel (microphone or system audio).
@@ -169,6 +172,9 @@ impl MetadataBuilder {
         cfg.insert("displayId".into(), json!(d.display_id));
         cfg.insert("excludeFinderDesktopIcons".into(), json!(d.exclude_finder_desktop_icons));
         cfg.insert("excludedWindowIds".into(), json!(d.excluded_window_ids));
+        if !d.bounds_moves.is_empty() {
+            cfg.insert("sfBoundsMoves".into(), json!(d.bounds_moves));
+        }
         cfg.insert(
             "videoCompressionSettings".into(),
             json!({"maxKeyFrameInterval": d.max_key_frame_interval, "quality": d.quality}),
@@ -292,6 +298,7 @@ mod tests {
                 bounds: Rect { x: 534.0, y: 259.0, width: 1200.0, height: 900.0 },
                 display_refresh_rate: 60.0,
                 recording_scale: 0.5,
+                bounds_moves: vec![],
             },
             audio: vec![AudioChannel { kind: "microphone", channel_index: 2, device_id: Some("dev".into()) }],
             camera: Some(CameraChannel { channel_index: 3, device_id: "FaceTime HD Camera".into() }),
@@ -325,6 +332,18 @@ mod tests {
         assert_eq!(cam.id, "channel-3-camera");
         assert_eq!(cam.sessions[0].output_filename.as_deref(), Some("channel-3-camera-0.m3u8"));
         assert!((loaded.duration_ms() - 1000.0).abs() < 1e-9);
+        assert!(d.bounds_moves().is_empty(), "a recording that never moved has no moves");
+    }
+
+    #[test]
+    fn window_moves_are_kept() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut b = builder();
+        b.display.bounds_moves = vec![[900.0, 600.0, 300.0], [700.0, 540.0, 260.0]];
+        b.write(dir.path(), "complete").unwrap();
+        let loaded = RecordingMetadata::load(dir.path()).unwrap();
+        // read back in time order
+        assert_eq!(loaded.display().unwrap().bounds_moves(), vec![[700.0, 540.0, 260.0], [900.0, 600.0, 300.0]]);
     }
 
     #[test]

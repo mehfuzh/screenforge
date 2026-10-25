@@ -17,6 +17,9 @@ pub struct SourceInfo {
     pub duration_ms: f64,
     /// Recorded region in screen points (display-relative).
     pub bounds: Rect,
+    /// Where a window recording's region moved to when it followed the window (see
+    /// [`sf_project::recording::Recorder::bounds_moves`]).
+    pub bounds_moves: Vec<[f64; 3]>,
     pub session: RecorderSession,
     pub process_time_start_ms: f64,
     pub microphone: Vec<PathBuf>,
@@ -64,6 +67,7 @@ impl SourceInfo {
             fps: v.fps().unwrap_or(60.0),
             duration_ms: info.duration_ms().unwrap_or(session.duration_ms),
             bounds,
+            bounds_moves: display.bounds_moves(),
             process_time_start_ms: session.process_time_start_ms,
             session,
             microphone: collect("microphone"),
@@ -83,6 +87,6 @@ impl SourceInfo {
         let input = rec.input().context("no input recorder")?;
         let s = input.sessions.first().context("input recorder has no sessions")?;
         let log = InputLog::load(&pkg.recording_dir(), s)?;
-        Ok(CursorTrack::build(&log.mouse_moves, &log.mouse_clicks, &log.key_strokes, self.bounds, s.process_time_start_ms, pkg.project.config.cursor.remove_shake_treshold))
+        Ok(CursorTrack::build(&log.mouse_moves, &log.mouse_clicks, &log.key_strokes, self.bounds, &self.bounds_moves, s.process_time_start_ms, pkg.project.config.cursor.remove_shake_treshold))
     }
 }

@@ -107,7 +107,7 @@ pub fn create_project_from_recording(recording_dir: &Path, opts: CreateOptions) 
             if let (Some(s), Some(ds)) = (input.sessions.first(), disp.sessions.first()) {
                 if let Ok(log) = InputLog::load(&dest, s) {
                     let bounds = ds.bounds.or_else(|| disp.crop_rect()).unwrap_or(sf_project::schema::common::Rect::UNIT);
-                    let track = CursorTrack::build(&log.mouse_moves, &log.mouse_clicks, &log.key_strokes, bounds, s.process_time_start_ms, project.config.cursor.remove_shake_treshold);
+                    let track = CursorTrack::build(&log.mouse_moves, &log.mouse_clicks, &log.key_strokes, bounds, &disp.bounds_moves(), s.process_time_start_ms, project.config.cursor.remove_shake_treshold);
                     scene.zooms = sf_engine::autozoom::generate_with(&track, duration, Zoom::DEFAULT_LEVEL, project.config.zooms.zoom_on_typing());
                 }
             }

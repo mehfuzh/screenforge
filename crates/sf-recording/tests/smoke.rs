@@ -227,3 +227,39 @@ fn screenshot_has_pixels() {
     assert_eq!((w, h, rgba.len()), (64, 48, 64 * 48 * 4));
     assert!(rgba.chunks_exact(4).all(|p| p[3] == 255));
 }
+
+#[cfg(target_os = "macos")]
+#[test]
+#[ignore = "records the real screen and moves a window; needs Screen Recording and Accessibility"]
+fn window_recording_follows_the_window() {
+    // SF_SMOKE_WINDOW=<app name> picks the window (default Finder: open one first)
+    let app = std::env::var("SF_SMOKE_WINDOW").unwrap_or_else(|_| "Finder".into());
+    let w = discover().windows.into_iter().find(|w| w.app_name == app && w.bounds.width >= 300.0).expect("a window of SF_SMOKE_WINDOW on screen");
+    println!("window {:?}", w);
+    let tmp = tempfile::tempdir().unwrap();
+    let out = match std::env::var("SF_SMOKE_OUT") {
+        Ok(p) => {
+            let _ = std::fs::remove_dir_all(&p);
+            std::path::PathBuf::from(p)
+        }
+        Err(_) => tmp.path().join("recording"),
+    };
+    // as the app records a picked window: the area around it, following the window
+    let display = discover().displays.into_iter().find(|d| d.bounds_points.x <= w.bounds.x && w.bounds.x < d.bounds_points.x + d.bounds_points.width).expect("the window's display");
+    let mut cfg = RecordingConfig::new(&out, CaptureTarget::Area { display_id: display.id, rect_points: w.bounds });
+    cfg.follow_window = Some(w.id);
+    let rec = Recorder::start(cfg).expect("start");
+    std::thread::sleep(Duration::from_millis(1000));
+    let moved = sf_project::schema::common::Rect { x: w.bounds.x + 200.0, y: w.bounds.y + 120.0, ..w.bounds };
+    assert!(sf_recording::window_frame::set_window_frame(w.pid, w.bounds, moved), "could not move the window (Accessibility for the terminal?)");
+    std::thread::sleep(Duration::from_millis(1500));
+    let _ = sf_recording::window_frame::set_window_frame(w.pid, moved, w.bounds);
+    rec.finish().expect("finish");
+
+    let meta = RecordingMetadata::load(&out).unwrap();
+    let moves = meta.display().unwrap().bounds_moves();
+    println!("moves {moves:?}");
+    assert!(!moves.is_empty(), "the capture never moved");
+    let near = |m: &[f64; 3]| (m[1] - w.bounds.x.floor() - 200.0).abs() <= 1.0 && (m[2] - w.bounds.y.floor() - 120.0).abs() <= 1.0;
+    assert!(moves.iter().any(near), "never followed the window to where it was moved");
+}

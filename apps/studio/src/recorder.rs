@@ -240,6 +240,10 @@ impl RecordingScreen {
         cfg.capture_system_audio = self.req.system_audio;
         cfg.camera = self.req.camera.clone();
         cfg.exclude_window_ids = own_window_ids();
+        // a picked window is recorded as the area around it, which moves with the window
+        if self.req.mode == Mode::Window {
+            cfg.follow_window = self.req.window_id.as_deref().and_then(|id| id.parse().ok());
+        }
         cfg.capture_input = self.req.capture_input;
         cfg.capture_keystrokes = self.req.capture_input;
         let rec = match self.camera.as_ref().and_then(|b| b.capture.clone()) {
