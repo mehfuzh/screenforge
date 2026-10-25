@@ -356,7 +356,10 @@ impl App {
             .name("open-project".into())
             .spawn(move || {
                 // a `.screenstudio` package or a video file becomes a `.screenforge` package first
-                let loaded = open_or_import(&load_path, &import).and_then(|p| Editor::load_session(&p, gpu));
+                let loaded = open_or_import(&load_path, &import).and_then(|p| {
+                    drop_unused_appended(&p);
+                    Editor::load_session(&p, gpu)
+                });
                 let _ = tx.send(loaded);
                 repaint.request_repaint();
             })
@@ -456,6 +459,19 @@ fn append_to_project(project: &std::path::Path, video: &std::path::Path, source_
     pkg.project.scenes[0].slices.push(sf_project::v4::Slice::new(start, start + len));
     pkg.save()?;
     Ok(project.to_path_buf())
+}
+
+/// Take videos appended to the project's recording out of it once no clip uses them (they
+/// were deleted). Done as the project opens rather than on delete, so the delete can still be
+/// undone while the project is open; a failure only leaves the recording as it was.
+fn drop_unused_appended(project: &std::path::Path) {
+    let Ok(pkg) = sf_project::ProjectPackage::open(project) else { return };
+    if let Some(keep_ms) = pkg.unused_appended_tail() {
+        match sf_recording::import::trim_recording(&pkg.recording_dir(), keep_ms) {
+            Ok(()) => tracing::info!("took unused appended video out of {} (kept {keep_ms:.0} ms)", project.display()),
+            Err(e) => tracing::warn!("could not take unused appended video out of {}: {e}", project.display()),
+        }
+    }
 }
 
 /// The package to open for `path`: a project as it is, a Screen Studio project copied in, or a
@@ -610,6 +626,12 @@ fn blank_ui(ui: &mut egui::Ui) -> Option<BlankAction> {
 }
 
 /// While files are dragged over the window: what dropping them does.
+/// What a dropped file can be: a project (ours or Screen Studio's) or a video to import.
+fn can_open(p: &std::path::Path) -> bool {
+    let ext = p.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
+    sf_recording::import::is_video(p) || ext == sf_project::PACKAGE_EXTENSION || ext == sf_project::SCREEN_STUDIO_EXTENSION
+}
+
 fn drop_hint(ctx: &egui::Context, editing: bool) {
     let hovered: Vec<PathBuf> = ctx.input(|i| i.raw.hovered_files.iter().filter_map(|f| f.path.clone()).collect());
     if hovered.is_empty() {
@@ -617,7 +639,9 @@ fn drop_hint(ctx: &egui::Context, editing: bool) {
     }
     let pal = crate::theme::p();
     let video = hovered.iter().any(|p| sf_recording::import::is_video(p));
+    let refused = !hovered.iter().any(|p| can_open(p));
     let text = match (video, editing) {
+        _ if refused => "Only projects and videos (MP4, MOV, M4V) can be opened here",
         (true, true) => "Drop to add the video to the end of this project",
         (true, false) => "Drop the video to make a project",
         (false, _) => "Drop to open the project",
@@ -626,7 +650,12 @@ fn drop_hint(ctx: &egui::Context, editing: bool) {
     let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::new("drop_hint")));
     painter.rect_filled(rect, 0.0, pal.bg.gamma_multiply(0.82));
     painter.rect_stroke(rect.shrink(10.0), egui::CornerRadius::same(crate::theme::RADIUS), egui::Stroke::new(2.0, pal.accent), egui::StrokeKind::Inside);
-    painter.text(rect.center(), egui::Align2::CENTER_CENTER, text, egui::FontId::proportional(16.0), pal.text);
+    // the longer refusal is a size smaller; every line wraps inside the frame, centred
+    let size = if refused { 14.0 } else { 16.0 };
+    let mut job = egui::text::LayoutJob::simple(text.to_string(), egui::FontId::proportional(size), pal.text, (rect.width() - 64.0).max(80.0));
+    job.halign = egui::Align::Center;
+    let galley = painter.layout_job(job);
+    painter.galley(rect.center() - galley.rect.center().to_vec2(), galley, pal.text);
 }
 
 fn short_duration(secs: f64) -> String {
@@ -711,6 +740,10 @@ impl eframe::App for App {
         ctx.input(|i| {
             for f in &i.raw.dropped_files {
                 let p = f.path().to_path_buf();
+                // anything else (an image, a document) is not taken
+                if !can_open(&p) {
+                    continue;
+                }
                 // a video dropped on an open project goes at the end of its timeline
                 if editing && sf_recording::import::is_video(&p) {
                     append_request = Some(p);

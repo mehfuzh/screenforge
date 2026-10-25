@@ -597,12 +597,18 @@ pub fn paint_icon(p: &egui::Painter, rect: Rect, icon: Icon, color: Color32) {
 
 /// Icon-only button (quiet).
 pub fn icon_button(ui: &mut Ui, icon: Icon, size: f32, tooltip: &str) -> Response {
+    icon_button_tinted(ui, icon, size, tooltip, theme::p().text)
+}
+
+/// [`icon_button`] whose icon turns `hover` while the pointer is over it (the accent for
+/// folders, danger red for trash).
+pub fn icon_button_tinted(ui: &mut Ui, icon: Icon, size: f32, tooltip: &str, hover: Color32) -> Response {
     let (rect, resp) = ui.allocate_exact_size(vec2(size + 12.0, size + 8.0), Sense::click());
     let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
     if resp.hovered() {
         ui.painter().rect_filled(rect, CornerRadius::same(7), theme::p().card_2);
     }
-    let color = if resp.hovered() { theme::p().text } else { theme::p().text_dim };
+    let color = if resp.hovered() { hover } else { theme::p().text_dim };
     paint_icon(ui.painter(), Rect::from_center_size(rect.center(), vec2(size, size)), icon, color);
     resp.on_hover_text(tooltip)
 }

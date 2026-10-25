@@ -466,7 +466,7 @@ impl Picker {
         divider(ui);
 
         // recent projects panel toggle
-        let folder = widgets::icon_button(ui, widgets::Icon::Folder, 18.0, "Recent projects");
+        let folder = widgets::icon_button_tinted(ui, widgets::Icon::Folder, 18.0, "Recent projects", theme::p().accent);
         let folder_clicked = folder.clicked();
         if folder_clicked {
             self.show_recent = !self.show_recent;

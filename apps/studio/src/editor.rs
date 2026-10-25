@@ -973,10 +973,10 @@ impl Editor {
                 if cfg!(target_os = "macos") {
                     ui.add_space(72.0); // traffic lights float over the toolbar
                 }
-                if widgets::icon_button(ui, widgets::Icon::Folder, 18.0, "Projects").clicked() {
+                if widgets::icon_button_tinted(ui, widgets::Icon::Folder, 18.0, "Projects", theme::p().accent).clicked() {
                     go_home = true;
                 }
-                if widgets::icon_button(ui, widgets::Icon::Trash, 18.0, "Move project to Trash").clicked() && !self.export.is_busy() {
+                if widgets::icon_button_tinted(ui, widgets::Icon::Trash, 18.0, "Move project to Trash", theme::p().danger).clicked() && !self.export.is_busy() {
                     self.remove_requested = true;
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {

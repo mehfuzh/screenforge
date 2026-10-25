@@ -304,6 +304,15 @@ impl Session {
 
     // ───────────── decoding ─────────────
 
+    /// The recording time whose frame shows at `output_ms`: kept a frame inside its clip, so the
+    /// end of the timeline (or of a clip) never shows the frame just past it, which may belong
+    /// to material that was cut, like a video appended and then deleted.
+    fn frame_source_ms(&self, output_ms: f64) -> f64 {
+        let Some(span) = self.timeline.span_at_output(output_ms) else { return 0.0 };
+        let frame_ms = 1000.0 / self.source.fps.max(1.0);
+        span.output_to_source(output_ms.clamp(span.output_start_ms, span.output_end_ms)).min(span.source_end_ms - frame_ms).max(span.source_start_ms)
+    }
+
     fn seek_sources(&mut self, source_ms: f64, want_camera: bool) -> Result<()> {
         let fps = stream::DEFAULT_FPS / self.decode_speed.max(1.0);
         self.screen.max_width = self.decode_max_width;
@@ -357,7 +366,7 @@ impl Session {
     /// Build the frame for output time `output_ms`. `out` is the canvas size.
     pub fn frame_desc_at(&mut self, output_ms: f64, out: OutputSize) -> Result<FrameDesc> {
         let output_ms = output_ms.clamp(0.0, self.duration_ms().max(0.0));
-        let source_ms = self.timeline.output_to_source(output_ms).unwrap_or(0.0);
+        let source_ms = self.frame_source_ms(output_ms);
         let span = self.timeline.span_at_output(output_ms).cloned();
         let speed = span.map(|s| 1.0 / s.time_scale).unwrap_or(1.0);
         let jump = match self.last_output_ms {
@@ -556,7 +565,7 @@ impl Session {
     /// crop editor shows. The animated camera and cursor restart on the next regular frame.
     pub fn source_frame_desc_at(&mut self, output_ms: f64, out: OutputSize) -> Result<FrameDesc> {
         let output_ms = output_ms.clamp(0.0, self.duration_ms().max(0.0));
-        let source_ms = self.timeline.output_to_source(output_ms).unwrap_or(0.0);
+        let source_ms = self.frame_source_ms(output_ms);
         self.seek_sources(source_ms, false)?;
         self.last_output_ms = None;
         let dst = Rect { x: 0.0, y: 0.0, width: out.width as f64, height: out.height as f64 };
