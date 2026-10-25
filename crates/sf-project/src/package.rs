@@ -132,6 +132,20 @@ impl ProjectPackage {
         Ok(pkg)
     }
 
+    /// Where to cut the recording so that appended videos at its end that no clip (and no
+    /// detached audio clip) uses any more go: the start of the first of them, or `None`.
+    pub fn unused_appended_tail(&self) -> Option<f64> {
+        use crate::audio_clips::SceneAudioExt;
+        let display = self.recording.as_ref()?.display()?;
+        let used: Vec<(f64, f64)> = self
+            .project
+            .scenes
+            .iter()
+            .flat_map(|s| s.slices.iter().map(|c| (c.source_start_ms, c.source_end_ms)).chain(s.audio_clips().unwrap_or_default().iter().map(|c| (c.source_start_ms, c.source_end_ms))).collect::<Vec<_>>())
+            .collect();
+        unused_tail(&display.appended(), &used)
+    }
+
     pub fn recording_dir(&self) -> PathBuf {
         self.path.join(RECORDING_DIR)
     }
@@ -285,12 +299,45 @@ fn write_atomic(path: &Path, contents: &str) -> Result<()> {
     std::fs::rename(&tmp, path).map_err(|source| Error::Io { path: path.into(), source })
 }
 
+/// The start of the run of `appended` parts (`[start, length]`) at the end of the recording that
+/// none of the `used` source ranges touch; `None` when the last part is still used.
+fn unused_tail(appended: &[[f64; 2]], used: &[(f64, f64)]) -> Option<f64> {
+    // a millisecond of slack: clip edges are rounded
+    let touched = |a: f64, b: f64| used.iter().any(|&(s, e)| e > a + 1.0 && s < b - 1.0);
+    let mut parts = appended.to_vec();
+    parts.sort_by(|a, b| a[0].total_cmp(&b[0]));
+    let mut cut = None;
+    for p in parts.iter().rev() {
+        if touched(p[0], p[0] + p[1]) {
+            break;
+        }
+        cut = Some(p[0]);
+    }
+    // nothing used may lie past the cut (the parts are contiguous at the end)
+    cut.filter(|c| used.iter().all(|&(_, e)| e <= c + 1.0))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn fixture(v: &str) -> PathBuf {
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/projects").join(v)
+    }
+
+    #[test]
+    fn unused_appended_videos_at_the_end_are_found() {
+        // a 60 s recording with videos appended at 60 s (20 s long) and 80 s (10 s long)
+        let parts = [[60_000.0, 20_000.0], [80_000.0, 10_000.0]];
+        // both deleted (a cut inside the original is fine)
+        assert_eq!(unused_tail(&parts, &[(0.0, 30_000.0), (40_000.0, 60_000.0)]), Some(60_000.0));
+        // the last one deleted, the first still on the timeline
+        assert_eq!(unused_tail(&parts, &[(0.0, 60_000.0), (65_000.0, 70_000.0)]), Some(80_000.0));
+        // the last one still used: nothing goes, even with the first one deleted
+        assert_eq!(unused_tail(&parts, &[(0.0, 60_000.0), (82_000.0, 90_000.0)]), None);
+        // a clip edge rounded a hair past the original end does not keep a part
+        assert_eq!(unused_tail(&parts, &[(0.0, 60_000.4)]), Some(60_000.0));
+        assert_eq!(unused_tail(&[], &[(0.0, 60_000.0)]), None);
     }
 
     #[test]

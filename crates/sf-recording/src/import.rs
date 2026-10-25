@@ -167,6 +167,7 @@ pub fn import_video(src: &Path, dir: &Path, progress: impl Fn(f64), cancel: &Ato
                 bounds: Rect { x: 0.0, y: 0.0, width: p.width as f64, height: p.height as f64 },
                 display_refresh_rate: p.fps,
                 recording_scale: 1.0,
+                bounds_moves: vec![],
             },
             audio: if p.has_audio { vec![AudioChannel { kind: "microphone", channel_index: 2, device_id: Some("imported".into()) }] } else { vec![] },
             camera: None,
@@ -236,6 +237,76 @@ fn extend_metadata(doc: &mut Value, added_ms: f64, new_mic: Option<&str>) {
         }
     }
     *doc = crate::metadata::sort_keys(doc.take());
+}
+
+/// Replace the recording's files in `dir` with those written to `tmp`: the old screen video's
+/// playlist and segments go, every file in `tmp` moves in (audio tracks overwrite theirs).
+fn swap_in(dir: &Path, tmp: &Path, display: &str) -> Result<()> {
+    let base = display.trim_end_matches(".m3u8").to_string();
+    for f in std::fs::read_dir(dir).map_err(|source| Error::Io { path: dir.to_path_buf(), source })?.flatten() {
+        let name = f.file_name().to_string_lossy().into_owned();
+        if name.starts_with(&format!("{base}-")) || name == display {
+            let _ = std::fs::remove_file(f.path());
+        }
+    }
+    for f in std::fs::read_dir(tmp).map_err(|source| Error::Io { path: tmp.to_path_buf(), source })?.flatten() {
+        let to = dir.join(f.file_name());
+        std::fs::rename(f.path(), &to).map_err(|source| Error::Io { path: to, source })?;
+    }
+    let _ = std::fs::remove_dir_all(tmp);
+    Ok(())
+}
+
+/// Cut the recording in `dir` back to its first `keep_ms`: every track is shortened without
+/// re-encoding, `metadata.json` shrinks to match and forgets the appended parts past the cut.
+/// Used to take out videos appended with [`append_video`] that no clip uses any more.
+pub fn trim_recording(dir: &Path, keep_ms: f64) -> Result<()> {
+    let meta_path = dir.join(sf_project::recording::METADATA_FILE);
+    let text = std::fs::read_to_string(&meta_path).map_err(|source| Error::Io { path: meta_path.clone(), source })?;
+    let mut doc: Value = serde_json::from_str(&text).map_err(Error::Json)?;
+    let t = tracks(&doc)?;
+    let old = probe(&dir.join(&t.display))?;
+    if keep_ms <= 0.0 || keep_ms >= old.duration_ms - 1.0 {
+        return Ok(());
+    }
+    let tmp = dir.join(".trim");
+    let _ = std::fs::remove_dir_all(&tmp);
+    std::fs::create_dir_all(&tmp).map_err(|source| Error::Io { path: tmp.clone(), source })?;
+    let keep = format!("{:.3}", keep_ms / 1000.0);
+    let mut jobs: Vec<Vec<String>> = vec![];
+    let mut video: Vec<String> = ["-i", &dir.join(&t.display).to_string_lossy(), "-t", &keep, "-map", "0:v:0", "-c:v", "copy"].map(String::from).to_vec();
+    video.extend(display::hls_muxer_args(t.display.trim_end_matches(".m3u8")));
+    jobs.push(video);
+    for a in [&t.microphone, &t.system_audio].into_iter().flatten() {
+        jobs.push(["-i", &dir.join(a).to_string_lossy(), "-t", &keep, "-map", "0:a:0", "-c:a", "copy", a].map(String::from).to_vec());
+    }
+    for job in jobs {
+        let mut cmd = std::process::Command::new(crate::ffmpeg::ffmpeg_path()?);
+        crate::ffmpeg::hide_console(&mut cmd);
+        let out = cmd.args(["-y", "-nostdin", "-hide_banner", "-loglevel", "error"]).args(&job).current_dir(&tmp).output().map_err(|source| Error::Io { path: dir.to_path_buf(), source });
+        match out {
+            Ok(o) if o.status.success() => {}
+            other => {
+                let _ = std::fs::remove_dir_all(&tmp);
+                let why = other.map(|o| String::from_utf8_lossy(&o.stderr).trim().to_string()).unwrap_or_else(|e| e.to_string());
+                return Err(Error::Capture(format!("ffmpeg could not shorten the recording: {why}")));
+            }
+        }
+    }
+    swap_in(dir, &tmp, &t.display)?;
+    if let Some(display) = doc["recorders"].as_array_mut().and_then(|l| l.iter_mut().find(|r| r["type"] == "display")) {
+        let parts: Vec<Value> = display["configuration"]["sfAppended"].as_array().cloned().unwrap_or_default().into_iter().filter(|p| p[0].as_f64().is_some_and(|s| s < keep_ms)).collect();
+        if parts.is_empty() {
+            if let Some(c) = display["configuration"].as_object_mut() {
+                c.remove("sfAppended");
+            }
+        } else {
+            display["configuration"]["sfAppended"] = Value::Array(parts);
+        }
+    }
+    extend_metadata(&mut doc, keep_ms - old.duration_ms, None);
+    let text = serde_json::to_string_pretty(&doc).map_err(Error::Json)?;
+    std::fs::write(&meta_path, text).map_err(|source| Error::Io { path: meta_path, source })
 }
 
 /// Append the video `src` to the recording in `dir`: its picture after the screen video's end
@@ -337,20 +408,13 @@ pub fn append_video(dir: &Path, src: &Path, progress: impl Fn(f64), cancel: &Ato
         return Err(e);
     }
 
-    // swap: the old screen video's files go, the new ones move in
-    let base = t.display.trim_end_matches(".m3u8").to_string();
-    for f in std::fs::read_dir(dir).map_err(|source| Error::Io { path: dir.to_path_buf(), source })?.flatten() {
-        let name = f.file_name().to_string_lossy().into_owned();
-        if name.starts_with(&format!("{base}-")) || name == t.display {
-            let _ = std::fs::remove_file(f.path());
-        }
+    swap_in(dir, &tmp, &t.display)?;
+    // where the added video sits, so it can be taken out again once no clip uses it
+    if let Some(display) = doc["recorders"].as_array_mut().and_then(|l| l.iter_mut().find(|r| r["type"] == "display")) {
+        let mut parts = display["configuration"]["sfAppended"].as_array().cloned().unwrap_or_default();
+        parts.push(serde_json::json!([old.duration_ms, new.duration_ms]));
+        display["configuration"]["sfAppended"] = Value::Array(parts);
     }
-    for f in std::fs::read_dir(&tmp).map_err(|source| Error::Io { path: tmp.clone(), source })?.flatten() {
-        let to = dir.join(f.file_name());
-        std::fs::rename(f.path(), &to).map_err(|source| Error::Io { path: to, source })?;
-    }
-    let _ = std::fs::remove_dir_all(&tmp);
-
     extend_metadata(&mut doc, new.duration_ms, new_mic.as_deref());
     let text = serde_json::to_string_pretty(&doc).map_err(Error::Json)?;
     std::fs::write(&meta_path, text).map_err(|source| Error::Io { path: meta_path, source })?;
