@@ -209,6 +209,19 @@ pub fn secondary_button(ui: &mut Ui, text: &str) -> Response {
         .on_hover_cursor(egui::CursorIcon::PointingHand)
 }
 
+/// A square button with only an icon, styled like [`secondary_button`] and as tall as a
+/// [`text_field`] (the search button beside a search field).
+pub fn square_icon_button(ui: &mut Ui, icon: Icon, tooltip: &str) -> Response {
+    let pal = theme::p();
+    let (rect, resp) = ui.allocate_exact_size(vec2(38.0, 38.0), Sense::click());
+    let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
+    let p = ui.painter();
+    p.rect_filled(rect, CornerRadius::same(BUTTON_RADIUS), if resp.hovered() { pal.card_2 } else { pal.card_3 });
+    p.rect_stroke(rect, CornerRadius::same(BUTTON_RADIUS), Stroke::new(1.0, pal.text_faint), egui::StrokeKind::Inside);
+    paint_icon(p, Rect::from_center_size(rect.center(), vec2(16.0, 16.0)), icon, pal.text);
+    resp.on_hover_text(tooltip)
+}
+
 /// Single-line text field: roomy (38 px) with 4 px corners like the buttons, padded text and a
 /// quiet border that turns accent while focused.
 pub fn text_field(ui: &mut Ui, text: &mut String, hint: &str) -> Response {
@@ -300,6 +313,14 @@ pub enum Icon {
     Check,
     /// Plus sign (a new project).
     Plus,
+    /// Arrow leaving a box (open a page in the browser).
+    OpenExternal,
+    /// Magnifying glass (search).
+    Search,
+    /// Heart outline (not a favourite yet).
+    Heart,
+    /// Filled heart (a favourite).
+    HeartFilled,
 }
 
 /// Live level as an equalizer: the most recent `levels` (0..1, oldest first) as bars that
@@ -427,6 +448,46 @@ pub fn paint_icon(p: &egui::Painter, rect: Rect, icon: Icon, color: Color32) {
         Icon::Plus => {
             line((0.0, -0.75), (0.0, 0.75));
             line((-0.75, 0.0), (0.75, 0.0));
+        }
+        Icon::Search => {
+            p.circle_stroke(pos2(c.x - 0.15 * r, c.y - 0.15 * r), 0.55 * r, s);
+            line((0.25, 0.25), (0.8, 0.8));
+        }
+        Icon::Heart | Icon::HeartFilled => {
+            // the classic heart curve, scaled into the icon box (y down)
+            let pts: Vec<egui::Pos2> = (0..48)
+                .map(|i| {
+                    let t = i as f32 / 48.0 * std::f32::consts::TAU;
+                    let x = 16.0 * t.sin().powi(3) / 17.0;
+                    let y = -(13.0 * t.cos() - 5.0 * (2.0 * t).cos() - 2.0 * (3.0 * t).cos() - (4.0 * t).cos()) / 17.0 - 0.1;
+                    pos2(c.x + x * r, c.y + y * r)
+                })
+                .collect();
+            if icon == Icon::HeartFilled {
+                // a fan from a point inside: every edge of the heart can see it
+                let mut mesh = egui::Mesh::default();
+                mesh.colored_vertex(pos2(c.x, c.y + 0.1 * r), color);
+                for q in &pts {
+                    mesh.colored_vertex(*q, color);
+                }
+                let n = pts.len() as u32;
+                for i in 0..n {
+                    mesh.add_triangle(0, 1 + i, 1 + (i + 1) % n);
+                }
+                p.add(egui::Shape::mesh(mesh));
+            }
+            p.add(egui::Shape::closed_line(pts, s));
+        }
+        Icon::OpenExternal => {
+            // box open at its top-right corner
+            line((0.05, -0.8), (-0.8, -0.8));
+            line((-0.8, -0.8), (-0.8, 0.8));
+            line((-0.8, 0.8), (0.8, 0.8));
+            line((0.8, 0.8), (0.8, -0.05));
+            // arrow out through the gap
+            line((-0.1, 0.1), (0.85, -0.85));
+            line((0.85, -0.85), (0.3, -0.85));
+            line((0.85, -0.85), (0.85, -0.3));
         }
         Icon::Check => {
             line((-0.75, 0.05), (-0.25, 0.55));

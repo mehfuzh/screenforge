@@ -65,7 +65,7 @@ fi
 supabase db push
 
 echo "→ Supabase: functions"
-supabase functions deploy create-checkout license-refresh license-activate license-deactivate billing-portal free-export unsplash agent credits --project-ref "$REF"
+supabase functions deploy create-checkout license-refresh license-activate license-deactivate billing-portal free-export unsplash jamendo agent credits --project-ref "$REF"
 supabase functions deploy stripe-webhook --no-verify-jwt --project-ref "$REF"
 
 echo "→ Supabase: secrets"
@@ -82,6 +82,11 @@ supabase secrets set --project-ref "$REF" \
 # supabase secrets set ANTHROPIC_API_KEY=… --project-ref "$REF")
 if [ -n "${ANTHROPIC_API_KEY:-}" ]; then
   supabase secrets set --project-ref "$REF" ANTHROPIC_API_KEY="$ANTHROPIC_API_KEY"
+fi
+# Audio → Find music's Jamendo client id (set it once by hand if it is not in the environment:
+# supabase secrets set JAMENDO_CLIENT_ID=… --project-ref "$REF")
+if [ -n "${JAMENDO_CLIENT_ID:-}" ]; then
+  supabase secrets set --project-ref "$REF" JAMENDO_CLIENT_ID="$JAMENDO_CLIENT_ID"
 fi
 
 echo "→ Smoke test: license-refresh for an unknown email should answer 404"

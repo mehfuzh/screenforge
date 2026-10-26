@@ -56,6 +56,8 @@ pub struct Editor {
     voice_levels_at: Option<Instant>,
     /// Background → Unsplash search and downloads.
     pub unsplash: crate::unsplash::Browser,
+    /// Audio → Find music (Jamendo search and link import).
+    pub music: crate::music::Browser,
     pub dirty: bool,
     /// Time of the last change; unsaved changes are written shortly after editing stops.
     last_edit: Option<Instant>,
@@ -146,6 +148,7 @@ impl Editor {
             voice_levels: Default::default(),
             voice_levels_at: None,
             unsplash: Default::default(),
+            music: Default::default(),
             dirty: false,
             last_edit: None,
             timeline: TimelineWidget::default(),

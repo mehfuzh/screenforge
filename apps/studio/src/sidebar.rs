@@ -1330,46 +1330,69 @@ fn audio_ui(ed: &mut Editor, ui: &mut egui::Ui) {
         None => audio_cfg.background_audio_file_name.clone(),
     };
     let library = ed.session.assets.list_background_audio();
-    if library.is_empty() {
-        widgets::hint(ui, "No music library on this Mac yet. Add your own track with \"Add background audio…\" below.");
-    }
-    let mut categories: Vec<String> = library.iter().filter_map(|n| n.split('/').next().map(str::to_string)).collect();
-    categories.dedup();
-    let none_sel = current.is_none();
-    if ui.selectable_label(none_sel, if part.is_some() { "None (delete this part)" } else { "None" }).clicked() && !none_sel {
-        match &part {
-            Some(_) => ed.delete_selected(),
-            None => ed.remove_music(),
+    let assets = ed.session.pkg.path.join("assets");
+    // a track of your own (added, found on Jamendo or imported from a link) is not in the library
+    if let Some(cur) = current.as_deref().filter(|c| !library.iter().any(|n| sf_session::assets::background_audio_key(n) == sf_session::assets::background_audio_key(c))) {
+        match crate::music::credit(&assets, cur) {
+            Some(credit) => music_credit_ui(ui, &credit),
+            None => widgets::hint(ui, &format!("Playing your track \"{}\".", sf_session::assets::background_audio_label(cur))),
         }
+        ui.add_space(4.0);
     }
-    let mut picked: Option<String> = None;
-    for cat in categories {
-        let title = {
-            let mut c = cat.chars();
-            match c.next() {
-                Some(f) => f.to_uppercase().collect::<String>() + c.as_str(),
-                None => cat.clone(),
+    // where the music comes from, as Background has Wallpaper / … / Unsplash
+    use crate::music::Source;
+    ed.music.ensure_library();
+    let sources = [Source::Library, Source::Jamendo, Source::Favorites, Source::Recent, Source::Link];
+    let favorites = match ed.music.library.favorites.len() {
+        0 => "Favorites".to_string(),
+        n => format!("Favorites ({n})"),
+    };
+    if let Some(i) = widgets::segmented(ui, sources.iter().position(|s| *s == ed.music.source).unwrap_or(0), &["Library", "Jamendo", &favorites, "Recent", "Link"]) {
+        ed.music.source = sources[i];
+    }
+    ui.add_space(8.0);
+    let mut picked = music_source_ui(ed, ui, &assets, current.as_deref());
+    if ed.music.source == Source::Library {
+        if library.is_empty() {
+            widgets::hint(ui, "No music library on this Mac yet. Add your own track with \"Add background audio…\" below.");
+        }
+        let mut categories: Vec<String> = library.iter().filter_map(|n| n.split('/').next().map(str::to_string)).collect();
+        categories.dedup();
+        let none_sel = current.is_none();
+        if ui.selectable_label(none_sel, if part.is_some() { "None (delete this part)" } else { "None" }).clicked() && !none_sel {
+            match &part {
+                Some(_) => ed.delete_selected(),
+                None => ed.remove_music(),
             }
-        };
-        let cur_key = current.as_deref().map(sf_session::assets::background_audio_key);
-        let open_cat = library.iter().any(|n| n.starts_with(&format!("{cat}/")) && cur_key.as_deref() == Some(sf_session::assets::background_audio_key(n).as_str()));
-        egui::CollapsingHeader::new(title).default_open(open_cat).show(ui, |ui| {
-            for track in library.iter().filter(|n| n.starts_with(&format!("{cat}/"))) {
-                let label = sf_session::assets::background_audio_label(track);
-                let sel = current.as_deref().is_some_and(|c| sf_session::assets::background_audio_key(c) == sf_session::assets::background_audio_key(track));
-                if ui.selectable_label(sel, label).clicked() && !sel {
-                    picked = Some(track.clone());
+        }
+        for cat in categories {
+            let title = {
+                let mut c = cat.chars();
+                match c.next() {
+                    Some(f) => f.to_uppercase().collect::<String>() + c.as_str(),
+                    None => cat.clone(),
                 }
-            }
-        });
-    }
-    if ui.button("Add background audio…").clicked() {
-        if let Some(p) = rfd::FileDialog::new().add_filter("Audio", &["mp3", "m4a", "wav", "aac", "mp4"]).pick_file() {
-            let name = p.file_name().unwrap().to_string_lossy().into_owned();
-            let dest = ed.session.pkg.path.join("assets").join(&name);
-            let _ = std::fs::create_dir_all(dest.parent().unwrap());
-            if std::fs::copy(&p, &dest).is_ok() {
-                picked = Some(name);
+            };
+            let cur_key = current.as_deref().map(sf_session::assets::background_audio_key);
+            let open_cat = library.iter().any(|n| n.starts_with(&format!("{cat}/")) && cur_key.as_deref() == Some(sf_session::assets::background_audio_key(n).as_str()));
+            egui::CollapsingHeader::new(title).default_open(open_cat).show(ui, |ui| {
+                for track in library.iter().filter(|n| n.starts_with(&format!("{cat}/"))) {
+                    let label = sf_session::assets::background_audio_label(track);
+                    let sel = current.as_deref().is_some_and(|c| sf_session::assets::background_audio_key(c) == sf_session::assets::background_audio_key(track));
+                    if ui.selectable_label(sel, label).clicked() && !sel {
+                        picked = Some(track.clone());
+                    }
+                }
+            });
+        }
+        if ui.button("Add background audio…").clicked() {
+            if let Some(p) = rfd::FileDialog::new().add_filter("Audio", &["mp3", "m4a", "wav", "aac", "mp4"]).pick_file() {
+                let name = p.file_name().unwrap().to_string_lossy().into_owned();
+                let dest = ed.session.pkg.path.join("assets").join(&name);
+                let _ = std::fs::create_dir_all(dest.parent().unwrap());
+                if std::fs::copy(&p, &dest).is_ok() {
+                    picked = Some(name);
+                }
             }
         }
     }
@@ -1402,6 +1425,226 @@ fn audio_ui(ed: &mut Editor, ui: &mut egui::Ui) {
             }, 0.0..=1.0, Some(0.05), "");
         }
     }
+}
+
+/// Who made the Jamendo track in use, its licence, and a button to copy the credit line.
+fn music_credit_ui(ui: &mut egui::Ui, credit: &crate::music::Credit) {
+    ui.horizontal_wrapped(|ui| {
+        ui.spacing_mut().item_spacing.x = 4.0;
+        ui.label(RichText::new(format!("\"{}\" by {}", credit.title, credit.artist)).color(theme::p().text));
+        if let Some(license) = credit.license() {
+            match &credit.license_url {
+                Some(url) => browser_link(ui, &license, url),
+                None => {
+                    ui.label(RichText::new(license).color(theme::p().text_dim));
+                }
+            }
+        }
+        browser_link(ui, "on Jamendo", credit.url.as_deref().unwrap_or("https://www.jamendo.com/"));
+    });
+    if credit.is_noncommercial() {
+        ui.label(RichText::new("Non-commercial licence: only for a video that earns nothing. No ads, sponsors, paid courses, or promoting a product or business.").size(13.0).color(theme::p().danger));
+    }
+    widgets::hint(ui, "Creative Commons music: put this credit in the video's description wherever you publish it.");
+    if widgets::secondary_button(ui, "Copy credit").on_hover_text(credit.text()).clicked() {
+        ui.ctx().copy_text(credit.text());
+    }
+}
+
+/// One line of text cut with "…" to fit `max_width`.
+fn one_line(ui: &egui::Ui, text: &str, size: f32, color: egui::Color32, max_width: f32) -> std::sync::Arc<egui::Galley> {
+    let mut job = egui::text::LayoutJob::simple_singleline(text.to_string(), egui::FontId::proportional(size), color);
+    job.wrap = egui::text::TextWrapping { max_width: max_width.max(1.0), max_rows: 1, break_anywhere: true, overflow_character: Some('…') };
+    ui.painter().layout_job(job)
+}
+
+/// What happened on a [`track_row`].
+struct TrackRow {
+    response: egui::Response,
+    /// The heart was clicked (the row itself was not).
+    heart: bool,
+}
+
+/// A Jamendo result, laid out like a music player's track list: album cover, title over
+/// "artist · licence", length, a heart for favourites, and a link to the track's page
+/// (Jamendo's API terms ask for one on every track). Hovering shows a play mark on the cover; the
+/// track in use has its title in the accent colour. `downloading`: `Some(progress)` while this
+/// track downloads.
+fn track_row(ui: &mut egui::Ui, track: &crate::music::Track, cover: Option<&std::path::Path>, playing: bool, favorite: bool, downloading: Option<Option<f32>>) -> TrackRow {
+    let pal = theme::p();
+    const H: f32 = 52.0;
+    const COVER: f32 = 40.0;
+    const PAD: f32 = 6.0;
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(ui.available_width(), H), egui::Sense::click());
+    let link_rect = egui::Rect::from_center_size(egui::pos2(rect.right() - PAD - 10.0, rect.center().y), egui::vec2(24.0, 24.0));
+    let link = ui.interact(link_rect, resp.id.with("link"), egui::Sense::click()).on_hover_text("Open on Jamendo").on_hover_cursor(egui::CursorIcon::PointingHand);
+    let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
+    if link.clicked() {
+        crate::os::open(track.share_url.as_deref().unwrap_or("https://www.jamendo.com/"));
+    }
+    let heart_rect = link_rect.translate(egui::vec2(-26.0, 0.0));
+    let heart = ui.interact(heart_rect, resp.id.with("heart"), egui::Sense::click()).on_hover_text(if favorite { "Remove from favorites" } else { "Add to favorites" }).on_hover_cursor(egui::CursorIcon::PointingHand);
+    let hovered = resp.hovered() || link.hovered() || heart.hovered();
+    let painter = ui.painter();
+    let radius = egui::CornerRadius::same(widgets::BUTTON_RADIUS);
+    if playing {
+        painter.rect_filled(rect, radius, pal.card_3);
+    } else if hovered {
+        painter.rect_filled(rect, radius, pal.card_2);
+    }
+    // cover
+    let cover_rect = egui::Rect::from_min_size(egui::pos2(rect.left() + PAD, rect.center().y - COVER / 2.0), egui::vec2(COVER, COVER));
+    let texture = cover.and_then(|p| match ui.ctx().try_load_texture(&crate::os::texture_uri(p), egui::TextureOptions::LINEAR, egui::load::SizeHint::Size { width: 100, height: 100, maintain_aspect_ratio: true }) {
+        Ok(egui::load::TexturePoll::Ready { texture }) => Some(texture),
+        _ => None,
+    });
+    match texture {
+        Some(t) => {
+            egui::Image::from_texture(t).corner_radius(radius).paint_at(ui, cover_rect);
+        }
+        None => {
+            painter.rect_filled(cover_rect, radius, pal.card_2);
+            widgets::paint_icon(painter, cover_rect.shrink(11.0), widgets::Icon::Audio, pal.text_faint);
+        }
+    }
+    match downloading {
+        Some(progress) => download_ring(ui, cover_rect, progress),
+        None if hovered && !playing => {
+            painter.rect_filled(cover_rect, radius, egui::Color32::from_black_alpha(140));
+            widgets::paint_icon(painter, cover_rect.shrink(12.0), widgets::Icon::Play, egui::Color32::WHITE);
+        }
+        None if playing => {
+            painter.rect_filled(cover_rect, radius, egui::Color32::from_black_alpha(120));
+            widgets::paint_icon(painter, cover_rect.shrink(12.0), widgets::Icon::Waveform, pal.accent);
+        }
+        None => {}
+    }
+    // link
+    widgets::paint_icon(painter, link_rect.shrink(6.0), widgets::Icon::OpenExternal, if link.hovered() { pal.text } else { pal.text_faint });
+    // the heart: filled in the accent colour for a favourite, otherwise only while hovering
+    if favorite {
+        widgets::paint_icon(painter, heart_rect.shrink(5.0), widgets::Icon::HeartFilled, pal.accent);
+    } else if hovered {
+        widgets::paint_icon(painter, heart_rect.shrink(5.0), widgets::Icon::Heart, if heart.hovered() { pal.text } else { pal.text_faint });
+    }
+    // length, right-aligned before the heart
+    let length = one_line(ui, &crate::music::fmt_duration(track.duration), 12.5, pal.text_dim, 60.0);
+    let length_pos = egui::pos2(heart_rect.left() - 6.0 - length.size().x, rect.center().y - length.size().y / 2.0);
+    // title over artist · licence
+    let text_left = cover_rect.right() + 12.0;
+    let text_w = length_pos.x - 12.0 - text_left;
+    let credit = crate::music::Credit { title: track.name.clone(), artist: track.artist.clone(), url: None, license_url: track.license_url.clone() };
+    let sub = match downloading {
+        Some(Some(f)) => format!("Downloading… {:.0} %", f * 100.0),
+        Some(None) => "Downloading…".to_string(),
+        None => [Some(track.artist.clone()), credit.license()].into_iter().flatten().collect::<Vec<_>>().join(" · "),
+    };
+    let title = one_line(ui, &track.name, 14.0, if playing { pal.accent } else { pal.text }, text_w);
+    let sub = one_line(ui, &sub, 12.5, pal.text_dim, text_w);
+    // the full names only when they were cut to fit
+    let cut = title.size().x >= text_w - 1.0 || sub.size().x >= text_w - 1.0;
+    let (title_h, top) = (title.size().y, rect.center().y - (title.size().y + 2.0 + sub.size().y) / 2.0);
+    let painter = ui.painter();
+    painter.galley(egui::pos2(text_left, top), title, pal.text);
+    painter.galley(egui::pos2(text_left, top + title_h + 2.0), sub, pal.text_dim);
+    painter.galley(length_pos, length, pal.text_dim);
+    let response = if cut { resp.on_hover_text(format!("\"{}\" by {}{}", track.name, track.artist, credit.license().map(|l| format!(" · {l}")).unwrap_or_default())) } else { resp };
+    TrackRow { response, heart: heart.clicked() }
+}
+
+/// Audio → Background audio's Jamendo, Favorites, Recent and Link tabs (Library is drawn by
+/// [`audio_ui`]). Downloads finish whichever tab is showing. Returns the file name (in the
+/// project's `assets/`) of a track that finished downloading.
+fn music_source_ui(ed: &mut Editor, ui: &mut egui::Ui, assets: &std::path::Path, current: Option<&str>) -> Option<String> {
+    use crate::music::{Job, Source};
+    let ctx = ui.ctx().clone();
+    let done = ed.music.poll(&ctx).map(|a| a.file_name);
+    match ed.music.source {
+        Source::Library => {}
+        Source::Link => {
+            let importing = ed.music.applying == Some(Job::Link);
+            let free = ed.music.applying.is_none();
+            let import = ui
+                .allocate_ui_with_layout(egui::vec2(ui.available_width(), 38.0), egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    let button = ui.add_enabled_ui(free, |ui| widgets::secondary_button(ui, "Import")).inner.clicked();
+                    let field = widgets::text_field(ui, &mut ed.music.link, "https://…/track.mp3");
+                    let enter = field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                    button || (enter && free)
+                })
+                .inner;
+            if import && !ed.music.link.trim().is_empty() {
+                ed.music.import_link(&ctx, assets.to_path_buf());
+            }
+            if importing {
+                widgets::hint(ui, &ed.music.progress().map_or_else(|| "Downloading…".to_string(), |f| format!("Downloading… {:.0} %", f * 100.0)));
+            }
+            if let Some(e) = &ed.music.link_error {
+                ui.label(RichText::new(e).size(13.0).color(theme::p().danger));
+            }
+            widgets::hint(ui, "A direct link to an MP3, M4A, AAC, WAV, OGG, FLAC or AIFF file (Dropbox share links work too). Use only music you have the rights to.");
+        }
+        source => {
+            ed.music.ensure_started(&ctx);
+            if source == Source::Jamendo {
+                // the icon first, right to left, so the field takes the rest of the row
+                let searched = ui
+                    .allocate_ui_with_layout(egui::vec2(ui.available_width(), 38.0), egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        let button = widgets::square_icon_button(ui, widgets::Icon::Search, "Search").clicked();
+                        let field = widgets::text_field(ui, &mut ed.music.query, "Search Jamendo music");
+                        let enter = field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                        button || enter
+                    })
+                    .inner;
+                widgets::hint(ui, "Free in any video with credit to the artist. Leave it empty for popular tracks.");
+                let mut instrumental = ed.music.instrumental;
+                let filtered = widgets::toggle_row(ui, "Instrumental only", "", &mut instrumental);
+                ed.music.instrumental = instrumental;
+                let mut noncommercial = ed.music.noncommercial;
+                let licensed = widgets::toggle_row(ui, "Non-commercial too", "Only for videos that earn nothing.", &mut noncommercial);
+                ed.music.noncommercial = noncommercial;
+                if searched || filtered || licensed {
+                    ed.music.search(&ctx, 1);
+                }
+                if let Some(e) = &ed.music.error {
+                    widgets::hint(ui, &format!("Jamendo: {e}"));
+                }
+                if ed.music.results.is_empty() && ed.music.error.is_none() {
+                    widgets::hint(ui, if ed.music.is_searching() { "Loading music…" } else { "No music found." });
+                }
+            } else if ed.music.tracks().is_empty() {
+                widgets::hint(ui, match source {
+                    Source::Favorites => "No favorites yet. Tap the heart on a Jamendo track to keep it here, for every project.",
+                    _ => "Jamendo tracks you add to a video show here.",
+                });
+            }
+            let current = current.map(|c| c.rsplit('/').next().unwrap_or(c));
+            let (mut pick, mut heart) = (None, None);
+            ui.add_space(4.0);
+            for track in ed.music.tracks() {
+                let playing = current == Some(crate::music::track_file_name(track).as_str());
+                let busy = ed.music.applying.as_ref() == Some(&Job::Track(track.id.clone()));
+                let row = track_row(ui, track, ed.music.thumb(&track.id), playing, ed.music.library.is_favorite(&track.id), busy.then(|| ed.music.progress()));
+                if row.heart {
+                    heart = Some(track.clone());
+                } else if row.response.clicked() && !playing && ed.music.applying.is_none() {
+                    pick = Some(track.clone());
+                }
+            }
+            if let Some(track) = heart {
+                ed.music.library.toggle_favorite(&track);
+            }
+            if let Some(track) = pick {
+                ed.music.apply_track(&ctx, track, assets.to_path_buf());
+            }
+            if source == Source::Jamendo && ed.music.can_load_more() && widgets::secondary_button(ui, "Load more").clicked() {
+                ed.music.load_more(&ctx);
+            }
+        }
+    }
+    if ed.music.is_busy() {
+        ctx.request_repaint_after(std::time::Duration::from_millis(150));
+    }
+    done
 }
 
 /// Music part `id` of a project, when the music is saved as parts.

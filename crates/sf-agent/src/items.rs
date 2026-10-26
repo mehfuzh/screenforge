@@ -133,7 +133,7 @@ pub fn definitions() -> Vec<Value> {
         }),
         json!({
             "name": "set_music",
-            "description": "Background music for the whole video: track (a name from get_options music, a file brought in with import_file, or null for no music), volume 0–1 (0.2–0.3 sits under a voice), muted. Choosing a track replaces the music parts' own tracks.",
+            "description": "Background music for the whole video: track (a name from get_options music, a file brought in with import_file or use_music, or null for no music), volume 0–1 (0.2–0.3 sits under a voice), muted. Choosing a track replaces the music parts' own tracks.",
             "input_schema": {
                 "type": "object",
                 "properties": {
@@ -736,6 +736,15 @@ mod tests {
         fn import_file(&self, path: &str) -> Result<String, String> {
             Ok(path.rsplit('/').next().unwrap().to_string())
         }
+        fn search_music(&self, _: &str, instrumental: bool) -> Result<Value, String> {
+            Ok(json!([{ "id": "7", "name": "Lights", "artist": "Ann", "seconds": 151, "instrumental": instrumental }]))
+        }
+        fn download_music(&self, id: &str) -> Result<Value, String> {
+            Ok(json!({ "fileName": format!("jamendo_{id}.mp3"), "name": "Lights", "artist": "Ann", "credit": "Music: \"Lights\" by Ann" }))
+        }
+        fn import_url(&self, url: &str) -> Result<String, String> {
+            Ok(url.rsplit('/').next().unwrap().to_string())
+        }
         fn screen_motion(&self) -> Result<Vec<(f64, f64, crate::motion::Motion)>, String> {
             use crate::motion::Motion;
             Ok(vec![(0.0, 2000.0, Motion::Still), (2000.0, 6000.0, Motion::Small), (6000.0, 10_000.0, Motion::Large)])
@@ -760,6 +769,15 @@ mod tests {
         assert_eq!((bg.kind.as_str(), bg.unsplash.as_ref().unwrap()["image"].as_str()), ("unsplash", Some("unsplash-p1.jpg")));
         w.run("import_file", &json!({ "path": "/Users/me/song.mp3", "use_as": "music" })).unwrap();
         assert_eq!(w.project.config.audio.background_audio_file_name.as_deref(), Some("song.mp3"));
+        let v: Value = serde_json::from_str(&w.run("search_music", &json!({ "query": "calm" })).unwrap().result).unwrap();
+        assert_eq!(v["tracks"][0]["instrumental"], true, "instrumental unless asked otherwise");
+        let o = w.run("use_music", &json!({ "id": "7", "volume": 0.25 })).unwrap();
+        assert!(o.result.contains("by Ann"), "the credit goes back to the agent");
+        assert_eq!(w.project.config.audio.background_audio_file_name.as_deref(), Some("jamendo_7.mp3"));
+        assert_eq!(w.project.config.audio.background_audio_volume, 0.25);
+        w.run("import_file", &json!({ "path": "https://cdn.example.com/beat.mp3", "use_as": "music" })).unwrap();
+        assert_eq!(w.project.config.audio.background_audio_file_name.as_deref(), Some("beat.mp3"));
+        assert!(w.run("import_file", &json!({ "path": "https://example.com/a.jpg", "use_as": "background" })).is_err());
         w.run("apply_preset", &json!({ "name": "Dark" })).unwrap();
         assert_eq!(w.project.config.output.padding_ratio01, 0.2);
         assert!(w.run("apply_preset", &json!({ "name": "Nope" })).is_err());

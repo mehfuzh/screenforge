@@ -232,7 +232,7 @@ fn timeline_definitions() -> Value {
         },
         {
             "name": "get_options",
-            "description": "What the pickers offer and where every setting lives: wallpapers, gradients, music tracks, cursor sets, camera looks (LUTs), saved presets, recorded audio tracks, and a map of the sidebar's settings to project paths with their ranges. Read it before changing a setting you have not changed before.",
+            "description": "What the pickers offer and where every setting lives: wallpapers, gradients, music tracks, the user's favourite Jamendo tracks (favoriteMusic), cursor sets, camera looks (LUTs), saved presets, recorded audio tracks, and a map of the sidebar's settings to project paths with their ranges. Read it before changing a setting you have not changed before.",
             "input_schema": { "type": "object", "properties": {} }
         },
         {
@@ -251,8 +251,18 @@ fn timeline_definitions() -> Value {
             "input_schema": { "type": "object", "properties": { "id": { "type": "string" } }, "required": ["id"] }
         },
         {
+            "name": "search_music",
+            "description": "Search Jamendo for free Creative Commons background music. First look at get_options favoriteMusic, the Jamendo tracks the user marked as favourites: when one fits what they ask for, call use_music with its id and do not search. Search only when no favourite fits and the bundled tracks (get_options music) do not either. Only CC BY tracks come back (usable under any video, commercial ones too, as long as the artist is credited). Returns tracks with an id, name, artist, length in seconds and licence; then call use_music with the best match. Search with a few mood or genre words (\"calm piano\", \"upbeat corporate\"). An empty query lists this month's popular tracks. instrumental (default true) leaves out songs with vocals, which compete with a voice.",
+            "input_schema": { "type": "object", "properties": { "query": { "type": "string" }, "instrumental": { "type": "boolean" } }, "required": ["query"] }
+        },
+        {
+            "name": "use_music",
+            "description": "Download a Jamendo track (a get_options favoriteMusic id or a search_music result) into the project and make it the background music for the whole video (like set_music; never a voice-over). The result has the credit line the licence requires: always give it to the user and tell them to put it in the video's description wherever they publish it.",
+            "input_schema": { "type": "object", "properties": { "id": { "type": "string" }, "volume": { "type": "number" } }, "required": ["id"] }
+        },
+        {
             "name": "import_file",
-            "description": "Bring a file the user named (a path on this computer) into the project and use it: as the background image, as music, or as a camera look (.cube LUT).",
+            "description": "Bring a file the user named (a path on this computer) into the project and use it: as the background image, as music, or as a camera look (.cube LUT). For background music the path can also be an https:// link to an audio file (MP3, M4A, AAC, WAV, OGG, FLAC or AIFF), which is downloaded.",
             "input_schema": {
                 "type": "object",
                 "properties": { "path": { "type": "string" }, "use_as": { "type": "string", "enum": ["background", "music", "camera_look"] } },
@@ -523,13 +533,39 @@ impl Workspace {
                 bg.unsplash = Some(value);
                 Ok(Outcome::edit(json!({ "ok": true }), format!("Background: photo by {author}")))
             }
+            "search_music" => {
+                let q = input.get("query").and_then(Value::as_str).unwrap_or("");
+                let instrumental = input.get("instrumental").and_then(Value::as_bool).unwrap_or(true);
+                let tracks = self.host()?.search_music(q, instrumental)?;
+                let n = tracks.as_array().map_or(0, Vec::len);
+                Ok(Outcome::read(json!({ "tracks": tracks }), format!("Searched Jamendo for \"{q}\" ({n} tracks)")))
+            }
+            "use_music" => {
+                let id = input.get("id").and_then(Value::as_str).ok_or("`id` is required")?;
+                let got = self.host()?.download_music(id)?;
+                let file = got.get("fileName").and_then(Value::as_str).ok_or("the download gave no file")?.to_string();
+                let mut set = json!({ "track": file });
+                if let Some(v) = input.get("volume") {
+                    set["volume"] = v.clone();
+                }
+                self.run_item("set_music", &set).ok_or("no music setting")??;
+                let title = match (got.get("name").and_then(Value::as_str), got.get("artist").and_then(Value::as_str)) {
+                    (Some(n), Some(a)) => format!("\"{n}\" by {a}"),
+                    _ => file.clone(),
+                };
+                Ok(Outcome::edit(json!({ "ok": true, "track": file, "credit": got.get("credit") }), format!("Music: {title}")))
+            }
             "import_file" => {
                 let path = input.get("path").and_then(Value::as_str).ok_or("`path` is required")?;
                 let use_as = input.get("use_as").and_then(Value::as_str).ok_or("`use_as` is required")?;
                 if !["background", "music", "camera_look"].contains(&use_as) {
                     return Err(format!("unknown use_as {use_as}"));
                 }
-                let name = self.host()?.import_file(path)?;
+                let link = path.trim().starts_with("https://") || path.trim().starts_with("http://");
+                if link && use_as != "music" {
+                    return Err("only music can be imported from a link; for a background photo use search_photos".into());
+                }
+                let name = if link { self.host()?.import_url(path)? } else { self.host()?.import_file(path)? };
                 let cfg = &mut self.project.config;
                 match use_as {
                     "background" => {

@@ -26,7 +26,7 @@ manual steps, for reference:
 2. Stripe: create a product with a one-time US$49 price (`setup.sh` does this; `update-price.sh <cents>` changes the price later, Stripe and Supabase in one go); set `STRIPE_SECRET_KEY`,
    `STRIPE_WEBHOOK_SECRET`, `STRIPE_PRICE_LIFETIME`.
 3. Resend: `RESEND_API_KEY`, `LICENSE_FROM_EMAIL`.
-4. `supabase db push && supabase functions deploy create-checkout stripe-webhook license-refresh license-activate free-export unsplash agent`
+4. `supabase db push && supabase functions deploy create-checkout stripe-webhook license-refresh license-activate free-export unsplash jamendo agent`
 5. Point `PURCHASE_URL` in `crates/sf-license` at your checkout page (or the `create-checkout` URL).
 
 ## Activation from the app
@@ -86,6 +86,55 @@ a stale reply is served when Unsplash rate-limits or fails, and rows older than 
 pruned. Download tracking is never cached. Until the function is deployed the
 tab says the service is not available yet. A demo app on Unsplash allows 50 requests an hour;
 apply for production access before release.
+
+## Jamendo music
+
+Audio → Find music on Jamendo searches Creative Commons tracks through the `jamendo` function,
+so the client id stays on the server (`JAMENDO_CLIENT_ID`; register an app at
+devportal.jamendo.com).
+
+```
+supabase secrets set JAMENDO_CLIENT_ID=<client id>
+supabase db push
+supabase functions deploy jamendo
+```
+
+`{ query, page, instrumental }` returns 20 tracks a page (an empty query lists the month's most
+popular; `instrumental` defaults to true). Only tracks Jamendo allows to be downloaded are
+returned. When a track is picked, the app downloads its MP3 straight from Jamendo's storage into
+the project's `assets/` as `jamendo_<id>.mp3` and writes `jamendo_<id>.credit.json` beside it, so
+the sidebar can show the artist and licence and copy a credit line for the video description.
+Replies are cached in `jamendo_cache` (migration `20261025000000_jamendo_cache.sql`) the same way
+as `unsplash_cache`.
+
+Licences. Music set under a video is an Adaptation in every Creative Commons 3.0 licence
+(§1(a): synchronising a musical work with a moving image, "synching"). So:
+
+| Track licence | Under a video | Offered |
+| --- | --- | --- |
+| CC BY | yes, commercial too, with credit | always |
+| CC BY-NC | only if the video earns nothing (no ads, sponsors, product promotion) | only with "Include non-commercial music" (never to the agent) |
+| CC BY-SA, BY-NC-SA | the video would have to be released under CC BY-SA | never |
+| CC BY-ND, BY-NC-ND | not allowed (no Adaptations) | never |
+| none given | unknown | never |
+
+The function asks Jamendo for `ccnd=false&ccsa=false` (and `ccnc=false` unless `noncommercial`)
+and checks each track's `license_ccurl` again; the app checks once more before showing a track
+and before downloading one. The credit line the app copies names the title, artist, track page
+and licence with its link, which is what CC BY asks for.
+
+Jamendo's API terms (devportal.jamendo.com/api_terms_of_use, §3.3, last changed 2013) allow the
+API freely for non-commercial uses only; commercial use, "any use that is intended for or
+directed toward commercial advantage or any monetary compensation", needs an agreement with
+licensing@jamendo.com. ScreenForge is sold, so get that agreement before release. The same
+section says applications must not be designed to cache content or offer offline access, while
+the API also flags tracks the app may offer for download (`audiodownload_allowed`); confirm with
+Jamendo that saving a chosen track into the user's project is covered. §4.1 asks for the artist
+and Jamendo to be credited with a link from each track to its Jamendo page, which every result
+row has.
+
+Audio → Import from a link needs no backend: the app downloads the file itself, checks from its
+first bytes that it is audio (MP3, M4A, AAC, WAV, OGG, FLAC or AIFF) and saves it in `assets/`.
 
 ## Agent (Claude)
 
