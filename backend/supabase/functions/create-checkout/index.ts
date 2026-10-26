@@ -23,6 +23,8 @@ serve(async (req) => {
     success_url: Deno.env.get("CHECKOUT_SUCCESS_URL") ?? "https://screenforge.dev/thanks",
     cancel_url: Deno.env.get("CHECKOUT_CANCEL_URL") ?? "https://screenforge.dev/buy",
   };
+  // the success page shows the text for what was bought (site/success.html)
+  const thanks = (kind: string) => ({ ...urls, success_url: `${urls.success_url}${urls.success_url.includes("?") ? "&" : "?"}plan=${kind}` });
 
   if (plan === "lifetime") {
     const session = await stripe.checkout.sessions.create({
@@ -44,7 +46,7 @@ serve(async (req) => {
       line_items: [{ price, quantity: 1 }],
       customer_email: email,
       allow_promotion_codes: true,
-      ...urls,
+      ...thanks("pro"),
       // stripe-webhook issues a monthly key for plan "monthly"
       metadata: { plan: "monthly", kind: "pro" },
       subscription_data: { metadata: { kind: "pro" } },
@@ -63,7 +65,7 @@ serve(async (req) => {
       mode: "payment",
       line_items: [{ price, quantity: 1 }],
       customer_email: address,
-      ...urls,
+      ...thanks("topup"),
       metadata: { kind: "topup", plan, credits: String(pack.credits), email: address },
       payment_intent_data: { metadata: { kind: "topup", plan, credits: String(pack.credits), email: address } },
     });

@@ -15,14 +15,16 @@ import { MONTHLY_CREDITS } from "../_shared/credits.ts";
 //   charge.refunded          a refunded top-up takes its credits back (in proportion).
 //   invoice.payment_failed, charge.dispute.created   logged for follow-up.
 // Credit changes are keyed by the Stripe object id (credit_ledger), so a redelivered event
-// changes nothing.
+// changes nothing. The endpoint's events come in its own (old) API version, so sessions and
+// invoices are fetched again through the SDK's version before reading them.
 serve(async (req) => {
   const stripe = new Stripe(Deno.env.get("STRIPE_SECRET_KEY") || "", { apiVersion: "2025-08-27.basil" });
   const db = createClient(Deno.env.get("SUPABASE_URL") ?? "", Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "", { auth: { persistSession: false } });
   const body = await req.text();
   let event: Stripe.Event;
   try {
-    event = stripe.webhooks.constructEvent(body, req.headers.get("stripe-signature") ?? "", Deno.env.get("STRIPE_WEBHOOK_SECRET") ?? "");
+    // Deno has only async WebCrypto: the sync constructEvent always fails here
+    event = await stripe.webhooks.constructEventAsync(body, req.headers.get("stripe-signature") ?? "", Deno.env.get("STRIPE_WEBHOOK_SECRET") ?? "");
   } catch (e) {
     return new Response(`bad signature: ${e}`, { status: 400 });
   }
@@ -55,10 +57,10 @@ serve(async (req) => {
     switch (event.type) {
       case "checkout.session.completed":
       case "checkout.session.async_payment_succeeded":
-        await fulfil(event.data.object as Stripe.Checkout.Session);
+        await fulfil(await stripe.checkout.sessions.retrieve((event.data.object as { id: string }).id));
         break;
       case "invoice.paid": {
-        const inv = event.data.object as Stripe.Invoice;
+        const inv = await stripe.invoices.retrieve((event.data.object as { id: string }).id);
         const email = inv.customer_email?.toLowerCase();
         const subscription = inv.parent?.subscription_details?.subscription ?? null;
         if (!email || !subscription) break;
