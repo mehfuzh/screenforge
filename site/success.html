@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Thank you — ScreenForge</title>
+<title>Your AI editor is ready — ScreenForge</title>
 <meta name="description" content="Thanks for buying ScreenForge. There is no key to copy: open ScreenForge, enter the email you used at checkout and the 6-digit code we send you.">
 <meta name="color-scheme" content="light dark">
 <meta name="robots" content="noindex">
@@ -410,8 +410,8 @@ gtag('config', 'G-ZYRJDJ736V');
 </nav>
 
 <main class="doc">
-  <!-- Checkout sends ?plan=pro or ?plan=topup (create-checkout); no plan is the Creator license. -->
-  <div data-for="creator">
+  <!-- Checkout sends ?plan=creator or ?plan=topup (create-checkout); Pro, from the agent tab, is the default. -->
+  <div data-for="creator" hidden>
     <div class="eyebrow">Thank you</div>
     <h1>Thanks, unlimited export is <em>yours.</em></h1>
     <p class="stamp">no key to copy · unlock with your email · no account to create</p>
@@ -430,7 +430,7 @@ gtag('config', 'G-ZYRJDJ736V');
     <p style="margin-top:18px">It works on one computer at a time. Activating another computer with the same email moves it there.</p>
   </div>
 
-  <div data-for="pro" hidden>
+  <div data-for="pro">
     <div class="eyebrow">Thank you</div>
     <h1>Thanks, your AI editor is <em>ready.</em></h1>
     <p class="stamp">no key to copy · activate with your email · cancel anytime</p>
@@ -523,12 +523,12 @@ gtag('config', 'G-ZYRJDJ736V');
   })();
 </script>
 <script>
-  // Show the text for what was bought (?plan=pro / topup from create-checkout).
+  // Show the text for what was bought (?plan=creator / topup from create-checkout; Pro otherwise).
   (function () {
     var plan = new URLSearchParams(location.search).get('plan');
-    if (plan !== 'pro' && plan !== 'topup') return;
+    if (plan !== 'creator' && plan !== 'topup') return;
     document.querySelectorAll('[data-for]').forEach(function (el) { el.hidden = el.dataset.for !== plan; });
-    document.title = (plan === 'pro' ? 'Your AI editor is ready' : 'Credits added') + ' — ScreenForge';
+    document.title = (plan === 'creator' ? 'Unlimited export is yours' : 'Credits added') + ' — ScreenForge';
   })();
 </script>
 </body>

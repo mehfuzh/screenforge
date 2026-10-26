@@ -32,7 +32,7 @@ serve(async (req) => {
       line_items: [{ price: Deno.env.get("STRIPE_PRICE_LIFETIME"), quantity: 1 }],
       customer_email: email,
       allow_promotion_codes: true,
-      ...urls,
+      ...thanks("creator"),
       metadata: { plan: "lifetime" },
     });
     return json({ url: session.url });
