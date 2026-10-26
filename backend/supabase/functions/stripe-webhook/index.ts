@@ -6,7 +6,8 @@ import { MONTHLY_CREDITS } from "../_shared/credits.ts";
 
 // Stripe events (endpoint set up by setup.sh / setup-credits.sh):
 //   checkout.session.completed / .async_payment_succeeded
-//       license checkout: sign, store and email the key (lifetime, or monthly for Pro);
+//       license checkout: sign and store the key (lifetime, or monthly for Pro) and email how
+//       to activate with the address;
 //       top-up pack: add its credits (only once paid: delayed methods arrive later as
 //       async_payment_succeeded).
 //   invoice.paid             Pro's agent credits for the paid period (the first invoice and
@@ -29,12 +30,13 @@ serve(async (req) => {
     return new Response(`bad signature: ${e}`, { status: 400 });
   }
 
-  const issue = async (email: string, plan: "monthly" | "lifetime", customer: string | null, subscription: string | null) => {
+  // `notify`: send the purchase email (only at checkout; renewals just store the new key)
+  const issue = async (email: string, plan: "monthly" | "lifetime", customer: string | null, subscription: string | null, notify = false) => {
     const issued = new Date();
     const expires = plan === "monthly" ? new Date(issued.getTime() + 35 * 86400_000) : null; // 35 d: grace over a 31-day cycle
     const key = await signLicense({ email, plan, expires: expires ? isoDate(expires) : null, issued: isoDate(issued) });
     await db.from("licenses").insert({ email, plan, stripe_customer_id: customer, stripe_subscription_id: subscription, issued_at: isoDate(issued), expires_at: expires ? isoDate(expires) : null, key });
-    await emailLicense(email, key, plan);
+    if (notify) await emailLicense(email, plan);
   };
   const rpc = async (name: string, args: Record<string, unknown>) => {
     const { error } = await db.rpc(name, args);
@@ -50,7 +52,7 @@ serve(async (req) => {
       await rpc("credits_topup", { p_email: s.metadata.email ?? email, p_credits: Number(s.metadata.credits ?? 0), p_ref: s.id });
       return;
     }
-    await issue(email, (s.metadata?.plan as "monthly" | "lifetime") ?? "monthly", (s.customer as string) ?? null, (s.subscription as string) ?? null);
+    await issue(email, (s.metadata?.plan as "monthly" | "lifetime") ?? "monthly", (s.customer as string) ?? null, (s.subscription as string) ?? null, true);
   };
 
   try {

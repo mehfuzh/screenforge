@@ -23,17 +23,23 @@ export async function signLicense(payload: Payload): Promise<string> {
 
 export function isoDate(d: Date): string { return d.toISOString().slice(0, 10); }
 
-export async function emailLicense(email: string, key: string, plan: string) {
+// The purchase email: how to activate with this address. The key itself is never shown; the
+// app fetches one bound to the computer once the emailed 6-digit code is entered.
+export async function emailLicense(email: string, plan: string) {
   const api = Deno.env.get("RESEND_API_KEY");
-  if (!api) { console.warn("RESEND_API_KEY not set; key not emailed", key); return; }
+  if (!api) { console.warn("RESEND_API_KEY not set; purchase email not sent", email); return; }
+  const pro = plan === "monthly";
+  const steps = pro
+    ? `1. In ScreenForge, open the AI agent panel.\n2. Enter this address (${email}) under "Email used at checkout" and press Activate.\n3. Type the 6-digit code we email you.\n\nYour 1,000 agent credits for this month then show in the agent panel, and export is unlocked too. Pro renews every month until you cancel; Manage subscription in the agent panel cancels it or changes the card.`
+    : `1. In ScreenForge, open any project and press Export.\n2. Enter this address (${email}) and press Activate.\n3. Type the 6-digit code we email you.\n\nExport is then unlocked for good: the license never expires, and every update is included.`;
   await fetch("https://api.resend.com/emails", {
     method: "POST",
     headers: { Authorization: `Bearer ${api}`, "Content-Type": "application/json" },
     body: JSON.stringify({
       from: Deno.env.get("LICENSE_FROM_EMAIL") ?? "ScreenForge <licenses@screenforge.dev>",
       to: [email],
-      subject: "Your ScreenForge license",
-      text: `Thanks for supporting ScreenForge!\n\nTo activate: open ScreenForge → Export, enter this email address (${email}) and press Activate, then type the 6-digit code we email you. The license works on one computer at a time; activating another computer moves it there.${plan === "monthly" ? " Monthly keys renew automatically while the subscription is active." : " It never expires."}\n\nFor your records, the license key: ${key}\n`,
+      subject: pro ? "ScreenForge Pro is on" : "ScreenForge is yours",
+      text: `Thanks for ${pro ? "subscribing to ScreenForge Pro" : "buying ScreenForge"}!\n\nThere is no key to copy: ScreenForge unlocks with this email address.\n\n${steps}\n\nIt works on one computer at a time; activating another computer with this email moves it there.\n\nAnything wrong? Write to license@screenforge.studio and a person answers, usually the same day.\n`,
     }),
   });
 }
