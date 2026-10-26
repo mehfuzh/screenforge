@@ -24,7 +24,12 @@ serve(async (req) => {
     cancel_url: Deno.env.get("CHECKOUT_CANCEL_URL") ?? "https://screenforge.dev/buy",
   };
   // the success page shows the text for what was bought (site/success.html)
-  const thanks = (kind: string) => ({ ...urls, success_url: `${urls.success_url}${urls.success_url.includes("?") ? "&" : "?"}plan=${kind}` });
+  // (the URL may end in a #fragment, e.g. /#thanks: the query goes before it)
+  const thanks = (kind: string) => {
+    const u = new URL(urls.success_url);
+    u.searchParams.set("plan", kind);
+    return { ...urls, success_url: u.toString() };
+  };
 
   if (plan === "lifetime") {
     const session = await stripe.checkout.sessions.create({

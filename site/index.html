@@ -377,8 +377,9 @@
     try { t = localStorage.getItem('theme'); } catch (e) {}
     if (t !== 'light' && t !== 'dark') t = matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
     document.documentElement.dataset.theme = t;
-    // The checkout success URL points at /#thanks; send it on to the real page.
-    if (location.hash === '#thanks') location.replace('success.html');
+    // The checkout success URL points at /#thanks (create-checkout adds ?plan=, before or
+    // after the hash); send it on to the real page with the plan.
+    if (/^#thanks(\?|$)/.test(location.hash)) location.replace('success.html' + (location.search || location.hash.slice(7)));
   })();
 </script>
 <!-- Google tag (gtag.js) -->
