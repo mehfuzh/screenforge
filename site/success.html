@@ -413,7 +413,7 @@ gtag('config', 'G-ZYRJDJ736V');
   <!-- Checkout sends ?plan=pro or ?plan=topup (create-checkout); no plan is the Creator license. -->
   <div data-for="creator">
     <div class="eyebrow">Thank you</div>
-    <h1>Thanks, ScreenForge is <em>yours.</em></h1>
+    <h1>Thanks, unlimited export is <em>yours.</em></h1>
     <p class="stamp">no key to copy · unlock with your email · no account to create</p>
 
     <div class="tldr">
@@ -432,7 +432,7 @@ gtag('config', 'G-ZYRJDJ736V');
 
   <div data-for="pro" hidden>
     <div class="eyebrow">Thank you</div>
-    <h1>Thanks, Pro is <em>on.</em></h1>
+    <h1>Thanks, your AI editor is <em>ready.</em></h1>
     <p class="stamp">no key to copy · activate with your email · cancel anytime</p>
 
     <div class="tldr">
@@ -528,7 +528,7 @@ gtag('config', 'G-ZYRJDJ736V');
     var plan = new URLSearchParams(location.search).get('plan');
     if (plan !== 'pro' && plan !== 'topup') return;
     document.querySelectorAll('[data-for]').forEach(function (el) { el.hidden = el.dataset.for !== plan; });
-    document.title = (plan === 'pro' ? 'Pro is on' : 'Credits added') + ' — ScreenForge';
+    document.title = (plan === 'pro' ? 'Your AI editor is ready' : 'Credits added') + ' — ScreenForge';
   })();
 </script>
 </body>

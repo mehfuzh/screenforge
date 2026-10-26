@@ -38,7 +38,7 @@ export async function emailLicense(email: string, plan: string) {
     body: JSON.stringify({
       from: Deno.env.get("LICENSE_FROM_EMAIL") ?? "ScreenForge <licenses@screenforge.dev>",
       to: [email],
-      subject: pro ? "ScreenForge Pro is on" : "ScreenForge is yours",
+      subject: pro ? "Your ScreenForge AI editor is ready" : "Unlimited export is yours",
       text: `Thanks for ${pro ? "subscribing to ScreenForge Pro" : "buying ScreenForge"}!\n\nThere is no key to copy: ScreenForge unlocks with this email address.\n\n${steps}\n\nIt works on one computer at a time; activating another computer with this email moves it there.\n\nAnything wrong? Write to license@screenforge.studio and a person answers, usually the same day.\n`,
     }),
   });
