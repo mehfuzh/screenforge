@@ -57,6 +57,8 @@ struct StudioHost {
     media_size: (u32, u32),
     /// Results of the last Unsplash search, for `download_photo`.
     photos: Mutex<Vec<crate::unsplash::Photo>>,
+    /// The user's favourite tracks, then the results of each Jamendo search, for `download_music`.
+    tracks: Mutex<Vec<crate::music::Track>>,
     ctx: egui::Context,
 }
 
@@ -68,9 +70,13 @@ impl StudioHost {
         if let Ok(files) = std::fs::read_dir(ed.session.pkg.path.join("assets")) {
             looks.extend(files.flatten().map(|f| f.file_name().to_string_lossy().into_owned()).filter(|n| n.to_ascii_lowercase().ends_with(".cube")));
         }
+        // the Jamendo tracks the user hearted, CC BY only: the agent cannot know whether the video
+        // earns money, so a non-commercial favourite is left out
+        let favorites: Vec<crate::music::Track> = crate::music::Library::load().favorites.into_iter().filter(|t| crate::music::usable(t.license_url.as_deref(), false)).collect();
         let options = json!({
             "wallpapers": assets.list_backgrounds(),
             "music": assets.list_background_audio().iter().map(|n| json!({ "track": n, "label": sf_session::assets::background_audio_label(n) })).collect::<Vec<_>>(),
+            "favoriteMusic": favorites.iter().map(track_value).collect::<Vec<_>>(),
             "cursorSets": sf_session::cursor_sets::SETS.iter().map(|(id, label)| json!({ "id": id, "label": label })).collect::<Vec<_>>(),
             "cameraLooks": looks,
             "presets": presets.iter().map(|(n, _)| n).collect::<Vec<_>>(),
@@ -79,8 +85,14 @@ impl StudioHost {
             "hasTranscript": !ed.session.captions.is_empty(),
         });
         let media_size = (ed.session.source.native_width.max(1), ed.session.source.native_height.max(1));
-        StudioHost { options, presets, project_dir: ed.session.pkg.path.clone(), media: ed.session.source.media_path.clone(), media_size, photos: Mutex::new(vec![]), ctx: ctx.clone() }
+        StudioHost { options, presets, project_dir: ed.session.pkg.path.clone(), media: ed.session.source.media_path.clone(), media_size, photos: Mutex::new(vec![]), tracks: Mutex::new(favorites), ctx: ctx.clone() }
     }
+}
+
+/// A Jamendo track as the agent sees it (a favourite or a search result).
+fn track_value(t: &crate::music::Track) -> Value {
+    let credit = crate::music::Credit { title: t.name.clone(), artist: t.artist.clone(), url: None, license_url: t.license_url.clone() };
+    json!({ "id": t.id, "name": t.name, "artist": t.artist, "seconds": t.duration, "license": credit.license() })
 }
 
 /// Motion sections per screen video, measured once (decoding is the slow part).
@@ -168,6 +180,31 @@ impl Host for StudioHost {
         let photo = self.photos.lock().map_err(|_| "busy")?.iter().find(|p| p.id == id).cloned().ok_or("search_photos first: that id is not in the last results")?;
         let applied = crate::unsplash::download_photo(photo, &self.project_dir.join("assets"), &AtomicU32::new(0), &self.ctx)?;
         Ok(crate::unsplash::background_value(&applied))
+    }
+
+    fn search_music(&self, query: &str, instrumental: bool) -> Result<Value, String> {
+        let tracks = crate::music::search_blocking(query, instrumental)?;
+        let list = tracks.iter().map(track_value).collect();
+        // keep the favourites (and earlier results): any id the agent was shown stays usable
+        let mut known = self.tracks.lock().map_err(|_| "busy")?;
+        for t in tracks {
+            if !known.iter().any(|k| k.id == t.id) {
+                known.push(t);
+            }
+        }
+        Ok(Value::Array(list))
+    }
+
+    fn download_music(&self, id: &str) -> Result<Value, String> {
+        let track = self.tracks.lock().map_err(|_| "busy")?.iter().find(|t| t.id == id).cloned().ok_or("that id is not in get_options favoriteMusic or a search_music result")?;
+        let assets = self.project_dir.join("assets");
+        let applied = crate::music::download_track(&track, &assets, &AtomicU32::new(0), &self.ctx)?;
+        let credit = crate::music::credit(&assets, &applied.file_name).map(|c| c.text());
+        Ok(json!({ "fileName": applied.file_name, "name": track.name, "artist": track.artist, "credit": credit }))
+    }
+
+    fn import_url(&self, url: &str) -> Result<String, String> {
+        crate::music::download_link(url, &self.project_dir.join("assets"), &AtomicU32::new(0), &self.ctx).map(|a| a.file_name)
     }
 
     fn import_file(&self, path: &str) -> Result<String, String> {

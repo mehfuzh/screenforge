@@ -17,6 +17,22 @@ pub trait Host: Send + Sync {
     /// Download photo `id` (from a search) into the project: the value for
     /// `config.styles.background.unsplash`.
     fn download_photo(&self, id: &str) -> Result<Value, String>;
+    /// Search Jamendo's Creative Commons music: `[{ id, name, artist, seconds, license? }]`.
+    fn search_music(&self, query: &str, instrumental: bool) -> Result<Value, String> {
+        let _ = (query, instrumental);
+        Err("music search is not available here".into())
+    }
+    /// Download track `id` (from a music search) into the project's assets:
+    /// `{ fileName, name, artist, credit }`.
+    fn download_music(&self, id: &str) -> Result<Value, String> {
+        let _ = id;
+        Err("music search is not available here".into())
+    }
+    /// Download the audio file at `url` into the project's assets: its file name there.
+    fn import_url(&self, url: &str) -> Result<String, String> {
+        let _ = url;
+        Err("importing from a link is not available here".into())
+    }
     /// Copy the file at `path` into the project's assets: its file name there.
     fn import_file(&self, path: &str) -> Result<String, String>;
     /// What the screen video does over time (source ms): see [`crate::motion::sections`].
