@@ -852,7 +852,13 @@ impl AgentPanel {
     /// Apply what the running turn sent since the last frame. Called every frame, whichever
     /// sidebar page is open.
     pub fn poll(&mut self, ed: &mut Editor) {
-        // the Narration panel offers the ElevenLabs voices by the plan these credits are for
+        // the plan is checked even while another section is open: the Narration panel offers
+        // the ElevenLabs voices by it
+        self.poll_billing();
+        let local = *self.local.get_or_insert_with(|| local_key().is_some());
+        if !local && self.credits.is_none() && self.credits_error.is_none() {
+            self.fetch_credits();
+        }
         crate::narration::set_cloud_allowed(self.credits.as_ref().map(|c| c["allowed"].as_bool() == Some(true)));
         let Some(job) = self.job.as_mut() else { return };
         let mut done = None;

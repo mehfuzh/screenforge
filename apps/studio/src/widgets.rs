@@ -37,6 +37,11 @@ pub fn segmented(ui: &mut Ui, selected: usize, labels: &[&str]) -> Option<usize>
 
 /// `segmented` with some options greyed out (roadmap items).
 pub fn segmented_with_disabled(ui: &mut Ui, selected: usize, labels: &[&str], disabled: &[usize]) -> Option<usize> {
+    segmented_with_tip(ui, selected, labels, disabled, ROADMAP)
+}
+
+/// `segmented` with some options greyed out, `tip` saying why.
+pub fn segmented_with_tip(ui: &mut Ui, selected: usize, labels: &[&str], disabled: &[usize], tip: &str) -> Option<usize> {
     let mut out = None;
     ui.horizontal_wrapped(|ui| {
         ui.spacing_mut().item_spacing.x = 6.0;
@@ -45,7 +50,7 @@ pub fn segmented_with_disabled(ui: &mut Ui, selected: usize, labels: &[&str], di
             let fill = if sel { theme::p().card_3 } else { theme::p().card_2 };
             let b = egui::Button::new(RichText::new(*l).color(if sel { theme::p().text } else { theme::p().text_dim })).fill(fill).corner_radius(CornerRadius::same(BUTTON_RADIUS)).min_size(vec2(0.0, 30.0));
             if disabled.contains(&i) {
-                ui.add_enabled(false, b).on_disabled_hover_text(ROADMAP);
+                ui.add_enabled(false, b).on_disabled_hover_text(tip);
                 continue;
             }
             if ui.add(b).clicked() && !sel {
