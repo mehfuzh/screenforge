@@ -482,6 +482,10 @@ impl AgentPanel {
                 Err(e) => self.log.push(Entry::Error(e)),
             }
         }
+        // an ElevenLabs reading (Narration, or the agent's add_narration) spent credits
+        if let Some(c) = crate::narration::take_credits() {
+            self.credits = Some(c);
+        }
         if let Some(rx) = &self.credits_rx {
             match rx.try_recv() {
                 Ok(Ok(v)) => {

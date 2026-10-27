@@ -42,6 +42,10 @@ fn backend_configured() -> bool {
 /// POST `body` to edge function `name`: the JSON reply, or the HTTP status (0 for a network
 /// failure) and a message.
 fn request(name: &str, body: serde_json::Value) -> Result<serde_json::Value, (u16, String)> {
+    request_within(name, body, 15)
+}
+
+fn request_within(name: &str, body: serde_json::Value, secs: u64) -> Result<serde_json::Value, (u16, String)> {
     if !backend_configured() {
         return Err((0, "The license server is not configured in this build.".into()));
     }
@@ -49,7 +53,7 @@ fn request(name: &str, body: serde_json::Value) -> Result<serde_json::Value, (u1
     let resp = ureq::post(&url)
         .set("apikey", SUPABASE_ANON_KEY)
         .set("Authorization", &format!("Bearer {SUPABASE_ANON_KEY}"))
-        .timeout(std::time::Duration::from_secs(15))
+        .timeout(std::time::Duration::from_secs(secs))
         .send_json(body);
     match resp {
         Ok(r) => r.into_json().map_err(|e| (0, e.to_string())),
@@ -70,7 +74,12 @@ fn call_function(name: &str, body: serde_json::Value) -> Result<serde_json::Valu
 
 /// Call another ScreenForge backend function (e.g. the `unsplash` proxy).
 pub fn call_backend(name: &str, body: serde_json::Value) -> Result<serde_json::Value, String> {
-    request(name, body).map_err(|(code, msg)| if code == 404 { format!("the {name} service is not available yet") } else { msg })
+    call_backend_within(name, body, 15)
+}
+
+/// [`call_backend`] for a function that takes long to answer (an ElevenLabs reading).
+pub fn call_backend_within(name: &str, body: serde_json::Value, secs: u64) -> Result<serde_json::Value, String> {
+    request_within(name, body, secs).map_err(|(code, msg)| if code == 404 { format!("the {name} service is not available yet") } else { msg })
 }
 
 /// Check in with the backend for the key saved on this computer, without emailing anything:

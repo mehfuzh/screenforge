@@ -1,11 +1,12 @@
 //! AI voice narration for the Narration panel and the agent: downloading the voice model,
 //! previewing a voice, and reading text into voice-over takes (with their words for captions),
-//! all off the UI thread.
+//! all off the UI thread. Kokoro's voices are read on this computer; ElevenLabs' online through
+//! the backend's `voice` function, paid in credits.
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{channel, Receiver};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use sf_project::transcript::{Generator, TranscriptFile, TranscriptItem};
@@ -13,6 +14,14 @@ use sf_tts::Progress;
 
 /// What the preview says.
 const PREVIEW: &str = "Hi! This is how I sound reading your video's narration.";
+
+/// The balance the last ElevenLabs reading left (the backend's `credits` summary), for the agent
+/// panel's credits chip; taken by [`take_credits`].
+static CREDITS: Mutex<Option<serde_json::Value>> = Mutex::new(None);
+
+pub fn take_credits() -> Option<serde_json::Value> {
+    CREDITS.lock().ok()?.take()
+}
 
 /// A take read into the project's voice-over folder.
 #[derive(Debug, Clone)]
@@ -68,6 +77,8 @@ pub struct NarrationJob {
     pub take_draft: Option<(String, String)>,
     /// The take being read again when a run reads just one (its status shows by that take).
     for_take: Option<String>,
+    /// The run reads with an ElevenLabs voice.
+    online: bool,
     player: Option<Player>,
 }
 
@@ -143,11 +154,15 @@ impl NarrationJob {
         self.error = sf_tts::remove_download().err().map(|e| format!("{e:#}"));
     }
 
-    /// Say a line with `voice` (downloading the model first if needed).
+    /// Say a line with `voice` (downloading the model first if needed; an ElevenLabs voice's
+    /// preview is kept, so hearing it again costs nothing).
     pub fn preview(&mut self, voice: &str, speed: f64) {
         self.player = None;
         let voice = voice.to_string();
         self.start(Work::Preview, move |cancel, progress| {
+            if sf_tts::cloud::cloud_voice(&voice).is_some() {
+                return cloud_preview(&voice, speed).map(Finished::Preview);
+            }
             let v = sf_tts::voice(&voice).ok_or("unknown voice")?;
             let dir = sf_tts::ensure(cancel, progress).map_err(|e| format!("{e:#}"))?;
             sf_tts::Kokoro::shared(&dir).and_then(|k| k.speak(PREVIEW, v, speed as f32)).map(Finished::Preview).map_err(|e| format!("{e:#}"))
@@ -160,8 +175,11 @@ impl NarrationJob {
             return;
         }
         self.for_take = if let [t] = takes.as_slice() { t.replaces.clone() } else { None };
+        self.online = takes.iter().all(|t| sf_tts::cloud::cloud_voice(&t.voice).is_some());
         self.start(Work::Takes(takes.len()), move |cancel, progress| {
-            sf_tts::ensure(cancel, progress).map_err(|e| format!("{e:#}"))?;
+            if takes.iter().any(|t| sf_tts::cloud::cloud_voice(&t.voice).is_none()) {
+                sf_tts::ensure(cancel, progress).map_err(|e| format!("{e:#}"))?;
+            }
             let mut made = vec![];
             for t in takes {
                 if cancel.load(Ordering::Relaxed) {
@@ -216,6 +234,8 @@ impl NarrationJob {
             (Some(Progress::Downloading { done, total: Some(t) }), _) if done < t => format!("Downloading the voice model… {:.0}%", *done as f64 * 100.0 / (*t).max(1) as f64),
             (_, Work::Download) => "Downloading the voice model…".into(),
             (_, Work::Preview) => "Preparing the preview…".into(),
+            (_, Work::Takes(1)) if self.online => "ElevenLabs is reading the narration…".into(),
+            (_, Work::Takes(n)) if self.online => format!("ElevenLabs is reading {n} takes…"),
             (_, Work::Takes(1)) => "Reading the narration…".into(),
             (_, Work::Takes(n)) => format!("Reading {n} takes…"),
         })
@@ -251,18 +271,53 @@ pub fn place(project: &mut sf_project::Project, made: Vec<Made>) -> Vec<String> 
 /// Read `text` with `voice` into `project`'s voice-over folder, with its words saved as the
 /// take's transcript (they are the captions; the take is never transcribed).
 pub fn speak_into(project: &Path, text: &str, voice: &str, speed: f64) -> Result<sf_agent::host::Spoken, String> {
-    let v = sf_tts::voice(voice).ok_or_else(|| format!("unknown voice {voice}"))?;
-    // the first narration downloads the model
-    let models = sf_tts::ensure(&AtomicBool::new(false), |_| {}).map_err(|e| format!("{e:#}"))?;
-    let speech = sf_tts::Kokoro::shared(&models).and_then(|k| k.speak(text, v, speed as f32)).map_err(|e| format!("{e:#}"))?;
+    let (speech, kind) = if sf_tts::cloud::cloud_voice(voice).is_some() {
+        (cloud_speak(text, voice, speed)?, "elevenlabs")
+    } else {
+        let v = sf_tts::voice(voice).ok_or_else(|| format!("unknown voice {voice}"))?;
+        // the first narration downloads the model
+        let models = sf_tts::ensure(&AtomicBool::new(false), |_| {}).map_err(|e| format!("{e:#}"))?;
+        (sf_tts::Kokoro::shared(&models).and_then(|k| k.speak(text, v, speed as f32)).map_err(|e| format!("{e:#}"))?, "kokoro")
+    };
     let dir = project.join(sf_project::v4::VoiceOver::DIR);
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let name = format!("narration-{}.wav", chrono::Local::now().format("%Y%m%d-%H%M%S-%3f"));
     speech.write_wav(&dir.join(&name)).map_err(|e| format!("{e:#}"))?;
     let items = speech.words.iter().enumerate().map(|(i, w)| TranscriptItem::new(i as u32, w.start_ms, w.end_ms, w.text.clone())).collect();
-    let generator = Generator { kind: "kokoro".into(), model: Some(voice.into()), language: Some("en".into()), prompt: None, extra: Default::default() };
+    let generator = Generator { kind: kind.into(), model: Some(voice.into()), language: Some("en".into()), prompt: None, extra: Default::default() };
     TranscriptFile::voice_over(&name, generator, items).save(project).map_err(|e| e.to_string())?;
     Ok(sf_agent::host::Spoken { file_name: name, duration_ms: speech.duration_ms() })
+}
+
+/// Read `text` with ElevenLabs voice `voice` through the backend (which charges the credits).
+fn cloud_speak(text: &str, voice: &str, speed: f64) -> Result<sf_tts::Speech, String> {
+    let device = sf_license::device_id().ok_or("ElevenLabs voices need this computer's id, which could not be read")?;
+    let body = serde_json::json!({ "device": device, "voice": voice, "text": text, "speed": speed });
+    let reply = sf_license::call_backend_within("voice", body, 180)?;
+    if let Some(c) = reply.get("sf_credits").filter(|c| c.is_object()) {
+        if let Ok(mut slot) = CREDITS.lock() {
+            *slot = Some(c.clone());
+        }
+    }
+    use base64::Engine;
+    let pcm = base64::engine::general_purpose::STANDARD.decode(reply["audio"].as_str().ok_or("ElevenLabs returned no audio")?).map_err(|e| e.to_string())?;
+    let alignment = sf_tts::cloud::Alignment::from_json(&reply["alignment"]);
+    sf_tts::cloud::speech_from_pcm(&pcm, &alignment).map_err(|e| format!("{e:#}"))
+}
+
+/// The preview of ElevenLabs voice `voice` at `speed`, read once and kept in the cache folder.
+fn cloud_preview(voice: &str, speed: f64) -> Result<sf_tts::Speech, String> {
+    let file = directories::ProjectDirs::from("dev", "screenforge", "ScreenForge").map(|d| d.cache_dir().join("voice-previews").join(format!("{voice}-{:.0}.pcm", speed * 100.0)));
+    if let Some(pcm) = file.as_ref().and_then(|f| std::fs::read(f).ok()) {
+        return sf_tts::cloud::speech_from_pcm(&pcm, &Default::default()).map_err(|e| format!("{e:#}"));
+    }
+    let speech = cloud_speak(PREVIEW, voice, speed)?;
+    if let Some(f) = file {
+        let pcm: Vec<u8> = speech.samples.iter().flat_map(|s| ((s.clamp(-1.0, 1.0) * 32767.0) as i16).to_le_bytes()).collect();
+        let _ = f.parent().map(std::fs::create_dir_all);
+        let _ = std::fs::write(f, pcm);
+    }
+    Ok(speech)
 }
 
 /// Plays a preview on the default output once.

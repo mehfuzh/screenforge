@@ -31,15 +31,17 @@ hand. Projects are saved as `.screenforge` packages.
   and looks at frames to check what is on screen. A whole answer is one undo; editing by hand
   stops the agent and keeps your edit. Models: Sonnet 5.5 (default), Opus 5.5 or Haiku 5.5.
 - **AI voice narration**: type a script and Kokoro-82M reads it into a voice-over take, on your
-  computer (six voices, adjustable speed). The agent can write and place narration too.
+  computer (six voices, adjustable speed), or pick one of eight studio-quality ElevenLabs voices,
+  read online and paid from the Pro credits. The agent can write and place narration too, and
+  uses ElevenLabs (Eric) when asked for a more realistic voice.
 - **Automatic captions**: on-device Whisper transcription of the microphone and recorded
   voice-overs; narrated takes carry their exact words. Styled captions in preview and export,
   SRT and WebVTT export.
 - **Camera smarts**: on-device face tracking keeps you centred; DaVinci Resolve style colour
   grading and `.cube` LUTs.
 
-Captions, narration and face tracking run locally; the agent runs on Claude through the
-ScreenForge backend (see `site/privacy.html` for what is sent).
+Captions, on-device narration and face tracking run locally; the agent runs on Claude and the
+ElevenLabs voices on ElevenLabs, both through the ScreenForge backend (see `site/privacy.html` for what is sent).
 
 ## Download
 
@@ -107,7 +109,7 @@ your own `ANTHROPIC_API_KEY`. See `backend/README.md` for how keys and credits a
 | `crates/sf-render`   | wgpu compositor (WGSL): background, shadow, rounded screen, camera (Resolve style grade, 3D LUTs), cursor sprites |
 | `crates/sf-session`  | an opened project: sources, caches, face tracking, per-frame `FrameDesc` |
 | `crates/sf-agent`    | editing agent: Claude tool loop (timeline, cuts, speed, zooms, settings, activity, motion, frames) over a copy of the project |
-| `crates/sf-tts`      | on-device AI narration: Kokoro-82M via ONNX Runtime, misaki pronunciation, word timings for captions |
+| `crates/sf-tts`      | AI narration: on-device Kokoro-82M via ONNX Runtime, misaki pronunciation, word timings for captions; the ElevenLabs voices and their timing |
 | `crates/sf-transcribe` | on-device captions: whisper.cpp with per-word timestamps |
 | `crates/sf-license`  | offline Ed25519 license keys that gate export |
 | `crates/sf-vision`   | on-device face detection for the camera feed (SeetaFace cascade, model compiled in) |

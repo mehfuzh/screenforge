@@ -1090,7 +1090,7 @@ fn spoken_take_ui(ed: &mut Editor, ui: &mut egui::Ui, id: &str) {
     let speed = ed.session.pkg.project.config.audio.narration_speed();
     let mut read = None;
     ui.add_enabled_ui(!busy, |ui| {
-        if let Some(v) = voice_picker(ui, &voice) {
+        if let Some(v) = voice_picker(ui, id, &voice, false) {
             read = Some((v.to_string(), text.clone()));
         }
     });
@@ -1141,16 +1141,38 @@ fn narration_status(ed: &mut Editor, ui: &mut egui::Ui) {
     }
 }
 
-/// The AI voices in two rows, male and female. Returns the voice picked.
-fn voice_picker(ui: &mut egui::Ui, current: &str) -> Option<&'static str> {
+/// The AI voices: which engine (on this computer, or ElevenLabs), then that engine's voices in
+/// two rows, male and female. Returns the voice picked. Switching engine picks its first voice
+/// when `pick_on_switch` (the panel's voice, nothing is read); otherwise (a take, where a pick
+/// reads it again) it only shows the other engine's voices until one is picked.
+fn voice_picker(ui: &mut egui::Ui, id_salt: &str, current: &str, pick_on_switch: bool) -> Option<&'static str> {
+    let id = ui.id().with(("voice_engine", id_salt));
+    let current_online = sf_tts::cloud::cloud_voice(current).is_some();
+    // the engine shown: the current voice's, unless switched here without picking yet
+    let shown: Option<(String, bool)> = ui.data(|d| d.get_temp(id));
+    let online = shown.filter(|(v, _)| v == current).map_or(current_online, |(_, o)| o);
     let mut picked = None;
+    if let Some(i) = widgets::segmented(ui, online as usize, &["On this computer", "ElevenLabs"]) {
+        let online = i == 1;
+        ui.data_mut(|d| d.insert_temp(id, (current.to_string(), online)));
+        if pick_on_switch {
+            picked = Some(if online { sf_tts::cloud::CLOUD_VOICES[0].id } else { sf_tts::DEFAULT_VOICE });
+        }
+        return picked;
+    }
+    let voices: Vec<(&'static str, &'static str, bool)> = if online {
+        sf_tts::cloud::CLOUD_VOICES.iter().map(|v| (v.id, v.name, v.female)).collect()
+    } else {
+        sf_tts::VOICES.iter().map(|v| (v.id, v.name, v.female)).collect()
+    };
     for female in [false, true] {
-        let voices: Vec<&sf_tts::Voice> = sf_tts::VOICES.iter().filter(|v| v.female == female).collect();
-        let names: Vec<&str> = voices.iter().map(|v| v.name).collect();
+        let row: Vec<_> = voices.iter().filter(|v| v.2 == female).collect();
+        let names: Vec<&str> = row.iter().map(|v| v.1).collect();
+        ui.add_space(4.0);
         ui.label(RichText::new(if female { "Female" } else { "Male" }).size(13.0).color(theme::p().text_dim));
-        let idx = voices.iter().position(|v| v.id == current).unwrap_or(usize::MAX);
+        let idx = row.iter().position(|v| v.0 == current).unwrap_or(usize::MAX);
         if let Some(i) = widgets::pills(ui, idx, &names) {
-            picked = Some(voices[i].id);
+            picked = Some(row[i].0);
         }
     }
     picked
@@ -1169,12 +1191,9 @@ fn script_box(ui: &mut egui::Ui, text: &mut String, hint: &str) {
 fn narration_ui(ed: &mut Editor, ui: &mut egui::Ui) {
     let pal = theme::p();
     widgets::title(ui, "Narration");
-    widgets::hint(ui, "An AI voice reads what you write, on this computer. Each reading is a voice-over take with captions. The agent narrates with the same voice and speed.");
+    widgets::hint(ui, "An AI voice reads what you write. Each reading is a voice-over take with captions. The agent narrates with the same voice and speed.");
 
-    // ── the model ──
-    widgets::title(ui, "Voice model");
     let work = ed.narration.working();
-    let size_mb = sf_tts::download_size() as f64 / 1e6;
     // each run's status shows once, by what started it (a download under the model, even
     // when a reading started it; a take read again in that take's section while it is
     // selected)
@@ -1183,28 +1202,22 @@ fn narration_ui(ed: &mut Editor, ui: &mut egui::Ui) {
     let here = |w: crate::narration::Work| !downloading && !reread_shown && work == Some(w);
     let (by_preview, by_add) = (here(crate::narration::Work::Preview), here(crate::narration::Work::Takes(1)) && ed.narration.rereading().is_none());
     let by_takes = !downloading && !reread_shown && !by_add && matches!(work, Some(crate::narration::Work::Takes(_)));
-    if downloading {
-        narration_status(ed, ui);
-    } else if ed.narration.is_downloaded() {
-        widgets::hint(ui, &format!("Kokoro is downloaded ({size_mb:.0} MB) and works offline."));
-        if ui.add_enabled_ui(work.is_none(), |ui| widgets::secondary_button(ui, "Remove download")).inner.on_hover_text("Free the space; it is downloaded again when you next narrate").clicked() {
-            ed.narration.remove();
-        }
-    } else {
-        widgets::hint(ui, &format!("Kokoro, about {size_mb:.0} MB, is downloaded once. Without it, the first narration downloads it."));
-        if widgets::accent_button(ui, "Download voice model").clicked() {
-            ed.narration.download();
-        }
-    }
 
-    // ── voice and speed ──
+    // ── engine and voice ──
     let audio = &ed.session.pkg.project.config.audio;
-    let voice = audio.narration_voice.clone().filter(|v| sf_tts::voice(v).is_some()).unwrap_or_else(|| sf_tts::DEFAULT_VOICE.to_string());
+    let voice = audio.narration_voice.clone().filter(|v| sf_tts::voice_name(v).is_some()).unwrap_or_else(|| sf_tts::DEFAULT_VOICE.to_string());
+    let online = sf_tts::cloud::cloud_voice(&voice);
     let speed = audio.narration_speed();
     widgets::title(ui, "Voice");
-    if let Some(v) = voice_picker(ui, &voice) {
+    if let Some(v) = voice_picker(ui, "panel", &voice, true) {
         ed.edit(move |p| p.config.audio.narration_voice = Some(v.to_string()));
     }
+    ui.add_space(4.0);
+    match online {
+        Some(v) => widgets::hint(ui, &format!("{}, {}. Studio quality, read online: about 8 credits per 1,000 characters (around 7 a minute), from the credits you share with the agent.", v.name, v.style)),
+        None => widgets::hint(ui, "Free and private: read on this computer, works offline."),
+    }
+
     ui.add_space(4.0);
     let playing = ed.narration.is_playing();
     let label = if playing { "Stop" } else { "Preview" };
@@ -1221,6 +1234,25 @@ fn narration_ui(ed: &mut Editor, ui: &mut egui::Ui) {
     let r = sf_project::v4::AudioConfig::NARRATION_SPEEDS;
     cfg_slider(ed, ui, "Speed", |p| p.config.audio.narration_speed(), |p, v| p.config.audio.narration_speed = Some((v * 20.0).round() / 20.0), r, Some(1.0), "×");
 
+    // ── the on-device model ──
+    if online.is_none() || downloading {
+        widgets::title(ui, "Voice model");
+        let size_mb = sf_tts::download_size() as f64 / 1e6;
+        if downloading {
+            narration_status(ed, ui);
+        } else if ed.narration.is_downloaded() {
+            widgets::hint(ui, &format!("Kokoro is downloaded ({size_mb:.0} MB) and works offline."));
+            if ui.add_enabled_ui(work.is_none(), |ui| widgets::secondary_button(ui, "Remove download")).inner.on_hover_text("Free the space; it is downloaded again when you next narrate").clicked() {
+                ed.narration.remove();
+            }
+        } else {
+            widgets::hint(ui, &format!("Kokoro, about {size_mb:.0} MB, is downloaded once. Without it, the first narration downloads it."));
+            if widgets::accent_button(ui, "Download voice model").clicked() {
+                ed.narration.download();
+            }
+        }
+    }
+
     // ── a new take ──
     widgets::title(ui, "Script");
     script_box(ui, &mut ed.narration.draft, "Type what the voice should say…");
@@ -1229,7 +1261,11 @@ fn narration_ui(ed: &mut Editor, ui: &mut egui::Ui) {
     let can = !ed.narration.draft.trim().is_empty() && work.is_none();
     let at = ed.playhead_ms;
     ui.add_enabled_ui(can, |ui| {
-        if widgets::accent_button(ui, &format!("Add at {}", crate::editor::fmt_clock(at))).on_hover_text("Read the script into a voice-over take starting at the playhead").clicked() {
+        let tip = match online {
+            Some(_) => format!("Read the script into a voice-over take starting at the playhead (about {:.0} credits)", sf_tts::cloud::credits_for(ed.narration.draft.trim().chars().count()).ceil()),
+            None => "Read the script into a voice-over take starting at the playhead".to_string(),
+        };
+        if widgets::accent_button(ui, &format!("Add at {}", crate::editor::fmt_clock(at))).on_hover_text(tip).clicked() {
             let source_ms = ed.session.timeline.output_to_source(at).unwrap_or(0.0);
             let req = crate::narration::TakeRequest { text: ed.narration.draft.trim().to_string(), voice: voice.clone(), speed, replaces: None, source_ms };
             ed.narration.read(ed.path.clone(), vec![req]);
@@ -1248,7 +1284,7 @@ fn narration_ui(ed: &mut Editor, ui: &mut egui::Ui) {
     if !takes.is_empty() {
         widgets::title(ui, "Narration takes");
         let other = takes.iter().filter(|t| t.1 != voice).count();
-        let name = sf_tts::voice(&voice).map_or(voice.clone(), |v| v.name.to_string());
+        let name = sf_tts::voice_name(&voice).map_or(voice.clone(), str::to_string);
         widgets::hint(ui, &match (takes.len(), other) {
             (n, 0) => format!("{n} take{} read by {name}. Select one on the timeline to change its script or voice.", if n == 1 { "" } else { "s" }),
             (n, o) => format!("{o} of {n} takes use another voice."),

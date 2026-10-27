@@ -5045,6 +5045,7 @@ name = "studio"
 version = "0.1.34"
 dependencies = [
  "anyhow",
+ "base64 0.22.1",
  "chrono",
  "cpal",
  "directories",
