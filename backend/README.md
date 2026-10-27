@@ -26,7 +26,7 @@ manual steps, for reference:
 2. Stripe: create a product with a one-time US$49 price (`setup.sh` does this; `update-price.sh <cents>` changes the price later, Stripe and Supabase in one go); set `STRIPE_SECRET_KEY`,
    `STRIPE_WEBHOOK_SECRET`, `STRIPE_PRICE_LIFETIME`.
 3. Resend: `RESEND_API_KEY`, `LICENSE_FROM_EMAIL`.
-4. `supabase db push && supabase functions deploy create-checkout stripe-webhook license-refresh license-activate free-export unsplash jamendo agent`
+4. `supabase db push && supabase functions deploy create-checkout stripe-webhook license-refresh license-activate free-export unsplash jamendo agent voice`
 5. Point `PURCHASE_URL` in `crates/sf-license` at your checkout page (or the `create-checkout` URL).
 
 ## Activation from the app
@@ -183,3 +183,34 @@ offers **Switch account**, **Sign out** and, for Pro, **Manage subscription**:
   It uses the account's default portal configuration (`PORTAL_RETURN_URL` sets where "Return"
   goes; default the pricing page).
 
+
+## ElevenLabs voices
+
+Narration (and the agent's `add_narration`) offers ElevenLabs voices beside the on-device Kokoro
+ones. They are read through the `voice` function so the key stays on the server
+(`ELEVENLABS_API_KEY`; elevenlabs.io → Developers → API keys, with Text to Speech access only).
+
+```
+supabase secrets set ELEVENLABS_API_KEY=<key>
+supabase functions deploy voice
+```
+
+`{ device, voice, text, speed }` returns `{ audio, alignment, credits, sf_credits }`: 16-bit PCM
+at 24 kHz (base64) and ElevenLabs' character timing, which the app turns into word timing for
+captions. `voice` is the app's id (`el_brian` …); the ElevenLabs voice ids are kept in the
+function (premade voices, so any workspace has them) and can change without an app release.
+A take is at most 5,000 characters.
+
+Credits. A reading is paid like an agent request, from the same balance (Pro's monthly credits,
+then top-ups): it needs Pro (or staff / trial credits) and a positive balance, and costs
+ElevenLabs' list price for its characters at 1 credit = US$0.01. `eleven_v4` is US$0.08 per 1,000
+characters, so 8 credits per 1,000, about 7 credits for a minute of narration; 1,000 monthly
+credits cover roughly two hours of narration if nothing else is spent. Packs keep the same
+50% margin as for Claude. Set `ELEVENLABS_MODEL` / `ELEVENLABS_USD_PER_1K_CHARS` together to
+change model (v4 Turbo: `eleven_v4_turbo`, 0.04). Its cost also counts toward the agent's
+daily caps (`AGENT_DEVICE_DAILY_USD`, `AGENT_TOTAL_DAILY_USD`). The app keeps each voice's
+preview in its cache folder, so a preview is charged once.
+
+Licence. ElevenLabs' Free plan has no commercial licence; the workspace needs a paid plan
+(Starter or above) before the voices are offered to customers, and enough characters or
+usage-based billing for everyone's narration.

@@ -8,7 +8,10 @@
 //! `<models dir>/kokoro-v1.0` (see `sf_transcribe::models_dir`), from our `models-v1` release
 //! first and where they are published if that fails, and kept only if their
 //! SHA-256 matches.
+//!
+//! ElevenLabs voices ([`cloud`]) are offered beside Kokoro's: read online, paid in credits.
 
+pub mod cloud;
 pub mod g2p;
 
 use std::io::Write;
@@ -29,7 +32,7 @@ const PARAGRAPH_GAP: f64 = 0.45;
 /// Kokoro reads at most 510 phonemes at once; sentences longer than this are split.
 const MAX_PHONEMES: usize = 400;
 /// Peak level of a finished take.
-const PEAK: f32 = 0.89;
+pub(crate) const PEAK: f32 = 0.89;
 
 /// Our mirror (the `models-v1` release, next to the Whisper models), tried first; each file
 /// is there as `kokoro-<file>` with `/` as `-`.
@@ -112,6 +115,11 @@ pub const VOICES: [Voice; 6] = [
 
 pub fn voice(id: &str) -> Option<&'static Voice> {
     VOICES.iter().find(|v| v.id == id)
+}
+
+/// A voice's name, Kokoro's or ElevenLabs'.
+pub fn voice_name(id: &str) -> Option<&'static str> {
+    voice(id).map(|v| v.name).or_else(|| cloud::cloud_voice(id).map(|v| v.name))
 }
 
 /// Where the model, dictionaries and voices are kept.

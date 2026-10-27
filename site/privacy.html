@@ -4,12 +4,12 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Privacy Policy — ScreenForge</title>
-<meta name="description" content="ScreenForge goes online when you press Activate or Buy, use the AI agent, search Unsplash or Jamendo, import music from a link, or download a speech model for captions or a voice model for narration. The app has no analytics or telemetry; recordings and exports stay on your computer. The website uses Google Analytics.">
+<meta name="description" content="ScreenForge goes online when you press Activate or Buy, use the AI agent, search Unsplash or Jamendo, narrate with an ElevenLabs voice, import music from a link, or download a speech model for captions or a voice model for narration. The app has no analytics or telemetry; recordings and exports stay on your computer. The website uses Google Analytics.">
 <link rel="canonical" href="https://screenforge.studio/privacy">
 <meta name="color-scheme" content="light dark">
 <meta property="og:type" content="website">
 <meta property="og:title" content="Privacy Policy — ScreenForge">
-<meta property="og:description" content="ScreenForge goes online when you press Activate or Buy, use the AI agent, search Unsplash or Jamendo, import music from a link, or download a speech model for captions or a voice model for narration. The app has no analytics or telemetry; recordings and exports stay on your computer. The website uses Google Analytics.">
+<meta property="og:description" content="ScreenForge goes online when you press Activate or Buy, use the AI agent, search Unsplash or Jamendo, narrate with an ElevenLabs voice, import music from a link, or download a speech model for captions or a voice model for narration. The app has no analytics or telemetry; recordings and exports stay on your computer. The website uses Google Analytics.">
 <meta property="og:image" content="https://screenforge.studio/og.png?v=3">
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
@@ -412,7 +412,7 @@ gtag('config', 'G-ZYRJDJ736V');
 <main class="doc">
   <div class="eyebrow">Legal</div>
   <h1>Privacy Policy</h1>
-  <p class="stamp">Last updated 23 October 2026</p>
+  <p class="stamp">Last updated 26 October 2026</p>
 
   <div class="tldr">
     <div class="k">The short version</div>
@@ -433,13 +433,14 @@ gtag('config', 'G-ZYRJDJ736V');
     <li><strong>Import from a link</strong> downloads the audio file at the link you paste, straight from that site into the project. Nothing goes through our server, and nothing else is sent.</li>
     <li><strong>Free exports</strong>: the app counts the exports you made without a license, with the device code described above, so the free exports are not reset by reinstalling. It sends nothing else.</li>
     <li><strong>Generate transcript</strong>, the first time you use a speech model, downloads that model (142 MB or 466 MB) from our GitHub releases, or from Hugging Face if GitHub is unreachable. It is a plain file download: nothing about you or your recording is sent. The file is checked against a known checksum, kept on your computer, and not downloaded again. Transcription itself runs on your computer, and your audio never leaves it.</li>
-    <li><strong>Narration</strong>, the first time you use an AI voice or press <em>Download voice model</em>, downloads the Kokoro voice model, its voices and pronunciation dictionaries (about 335 MB) from our GitHub releases, or from Hugging Face and GitHub's copy of the dictionaries if ours is unreachable. Like the speech models, it is a plain file download checked against known checksums and kept on your computer. The voice runs on your computer: a script you type in the Narration panel never leaves it. When the agent narrates, it writes the script itself, as part of the agent conversation described above.</li>
+    <li><strong>Narration</strong>, the first time you use an AI voice or press <em>Download voice model</em>, downloads the Kokoro voice model, its voices and pronunciation dictionaries (about 335 MB) from our GitHub releases, or from Hugging Face and GitHub's copy of the dictionaries if ours is unreachable. Like the speech models, it is a plain file download checked against known checksums and kept on your computer. The voice runs on your computer: a script read by one of these voices never leaves it. When the agent narrates, it writes the script itself, as part of the agent conversation described above.</li>
+    <li><strong>ElevenLabs voices</strong>, only when you pick one in the Narration panel (or ask the agent for one), send the script of each take, the voice, the speed and your device code to our server, which adds the ElevenLabs key, asks ElevenLabs to read it, passes the audio back, and takes its cost from your credits. Our server does not store the script or the audio; the app saves the reading in your project, and each voice's short preview on your computer.</li>
     <li><strong>Update check</strong>: at launch, at most once a day, the app asks GitHub's public releases API for the newest version number, and shows "Update available" when it is newer than yours. It is one plain request with no account, no identifier and nothing about you or your projects; GitHub sees it like any other visit. Turn it off with <em>Check automatically</em> in the toolbar's settings menu; <em>Check for updates now</em> does the same once, on request. Updating is up to you: the app only opens the release page.</li>
   </ul>
   <p>All of them go over HTTPS. Apart from the update check, opening the app, recording, editing by hand, captioning with a model you already have, and exporting make no network requests at all.</p>
 
   <h2><span class="n">03</span>What we keep</h2>
-  <p>If you buy a license: the email address you paid with, the plan, and the key issued to it, plus the device code of the computer the license is active on and when it was last used. That record exists so the key can be resent or refunded and kept to one computer. Pending activation codes are stored only as hashes and expire after 15 minutes. For the AI agent: the credit balance of your license email and a list of what added or used credits (purchases, monthly grants, and each request's cost), and per device code and day the number of agent requests and their cost. We do not keep your messages to the agent, a profile, or anything about the recordings you make.</p>
+  <p>If you buy a license: the email address you paid with, the plan, and the key issued to it, plus the device code of the computer the license is active on and when it was last used. That record exists so the key can be resent or refunded and kept to one computer. Pending activation codes are stored only as hashes and expire after 15 minutes. For the AI agent: the credit balance of your license email and a list of what added or used credits (purchases, monthly grants, and each request's cost), and per device code and day the number of agent requests and ElevenLabs readings and their cost. We do not keep your messages to the agent, a profile, or anything about the recordings you make.</p>
 
   <h2><span class="n">04</span>Who else is involved</h2>
   <ul>
@@ -447,6 +448,7 @@ gtag('config', 'G-ZYRJDJ736V');
     <li><strong>Resend</strong> delivers the license email and the activation codes. It sees your address and what is in the message it sends; see <a href="https://resend.com/legal/privacy-policy">Resend's privacy policy</a>.</li>
     <li><strong>Supabase</strong> hosts the license server and its database.</li>
     <li><strong>Anthropic</strong> runs Claude, the model behind the AI agent. It receives what the agent sends, as described above, under its commercial terms, under which API data is not used to train its models; see <a href="https://www.anthropic.com/legal/privacy">Anthropic's privacy policy</a>.</li>
+    <li><strong>ElevenLabs</strong> reads the narration scripts sent to it for the ElevenLabs voices, as described above, and sees the script, not who you are; see <a href="https://elevenlabs.io/privacy-policy">ElevenLabs' privacy policy</a>.</li>
     <li><strong>Unsplash</strong> provides the background photos. It sees the searches our server makes for you, not who made them; downloading a photo comes from its image servers; see <a href="https://unsplash.com/privacy">Unsplash's privacy policy</a>.</li>
     <li><strong>Jamendo</strong> provides the Creative Commons music. It sees the searches our server makes for you, not who made them; downloading a track comes from its storage servers; see <a href="https://www.jamendo.com/legal/privacy">Jamendo's privacy policy</a>.</li>
     <li><strong>Google Analytics</strong> counts visits to this website: pages viewed, referrer, and approximate location and device, using a cookie in your browser. It runs on the website only, never in the app. Blocking it does not affect anything; see <a href="https://policies.google.com/privacy">Google's privacy policy</a>.</li>
@@ -457,7 +459,7 @@ gtag('config', 'G-ZYRJDJ736V');
   <h2><span class="n">05</span>What we do not do</h2>
   <ul>
     <li>No telemetry, usage analytics or crash reporting in the app. The website uses Google Analytics only, as described above.</li>
-    <li>No install counters. The device code is sent only for activation, the free-export count and the AI agent, as described above. The only request at launch is the daily update check, which carries nothing about you and can be turned off.</li>
+    <li>No install counters. The device code is sent only for activation, the free-export count, the AI agent and ElevenLabs readings, as described above. The only request at launch is the daily update check, which carries nothing about you and can be turned off.</li>
     <li>No selling, sharing or transferring your data, ever.</li>
     <li>No account. We hold no record that you exist until you buy a key or use the AI agent, and then only what is listed above.</li>
   </ul>

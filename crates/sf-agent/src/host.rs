@@ -54,14 +54,23 @@ pub struct Spoken {
     pub duration_ms: f64,
 }
 
-/// The AI voices `add_narration` offers: (id, description). The first is the default.
-pub const VOICES: [(&str, &str); 6] = [
+/// The AI voices `add_narration` offers: (id, description). The first is the default. The
+/// `el_` ones are ElevenLabs' (read online, paid in credits; see sf_tts::cloud).
+pub const VOICES: [(&str, &str); 14] = [
     ("am_fenrir", "male, warm and clear (default)"),
     ("am_michael", "male, calm"),
     ("am_puck", "male, lively"),
     ("af_heart", "female, warm"),
     ("af_bella", "female, bright"),
     ("af_nicole", "female, soft"),
+    ("el_eric", "male, smooth, trustworthy (ElevenLabs; for studio quality or a more realistic voice)"),
+    ("el_brian", "male, deep, resonant narrator (ElevenLabs)"),
+    ("el_george", "male, warm British storyteller (ElevenLabs)"),
+    ("el_daniel", "male, steady British broadcaster (ElevenLabs)"),
+    ("el_sarah", "female, mature, confident (ElevenLabs)"),
+    ("el_matilda", "female, knowledgeable, professional (ElevenLabs)"),
+    ("el_alice", "female, clear British educator (ElevenLabs)"),
+    ("el_jessica", "female, playful, bright (ElevenLabs)"),
 ];
 
 /// Something only the editor can do, asked for by a tool and run when the round's edits are
