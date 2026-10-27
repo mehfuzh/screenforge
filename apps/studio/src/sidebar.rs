@@ -1089,11 +1089,15 @@ fn spoken_take_ui(ed: &mut Editor, ui: &mut egui::Ui, id: &str) {
     let busy = ed.narration.working().is_some();
     let speed = ed.session.pkg.project.config.audio.narration_speed();
     let mut read = None;
+    let mut online = false;
     ui.add_enabled_ui(!busy, |ui| {
-        if let Some(v) = voice_picker(ui, id, &voice, false) {
+        let (v, shown) = voice_picker(ui, id, &voice, false);
+        online = shown;
+        if let Some(v) = v {
             read = Some((v.to_string(), text.clone()));
         }
     });
+    let locked = (online || sf_tts::cloud::cloud_voice(&voice).is_some()) && cloud_locked_ui(ed, ui);
     widgets::title(ui, "Script");
     if ed.narration.take_draft.as_ref().is_none_or(|(d, _)| d != id) {
         ed.narration.take_draft = Some((id.to_string(), text.clone()));
@@ -1102,7 +1106,7 @@ fn spoken_take_ui(ed: &mut Editor, ui: &mut egui::Ui, id: &str) {
         script_box(ui, draft, "What the voice says");
         let changed = draft.trim() != text.trim() && !draft.trim().is_empty();
         let draft = draft.clone();
-        ui.add_enabled_ui(changed && !busy, |ui| {
+        ui.add_enabled_ui(changed && !busy && !(locked && sf_tts::cloud::cloud_voice(&voice).is_some()), |ui| {
             if widgets::accent_button(ui, "Read again").on_hover_text("Replace this take with the new script, in the same place").clicked() {
                 read = Some((voice.clone(), draft));
             }
@@ -1142,40 +1146,57 @@ fn narration_status(ed: &mut Editor, ui: &mut egui::Ui) {
 }
 
 /// The AI voices: which engine (on this computer, or ElevenLabs), then that engine's voices in
-/// two rows, male and female. Returns the voice picked. Switching engine picks its first voice
-/// when `pick_on_switch` (the panel's voice, nothing is read); otherwise (a take, where a pick
-/// reads it again) it only shows the other engine's voices until one is picked.
-fn voice_picker(ui: &mut egui::Ui, id_salt: &str, current: &str, pick_on_switch: bool) -> Option<&'static str> {
+/// two rows, male and female. Returns the voice picked and whether the ElevenLabs voices are
+/// shown. Switching engine picks its first voice when `pick_on_switch` (the panel's voice,
+/// nothing is read); otherwise (a take, where a pick reads it again) it only shows the other
+/// engine's voices until one is picked. Without Pro the ElevenLabs voices are shown but not
+/// picked.
+fn voice_picker(ui: &mut egui::Ui, id_salt: &str, current: &str, pick_on_switch: bool) -> (Option<&'static str>, bool) {
     let id = ui.id().with(("voice_engine", id_salt));
     let current_online = sf_tts::cloud::cloud_voice(current).is_some();
+    let locked = crate::narration::cloud_locked();
     // the engine shown: the current voice's, unless switched here without picking yet
     let shown: Option<(String, bool)> = ui.data(|d| d.get_temp(id));
     let online = shown.filter(|(v, _)| v == current).map_or(current_online, |(_, o)| o);
-    let mut picked = None;
     if let Some(i) = widgets::segmented(ui, online as usize, &["On this computer", "ElevenLabs"]) {
         let online = i == 1;
         ui.data_mut(|d| d.insert_temp(id, (current.to_string(), online)));
-        if pick_on_switch {
-            picked = Some(if online { sf_tts::cloud::CLOUD_VOICES[0].id } else { sf_tts::DEFAULT_VOICE });
-        }
-        return picked;
+        let picked = (pick_on_switch && !(online && locked)).then(|| if online { sf_tts::cloud::CLOUD_VOICES[0].id } else { sf_tts::DEFAULT_VOICE });
+        return (picked, online);
     }
     let voices: Vec<(&'static str, &'static str, bool)> = if online {
         sf_tts::cloud::CLOUD_VOICES.iter().map(|v| (v.id, v.name, v.female)).collect()
     } else {
         sf_tts::VOICES.iter().map(|v| (v.id, v.name, v.female)).collect()
     };
-    for female in [false, true] {
-        let row: Vec<_> = voices.iter().filter(|v| v.2 == female).collect();
-        let names: Vec<&str> = row.iter().map(|v| v.1).collect();
-        ui.add_space(4.0);
-        ui.label(RichText::new(if female { "Female" } else { "Male" }).size(13.0).color(theme::p().text_dim));
-        let idx = row.iter().position(|v| v.0 == current).unwrap_or(usize::MAX);
-        if let Some(i) = widgets::pills(ui, idx, &names) {
-            picked = Some(row[i].0);
+    let mut picked = None;
+    ui.add_enabled_ui(!(online && locked), |ui| {
+        for female in [false, true] {
+            let row: Vec<_> = voices.iter().filter(|v| v.2 == female).collect();
+            let names: Vec<&str> = row.iter().map(|v| v.1).collect();
+            ui.add_space(4.0);
+            ui.label(RichText::new(if female { "Female" } else { "Male" }).size(13.0).color(theme::p().text_dim));
+            let idx = row.iter().position(|v| v.0 == current).unwrap_or(usize::MAX);
+            if let Some(i) = widgets::pills(ui, idx, &names) {
+                picked = Some(row[i].0);
+            }
         }
+    });
+    (picked, online)
+}
+
+/// Under the ElevenLabs voices without Pro: what they need, and the way to Pro (the agent
+/// panel's credits menu). True when shown.
+fn cloud_locked_ui(ed: &mut Editor, ui: &mut egui::Ui) -> bool {
+    if !crate::narration::cloud_locked() {
+        return false;
     }
-    picked
+    ui.add_space(4.0);
+    widgets::hint(ui, "ElevenLabs voices are part of Pro, with the agent: US$20/month for 1,000 credits a month (about 7 a minute of narration). The voices on this computer stay free.");
+    if widgets::accent_button(ui, "Get Pro").on_hover_text("Upgrade or sign in from the agent panel").clicked() {
+        ed.section = Section::Agent;
+    }
+    true
 }
 
 /// A few lines of script.
@@ -1209,19 +1230,25 @@ fn narration_ui(ed: &mut Editor, ui: &mut egui::Ui) {
     let online = sf_tts::cloud::cloud_voice(&voice);
     let speed = audio.narration_speed();
     widgets::title(ui, "Voice");
-    if let Some(v) = voice_picker(ui, "panel", &voice, true) {
+    let (picked, shown_online) = voice_picker(ui, "panel", &voice, true);
+    if let Some(v) = picked {
         ed.edit(move |p| p.config.audio.narration_voice = Some(v.to_string()));
     }
-    ui.add_space(4.0);
-    match online {
-        Some(v) => widgets::hint(ui, &format!("{}, {}. Studio quality, read online: about 8 credits per 1,000 characters (around 7 a minute), from the credits you share with the agent.", v.name, v.style)),
-        None => widgets::hint(ui, "Free and private: read on this computer, works offline."),
+    // a voice that cannot be read here: the ElevenLabs one chosen before signing out
+    let locked = (shown_online || online.is_some()) && cloud_locked_ui(ed, ui);
+    if !locked {
+        ui.add_space(4.0);
+        match online {
+            Some(v) => widgets::hint(ui, &format!("{}, {}. Studio quality, read online: about 8 credits per 1,000 characters (around 7 a minute), from the credits you share with the agent.", v.name, v.style)),
+            None => widgets::hint(ui, "Free and private: read on this computer, works offline."),
+        }
     }
+    let blocked = locked && online.is_some();
 
     ui.add_space(4.0);
     let playing = ed.narration.is_playing();
     let label = if playing { "Stop" } else { "Preview" };
-    if ui.add_enabled(work.is_none(), egui::Button::new(label)).on_hover_text("Hear a line in this voice").clicked() {
+    if ui.add_enabled(work.is_none() && !blocked, egui::Button::new(label)).on_hover_text("Hear a line in this voice").clicked() {
         if playing {
             ed.narration.stop_preview();
         } else {
@@ -1258,7 +1285,7 @@ fn narration_ui(ed: &mut Editor, ui: &mut egui::Ui) {
     script_box(ui, &mut ed.narration.draft, "Type what the voice should say…");
     widgets::hint(ui, "A blank line makes a longer pause. Numbers like 2× or 1.5 are read out.");
     ui.add_space(6.0);
-    let can = !ed.narration.draft.trim().is_empty() && work.is_none();
+    let can = !ed.narration.draft.trim().is_empty() && work.is_none() && !blocked;
     let at = ed.playhead_ms;
     ui.add_enabled_ui(can, |ui| {
         let tip = match online {
@@ -1289,7 +1316,7 @@ fn narration_ui(ed: &mut Editor, ui: &mut egui::Ui) {
             (n, 0) => format!("{n} take{} read by {name}. Select one on the timeline to change its script or voice.", if n == 1 { "" } else { "s" }),
             (n, o) => format!("{o} of {n} takes use another voice."),
         });
-        ui.add_enabled_ui(work.is_none(), |ui| {
+        ui.add_enabled_ui(work.is_none() && !blocked, |ui| {
             if widgets::secondary_button(ui, &format!("Read all with {name}")).on_hover_text("Read every narration take again with this voice and speed, in the same places").clicked() {
                 let reqs = takes.into_iter().map(|(id, _, text, source_ms)| crate::narration::TakeRequest { text, voice: voice.clone(), speed, replaces: Some(id), source_ms }).collect();
                 ed.narration.read(ed.path.clone(), reqs);

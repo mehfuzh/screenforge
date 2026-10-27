@@ -299,6 +299,10 @@ pub struct AgentPanel {
     account_rx: Option<mpsc::Receiver<Result<Option<String>, String>>>,
     /// The license on this computer changed: the export dialog re-reads it.
     license_changed: bool,
+    /// The server has this computer activated for an account whose key and email are missing
+    /// here (the app's data was reset): the sign-in being restored, tried once per session.
+    restore_rx: Option<mpsc::Receiver<Result<sf_license::Activation, String>>>,
+    restore_tried: bool,
     /// "Signed in." and the like: shown above the suggestions until the first message.
     notice: Option<String>,
 }
@@ -489,6 +493,18 @@ impl AgentPanel {
         if let Some(rx) = &self.credits_rx {
             match rx.try_recv() {
                 Ok(Ok(v)) => {
+                    // credits follow the computer's activation on the server, so an account
+                    // here with no email saved means the sign-in was lost on this side: get
+                    // the key back (no code is emailed for a computer already activated)
+                    if let Some(account) = v["account"].as_str().filter(|_| sf_license::load_email().is_none() && !self.restore_tried) {
+                        self.restore_tried = true;
+                        let (tx, rx) = mpsc::channel();
+                        let account = account.to_string();
+                        std::thread::spawn(move || {
+                            let _ = tx.send(sf_license::activate(&account, false));
+                        });
+                        self.restore_rx = Some(rx);
+                    }
                     self.credits = Some(v);
                     self.credits_error = None;
                     self.credits_rx = None;
@@ -498,6 +514,21 @@ impl AgentPanel {
                     self.credits_rx = None;
                 }
                 Err(mpsc::TryRecvError::Disconnected) => self.credits_rx = None,
+                Err(mpsc::TryRecvError::Empty) => {}
+            }
+        }
+        if let Some(rx) = &self.restore_rx {
+            match rx.try_recv() {
+                Ok(Ok(sf_license::Activation::Done(st))) if st.is_valid() => {
+                    self.restore_rx = None;
+                    self.license_changed = true;
+                }
+                Ok(r) => {
+                    // not activated after all (or offline): stay signed out here
+                    tracing::info!("restoring the sign-in: {r:?}");
+                    self.restore_rx = None;
+                }
+                Err(mpsc::TryRecvError::Disconnected) => self.restore_rx = None,
                 Err(mpsc::TryRecvError::Empty) => {}
             }
         }
@@ -821,6 +852,8 @@ impl AgentPanel {
     /// Apply what the running turn sent since the last frame. Called every frame, whichever
     /// sidebar page is open.
     pub fn poll(&mut self, ed: &mut Editor) {
+        // the Narration panel offers the ElevenLabs voices by the plan these credits are for
+        crate::narration::set_cloud_allowed(self.credits.as_ref().map(|c| c["allowed"].as_bool() == Some(true)));
         let Some(job) = self.job.as_mut() else { return };
         let mut done = None;
         loop {
@@ -894,7 +927,7 @@ impl AgentPanel {
         if self.credits.is_none() && self.credits_error.is_none() && self.local == Some(false) {
             self.fetch_credits();
         }
-        if self.credits_rx.is_some() || self.checkout_rx.is_some() || self.account_rx.is_some() || self.sign_in.as_ref().is_some_and(|s| s.rx.is_some()) {
+        if self.credits_rx.is_some() || self.restore_rx.is_some() || self.checkout_rx.is_some() || self.account_rx.is_some() || self.sign_in.as_ref().is_some_and(|s| s.rx.is_some()) {
             ui.ctx().request_repaint_after(std::time::Duration::from_millis(200));
         }
         ui.add_space(8.0);

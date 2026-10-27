@@ -23,6 +23,21 @@ pub fn take_credits() -> Option<serde_json::Value> {
     CREDITS.lock().ok()?.take()
 }
 
+/// May this computer use the ElevenLabs voices (Pro, staff or trial credits, as the backend
+/// decides)? `None` until the agent panel has checked the plan; the backend refuses anyway.
+static CLOUD_ALLOWED: Mutex<Option<bool>> = Mutex::new(None);
+
+pub fn set_cloud_allowed(allowed: Option<bool>) {
+    if let Ok(mut a) = CLOUD_ALLOWED.lock() {
+        *a = allowed;
+    }
+}
+
+/// The ElevenLabs voices are known to be unavailable here (not Pro).
+pub fn cloud_locked() -> bool {
+    CLOUD_ALLOWED.lock().ok().and_then(|a| *a) == Some(false)
+}
+
 /// A take read into the project's voice-over folder.
 #[derive(Debug, Clone)]
 pub struct Made {
