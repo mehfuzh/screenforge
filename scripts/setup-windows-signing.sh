@@ -48,14 +48,21 @@ echo "→ App registration $APP_NAME"
 APP_ID=$(az ad app list --display-name "$APP_NAME" --query "[0].appId" -o tsv)
 [ -n "$APP_ID" ] || { echo "app registration $APP_NAME not found in tenant $TENANT"; exit 1; }
 echo "  client id $APP_ID"
-SUBJECT="repo:$REPO:environment:$ENVIRONMENT"
-CRED_NAME="github-$(basename "$REPO")-$ENVIRONMENT-env"
-if az ad app federated-credential list --id "$APP_ID" --query "[?subject=='$SUBJECT'].name" -o tsv | grep -q .; then
-  echo "  federated credential for $SUBJECT already present"
-else
-  az ad app federated-credential create --id "$APP_ID" --parameters "{\"name\":\"$CRED_NAME\",\"issuer\":\"https://token.actions.githubusercontent.com\",\"subject\":\"$SUBJECT\",\"audiences\":[\"api://AzureADTokenExchange\"],\"description\":\"$REPO release workflow (Windows Trusted Signing)\"}" --output none
-  echo "  added federated credential $CRED_NAME ($SUBJECT)"
-fi
+# GitHub presents the OIDC subject either as repo:owner/name:environment:x or, with the "immutable"
+# claim format, as repo:owner@<owner id>/name@<repo id>:environment:x; register both.
+OWNER_ID=$(gh api "users/${REPO%%/*}" -q .id)
+REPO_ID=$(gh api "repos/$REPO" -q .id)
+BASE="github-$(basename "$REPO")-$ENVIRONMENT-env"
+add_cred() { # add_cred <name> <subject>
+  if az ad app federated-credential list --id "$APP_ID" --query "[?subject=='$2'].name" -o tsv | grep -q .; then
+    echo "  federated credential for $2 already present"
+  else
+    az ad app federated-credential create --id "$APP_ID" --parameters "{\"name\":\"$1\",\"issuer\":\"https://token.actions.githubusercontent.com\",\"subject\":\"$2\",\"audiences\":[\"api://AzureADTokenExchange\"],\"description\":\"$REPO release workflow (Windows Trusted Signing)\"}" --output none
+    echo "  added federated credential $1 ($2)"
+  fi
+}
+add_cred "$BASE" "repo:$REPO:environment:$ENVIRONMENT"
+add_cred "$BASE-immutable" "repo:${REPO%%/*}@$OWNER_ID/${REPO##*/}@$REPO_ID:environment:$ENVIRONMENT"
 # The service principal already holds the signer role on the account for the other repos; make
 # sure, since a fresh app registration would need it.
 SP_ID=$(az ad sp list --filter "appId eq '$APP_ID'" --query "[0].id" -o tsv)
