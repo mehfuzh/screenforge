@@ -154,6 +154,18 @@ pub struct CaptionsConfig {
     pub line_growth: String,
     /// `"appear"` | `"fade"` | `"slide"` …
     pub word_entrance: String,
+    /// ScreenForge extension: `"boxed"` (words on a box) | `"highlight"` (short lines of
+    /// shadowed words without a box, the spoken word in `sfHighlightColor`). `None` = boxed.
+    #[serde(default, rename = "sfStyle", skip_serializing_if = "Option::is_none")]
+    pub style: Option<String>,
+    /// ScreenForge extension: colour of the spoken word in the highlight style.
+    /// `None` = [`CaptionsConfig::DEFAULT_HIGHLIGHT_COLOR`].
+    #[serde(default, rename = "sfHighlightColor", skip_serializing_if = "Option::is_none")]
+    pub highlight_color: Option<HexColor>,
+    /// ScreenForge extension: the spoken word sits on a box of the highlight colour (its
+    /// text keeps `color`) instead of being drawn in it. `None` = false.
+    #[serde(default, rename = "sfHighlightBox", skip_serializing_if = "Option::is_none")]
+    pub highlight_box: Option<bool>,
     #[serde(flatten)]
     pub extra: Extra,
 }
@@ -175,8 +187,23 @@ impl Default for CaptionsConfig {
             words_reveal: "line-by-line".into(),
             line_growth: "left-anchored".into(),
             word_entrance: "appear".into(),
+            style: None,
+            highlight_color: None,
+            highlight_box: None,
             extra: Extra::new(),
         }
+    }
+}
+
+impl CaptionsConfig {
+    pub const DEFAULT_HIGHLIGHT_COLOR: &'static str = "#fa4a32";
+
+    pub fn is_highlight(&self) -> bool {
+        self.style.as_deref() == Some("highlight")
+    }
+
+    pub fn highlight_color(&self) -> &str {
+        self.highlight_color.as_deref().unwrap_or(Self::DEFAULT_HIGHLIGHT_COLOR)
     }
 }
 

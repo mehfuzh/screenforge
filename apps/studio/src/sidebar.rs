@@ -880,6 +880,25 @@ fn captions_ui(ed: &mut Editor, ui: &mut egui::Ui) {
     // ── appearance ──
     ui.add_space(8.0);
     let c = ed.session.pkg.project.config.captions.clone();
+    widgets::title(ui, "Style");
+    if let Some(i) = widgets::segmented(ui, c.is_highlight() as usize, &["Boxed", "Highlight"]) {
+        // highlight: a few bold words mid-frame, the spoken one coloured; boxed restores the defaults
+        ed.edit(move |p| {
+            let cap = &mut p.config.captions;
+            if i == 1 {
+                cap.style = Some("highlight".into());
+                cap.font = "heavy".into();
+                cap.color = "#ffffff".into();
+                cap.position01 = Point::new(0.5, 0.5);
+                cap.words_reveal = "line-by-line".into();
+            } else {
+                cap.style = None;
+                if cap.font == "heavy" {
+                    cap.font = "sans-serif".into();
+                }
+            }
+        });
+    }
     let mut on = c.enable_transcript;
     if widgets::toggle_row(ui, "Show captions", "", &mut on) {
         ed.edit(move |p| p.config.captions.enable_transcript = on);
@@ -894,18 +913,29 @@ fn captions_ui(ed: &mut Editor, ui: &mut egui::Ui) {
         widgets::title(ui, title);
         widgets::segmented(ui, values.iter().position(|v| *v == cur).unwrap_or(0), labels).map(|i| values[i].to_string())
     };
-    if let Some(f) = pick(ui, "Font style", &["sans-serif", "serif", "mono"], &["Sans", "Serif", "Mono"], &c.font) {
+    if let Some(f) = pick(ui, "Font style", &["sans-serif", "heavy", "serif", "mono"], &["Sans", "Bold", "Serif", "Mono"], &c.font) {
         ed.edit(move |p| p.config.captions.font = f);
     }
-    // light = white text on black, dark = black text on white
-    let dark = c.color.eq_ignore_ascii_case("#000000");
-    widgets::title(ui, "Color");
-    if let Some(i) = widgets::segmented(ui, dark as usize, &["Light", "Dark"]) {
-        let (fg, bg) = if i == 1 { ("#000000", "#ffffff") } else { ("#ffffff", "#000000") };
-        ed.edit(move |p| {
-            p.config.captions.color = fg.into();
-            p.config.captions.background_color = bg.into();
-        });
+    if c.is_highlight() {
+        let colors = [sf_project::v4::CaptionsConfig::DEFAULT_HIGHLIGHT_COLOR, "#ffd60a", "#32d74b", "#0a84ff"];
+        if let Some(h) = pick(ui, "Highlight", &colors, &["Red", "Yellow", "Green", "Blue"], c.highlight_color()) {
+            ed.edit(move |p| p.config.captions.highlight_color = Some(h));
+        }
+        widgets::title(ui, "Highlight as");
+        if let Some(i) = widgets::segmented(ui, (c.highlight_box == Some(true)) as usize, &["Text", "Box"]) {
+            ed.edit(move |p| p.config.captions.highlight_box = (i == 1).then_some(true));
+        }
+    } else {
+        // light = white text on black, dark = black text on white
+        let dark = c.color.eq_ignore_ascii_case("#000000");
+        widgets::title(ui, "Color");
+        if let Some(i) = widgets::segmented(ui, dark as usize, &["Light", "Dark"]) {
+            let (fg, bg) = if i == 1 { ("#000000", "#ffffff") } else { ("#ffffff", "#000000") };
+            ed.edit(move |p| {
+                p.config.captions.color = fg.into();
+                p.config.captions.background_color = bg.into();
+            });
+        }
     }
     let positions = [0.0, 0.5, 1.0];
     let pos_idx = positions.iter().position(|y| (c.position01.y - y).abs() < 0.01).unwrap_or(2);

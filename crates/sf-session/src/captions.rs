@@ -1,5 +1,6 @@
 //! Captions for a session: the project's microphone and voice-over transcripts shifted into
 //! source time, grouped into lines, and the current line rasterised into a sprite.
+//! The highlight style uses short lines without a box and colours the spoken word.
 
 use std::sync::Arc;
 
@@ -19,6 +20,10 @@ const MARGIN01: f64 = 0.045;
 #[derive(Default)]
 pub struct Captions {
     pub lines: Vec<CaptionLine>,
+    /// Every word, for regrouping when the style changes.
+    words: Vec<Word>,
+    /// `lines` are the short ones of the highlight style.
+    short: bool,
     /// Last rasterised line: (cache key, texture).
     cached: Option<(String, Arc<Texture>)>,
 }
@@ -73,7 +78,17 @@ impl Captions {
             }
         }
         words.sort_by(|a, b| a.start_ms.total_cmp(&b.start_ms));
-        Captions { lines: captions::build_lines(&words), cached: None }
+        let mut c = Captions { lines: vec![], words, short: false, cached: None };
+        c.group(cfg.is_highlight(), true);
+        c
+    }
+
+    /// Regroup the words into lines for the style (short lines for the highlight style).
+    fn group(&mut self, short: bool, force: bool) {
+        if force || short != self.short {
+            self.lines = if short { captions::build_short_lines(&self.words) } else { captions::build_lines(&self.words) };
+            self.short = short;
+        }
     }
 
     pub fn is_empty(&self) -> bool {
@@ -94,26 +109,31 @@ impl Captions {
         if !cfg.enable_transcript || self.lines.is_empty() {
             return;
         }
+        let highlight = cfg.is_highlight();
+        self.group(highlight, false);
         let style = CaptionStyle::from_config(&cfg.words_reveal, &cfg.word_entrance, &cfg.line_growth);
         let Some(frame) = captions::frame_at(&self.lines, source_ms, style) else { return };
         let text = CaptionText {
             words: frame
                 .words
                 .iter()
-                .map(|v| TextWord { text: v.text.clone(), laid_out: v.revealed || frame.growth != Growth::Centered, alpha: v.alpha, drop01: v.drop01 })
+                .map(|v| TextWord { text: v.text.clone(), laid_out: v.revealed || frame.growth != Growth::Centered, alpha: v.alpha, drop01: v.drop01, highlighted: highlight && v.active })
                 .collect(),
             family: FontFamily::from_config(&cfg.font),
             size_px: (cfg.size_ratio.clamp(0.01, 0.3) * h as f64) as f32,
             color: Color::from_hex(&cfg.color).unwrap_or(Color::WHITE),
-            background: Color::from_hex(&cfg.background_color).unwrap_or(Color::BLACK).with_alpha(BOX_ALPHA),
+            highlight: Color::from_hex(cfg.highlight_color()).unwrap_or(Color::WHITE),
+            highlight_box: highlight && cfg.highlight_box == Some(true),
+            background: if highlight { Color::TRANSPARENT } else { Color::from_hex(&cfg.background_color).unwrap_or(Color::BLACK).with_alpha(BOX_ALPHA) },
+            shadow: highlight,
             box_to_revealed: frame.growth == Growth::LeftAnchored,
             max_width_px: w as f32 * 0.9,
         };
         // quantised so fades re-rasterise a few times, not every frame
         let key = format!(
             "{:?}|{}|{}",
-            (text.family, text.size_px.round() as u32, &cfg.color, &cfg.background_color, w),
-            text.words.iter().map(|w| format!("{}:{}:{}:{}", w.text, w.laid_out as u8, (w.alpha * 16.0).round(), (w.drop01 * 16.0).round())).collect::<Vec<_>>().join(" "),
+            (text.family, text.size_px.round() as u32, &cfg.color, &cfg.background_color, highlight.then(|| (cfg.highlight_color(), cfg.highlight_box)), w),
+            text.words.iter().map(|w| format!("{}:{}:{}:{}:{}", w.text, w.laid_out as u8, (w.alpha * 16.0).round(), (w.drop01 * 16.0).round(), w.highlighted as u8)).collect::<Vec<_>>().join(" "),
             frame.growth as u8
         );
         let tex = match &self.cached {

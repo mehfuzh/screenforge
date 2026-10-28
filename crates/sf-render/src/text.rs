@@ -1,5 +1,6 @@
 //! Caption text rasterised on the CPU into a premultiplied RGBA image, then drawn as a
-//! sprite. One line per image: a rounded background box with the words on it.
+//! sprite. One line per image: a rounded background box with the words on it, or the words
+//! alone over a soft shadow.
 
 use ab_glyph::{Font, FontRef, Glyph, PxScale, ScaleFont};
 
@@ -10,13 +11,16 @@ pub enum FontFamily {
     Sans,
     Serif,
     Mono,
+    /// Montserrat ExtraBold, for the highlight style.
+    Heavy,
 }
 
 impl FontFamily {
-    /// From the `captions.font` config value (`sans-serif` | `serif` | `mono`).
+    /// From the `captions.font` config value (`sans-serif` | `serif` | `mono` | `heavy`).
     pub fn from_config(s: &str) -> Self {
         match s {
             "serif" => FontFamily::Serif,
+            "heavy" => FontFamily::Heavy,
             "mono" | "monospace" => FontFamily::Mono,
             _ => FontFamily::Sans,
         }
@@ -40,6 +44,11 @@ impl FontFamily {
                 include_bytes!("../fonts/JetBrainsMono-SemiBold-latin-ext.ttf"),
                 include_bytes!("../fonts/JetBrainsMono-SemiBold-cyrillic.ttf"),
             ],
+            FontFamily::Heavy => [
+                include_bytes!("../fonts/Montserrat-ExtraBold-latin.ttf"),
+                include_bytes!("../fonts/Montserrat-ExtraBold-latin-ext.ttf"),
+                include_bytes!("../fonts/Montserrat-ExtraBold-cyrillic.ttf"),
+            ],
         };
         // key symbols (⌘ ⇧ ⌥ ⏎ …) for every family: only Inter carries them
         let symbols: &'static [u8] = include_bytes!("../fonts/Inter-SemiBold-symbols.ttf");
@@ -56,6 +65,8 @@ pub struct TextWord {
     pub alpha: f32,
     /// Slide-in offset: 0 = settled, 1 = lowered by a third of the font size.
     pub drop01: f32,
+    /// Drawn in [`CaptionText::highlight`] instead of [`CaptionText::color`].
+    pub highlighted: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -65,7 +76,14 @@ pub struct CaptionText {
     /// Font size in px.
     pub size_px: f32,
     pub color: Color,
+    /// Colour of the highlighted word, or of its box with `highlight_box`.
+    pub highlight: Color,
+    /// The highlighted word keeps `color` and sits on a rounded box of `highlight`.
+    pub highlight_box: bool,
+    /// Box colour; a transparent one draws no box.
     pub background: Color,
+    /// A soft dark shadow under the words, so they read without a box.
+    pub shadow: bool,
     /// Only the part of the line up to the last revealed word gets a background, but the
     /// image keeps the full line's width (so a centred image grows to the right).
     pub box_to_revealed: bool,
@@ -213,7 +231,7 @@ pub fn rasterize_caption(c: &CaptionText) -> Option<TextImage> {
     let radius = (box_h * 0.22).min(size * 0.35);
     let mut rgba = vec![0u8; w * h * 4];
     let bg = c.background;
-    for py in 0..h {
+    for py in (0..h).filter(|_| bg.a > 0.0) {
         for px in 0..w {
             let sd = rounded_rect_sd(px as f32 + 0.5, py as f32 + 0.5, 0.0, 0.0, box_right, box_h, radius);
             let a = (0.5 - sd).clamp(0.0, 1.0) * bg.a;
@@ -230,13 +248,58 @@ pub fn rasterize_caption(c: &CaptionText) -> Option<TextImage> {
     // words, each composited over the box with its own alpha
     let baseline = pad_y + shaper.ascent();
     let mut cov = vec![0f32; w * h];
+    if c.shadow {
+        // every visible word, spread and blurred, a little below the text
+        let mut sh = vec![0f32; w * h];
+        for (x, word) in &placed {
+            if word.alpha > 0.0 {
+                cov.iter_mut().for_each(|v| *v = 0.0);
+                shaper.draw(&word.text, *x, baseline + word.drop01 * size * 0.33 + size * 0.04, &mut cov, w, h);
+                sh.iter_mut().zip(&cov).for_each(|(s, c)| *s = s.max(c * word.alpha));
+            }
+        }
+        let r = (size * 0.07).round().max(1.0) as usize;
+        for _ in 0..2 {
+            box_blur(&mut sh, w, h, r);
+        }
+        for (i, a) in sh.iter().enumerate() {
+            let a = (a * 1.6).min(1.0) * 0.75;
+            if a > 0.0 {
+                let p = &mut rgba[i * 4..i * 4 + 4];
+                p[3] = (a * 255.0 + p[3] as f32 * (1.0 - a)).round().min(255.0) as u8;
+                p[..3].iter_mut().for_each(|ch| *ch = (*ch as f32 * (1.0 - a)).round() as u8);
+            }
+        }
+    }
+    if c.highlight_box {
+        for (x, word) in placed.iter().filter(|(_, w)| w.highlighted && w.alpha > 0.0) {
+            // a little wider than the word, over the glyphs' full height
+            let (pad, top) = (size * 0.16, baseline - shaper.ascent() + word.drop01 * size * 0.33);
+            let (x0, x1) = (x - pad, x + shaper.word_width(&word.text) + pad);
+            let (y0, y1) = (top - size * 0.02, top + line_h + size * 0.02);
+            let hl = c.highlight;
+            for py in (y0.floor().max(0.0) as usize)..(y1.ceil() as usize).min(h) {
+                for px in (x0.floor().max(0.0) as usize)..(x1.ceil() as usize).min(w) {
+                    let sd = rounded_rect_sd(px as f32 + 0.5, py as f32 + 0.5, x0, y0, x1, y1, size * 0.18);
+                    let a = (0.5 - sd).clamp(0.0, 1.0) * word.alpha * hl.a;
+                    if a > 0.0 {
+                        let p = &mut rgba[(py * w + px) * 4..(py * w + px) * 4 + 4];
+                        for (k, ch) in [hl.r, hl.g, hl.b].into_iter().enumerate() {
+                            p[k] = (ch * a * 255.0 + p[k] as f32 * (1.0 - a)).round().min(255.0) as u8;
+                        }
+                        p[3] = (a * 255.0 + p[3] as f32 * (1.0 - a)).round().min(255.0) as u8;
+                    }
+                }
+            }
+        }
+    }
     for (x, word) in placed {
         if word.alpha <= 0.0 {
             continue;
         }
         cov.iter_mut().for_each(|v| *v = 0.0);
         shaper.draw(&word.text, x, baseline + word.drop01 * size * 0.33, &mut cov, w, h);
-        let col = c.color;
+        let col = if word.highlighted && !c.highlight_box { c.highlight } else { c.color };
         for (i, cv) in cov.iter().enumerate() {
             let a = cv * word.alpha * col.a;
             if a <= 0.0 {
@@ -250,6 +313,24 @@ pub fn rasterize_caption(c: &CaptionText) -> Option<TextImage> {
         }
     }
     Some(TextImage { width: w as u32, height: h as u32, rgba })
+}
+
+/// Blur `buf` (`w`×`h`) with a `(2r+1)`-wide box, horizontally then vertically.
+fn box_blur(buf: &mut [f32], w: usize, h: usize, r: usize) {
+    let mut tmp = vec![0f32; buf.len()];
+    let k = 1.0 / (2 * r + 1) as f32;
+    for y in 0..h {
+        for x in 0..w {
+            let (a, b) = (x.saturating_sub(r), (x + r).min(w - 1));
+            tmp[y * w + x] = buf[y * w + a..=y * w + b].iter().sum::<f32>() * k;
+        }
+    }
+    for x in 0..w {
+        for y in 0..h {
+            let (a, b) = (y.saturating_sub(r), (y + r).min(h - 1));
+            buf[y * w + x] = (a..=b).map(|yy| tmp[yy * w + x]).sum::<f32>() * k;
+        }
+    }
 }
 
 /// A keyboard shortcut label: one key cap per key on a dark box.
@@ -346,11 +427,14 @@ mod tests {
 
     fn caption(words: &[(&str, bool, f32)], box_to_revealed: bool) -> CaptionText {
         CaptionText {
-            words: words.iter().map(|(t, l, a)| TextWord { text: t.to_string(), laid_out: *l, alpha: *a, drop01: 0.0 }).collect(),
+            words: words.iter().map(|(t, l, a)| TextWord { text: t.to_string(), laid_out: *l, alpha: *a, drop01: 0.0, highlighted: false }).collect(),
             family: FontFamily::Sans,
             size_px: 40.0,
             color: Color::WHITE,
+            highlight: Color::WHITE,
+            highlight_box: false,
             background: Color::BLACK.with_alpha(0.75),
+            shadow: false,
             box_to_revealed,
             max_width_px: 4000.0,
         }
@@ -388,6 +472,52 @@ mod tests {
         let img = rasterize_caption(&c).unwrap();
         assert!(img.width <= 121, "{}", img.width);
         assert!(ink(&img) > 20);
+    }
+
+    #[test]
+    fn highlight_style_colours_the_spoken_word_over_a_shadow() {
+        let mut c = caption(&[("Hello", true, 1.0), ("world", true, 1.0)], false);
+        c.family = FontFamily::Heavy;
+        c.background = Color::TRANSPARENT;
+        c.shadow = true;
+        c.highlight = Color::from_hex("#fa4a32").unwrap();
+        c.words[1].highlighted = true;
+        let img = rasterize_caption(&c).unwrap();
+        let px: Vec<&[u8]> = img.rgba.chunks_exact(4).collect();
+        let (left, right) = px.iter().enumerate().fold((0, 0), |(l, r), (i, p)| {
+            // opaque reddish (premultiplied) pixels, by half of the image
+            let red = p[3] > 200 && p[0] > 180 && p[1] < 120;
+            if !red {
+                (l, r)
+            } else if i % img.width as usize > img.width as usize / 2 {
+                (l, r + 1)
+            } else {
+                (l + 1, r)
+            }
+        });
+        // "world" may start a hair left of the middle
+        assert!(right > 100 && left < 20, "red pixels left {left}, right {right}");
+        // no box: the corners stay clear, and the shadow darkens around the letters
+        assert_eq!(img.rgba[3], 0);
+        assert!(px.iter().any(|p| p[3] > 60 && p[0] < 40), "a dark shadow");
+    }
+
+    #[test]
+    fn highlight_box_sits_behind_the_spoken_word() {
+        let mut c = caption(&[("Hello", true, 1.0), ("world", true, 1.0)], false);
+        c.background = Color::TRANSPARENT;
+        c.highlight = Color::from_hex("#fa4a32").unwrap();
+        c.highlight_box = true;
+        c.words[1].highlighted = true;
+        let img = rasterize_caption(&c).unwrap();
+        let (w, h) = (img.width as usize, img.height as usize);
+        let at = |x: usize, y: usize| &img.rgba[(y * w + x) * 4..(y * w + x) * 4 + 4];
+        let red = |p: &[u8]| p[3] > 240 && p[0] > 200 && p[1] < 110;
+        // an opaque red band across the second word, white letters on it, nothing behind the first
+        let row = h * 2 / 5;
+        assert!((w * 3 / 4..w * 3 / 4 + 4).any(|x| red(at(x, row))) || (0..h).any(|y| red(at(w * 3 / 4, y))));
+        assert!((w / 2..w).flat_map(|x| (0..h).map(move |y| (x, y))).any(|(x, y)| at(x, y).iter().take(3).all(|v| *v > 230)), "white text on the box");
+        assert!(!(0..w / 3).flat_map(|x| (0..h).map(move |y| (x, y))).any(|(x, y)| red(at(x, y))));
     }
 
     fn keys(k: &[&str]) -> KeyCaps {

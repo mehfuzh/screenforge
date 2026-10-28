@@ -11,6 +11,9 @@ use crate::timeline::Timeline;
 
 /// A line is closed before it would exceed this many characters.
 pub const MAX_LINE_CHARS: usize = 42;
+/// Line limits for the highlight style: a few big words at a time.
+pub const SHORT_LINE_CHARS: usize = 24;
+pub const SHORT_LINE_WORDS: usize = 4;
 /// A pause longer than this starts a new line.
 pub const LINE_GAP_MS: f64 = 1200.0;
 /// How long a line stays up after its last word (unless the next line starts earlier).
@@ -97,6 +100,8 @@ pub struct VisibleWord {
     pub alpha: f32,
     /// Slide-in progress: 0 = settled, 1 = fully lowered.
     pub drop01: f32,
+    /// The word being spoken: the last one of the line that has started.
+    pub active: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -128,6 +133,15 @@ fn ends_sentence(text: &str) -> bool {
 /// Group words into caption lines: a line ends at a sentence end, a long pause or the
 /// character limit.
 pub fn build_lines(words: &[Word]) -> Vec<CaptionLine> {
+    build_lines_with(words, MAX_LINE_CHARS, usize::MAX)
+}
+
+/// Short lines for the highlight style ([`SHORT_LINE_CHARS`], [`SHORT_LINE_WORDS`]).
+pub fn build_short_lines(words: &[Word]) -> Vec<CaptionLine> {
+    build_lines_with(words, SHORT_LINE_CHARS, SHORT_LINE_WORDS)
+}
+
+fn build_lines_with(words: &[Word], max_chars: usize, max_words: usize) -> Vec<CaptionLine> {
     let mut lines: Vec<CaptionLine> = vec![];
     let mut cur: Vec<Word> = vec![];
     let mut chars = 0usize;
@@ -135,7 +149,7 @@ pub fn build_lines(words: &[Word]) -> Vec<CaptionLine> {
         let len = w.text.chars().count();
         if let Some(last) = cur.last() {
             let gap = w.start_ms - last.end_ms;
-            if chars + 1 + len > MAX_LINE_CHARS || gap > LINE_GAP_MS || ends_sentence(&last.text) {
+            if chars + 1 + len > max_chars || cur.len() >= max_words || gap > LINE_GAP_MS || ends_sentence(&last.text) {
                 lines.push(CaptionLine { start_ms: cur[0].start_ms, end_ms: last.end_ms, words: std::mem::take(&mut cur) });
                 chars = 0;
             }
@@ -171,17 +185,19 @@ pub fn frame_at(lines: &[CaptionLine], t: f64, style: CaptionStyle) -> Option<Ca
     if t >= line.end_ms {
         return None;
     }
+    let active = line.words.partition_point(|w| w.start_ms <= t).checked_sub(1);
     let words = line
         .words
         .iter()
-        .map(|w| {
+        .enumerate()
+        .map(|(i, w)| {
             let since = match style.reveal {
                 Reveal::LineByLine => t - line.start_ms,
                 Reveal::WordByWord => t - w.start_ms,
             };
             let revealed = since >= 0.0;
             let (alpha, drop01) = if revealed { entrance(style.entrance, since) } else { (0.0, 0.0) };
-            VisibleWord { text: w.text.clone(), revealed, alpha, drop01 }
+            VisibleWord { text: w.text.clone(), revealed, alpha, drop01, active: active == Some(i) }
         })
         .collect();
     Some(CaptionFrame { words, growth: style.growth })
@@ -273,6 +289,23 @@ mod tests {
         for l in build_lines(&long) {
             assert!(l.text().chars().count() <= MAX_LINE_CHARS, "{}", l.text());
         }
+    }
+
+    #[test]
+    fn short_lines_keep_a_few_words() {
+        let w: Vec<Word> = ["This", "is", "the", "strangest", "laptop", "ever"].iter().enumerate().map(|(i, t)| Word { start_ms: i as f64 * 300.0, end_ms: i as f64 * 300.0 + 250.0, text: t.to_string() }).collect();
+        let texts: Vec<String> = build_short_lines(&w).iter().map(|l| l.text()).collect();
+        assert_eq!(texts, ["This is the strangest", "laptop ever"]);
+    }
+
+    #[test]
+    fn the_spoken_word_is_active_until_the_next_one() {
+        let lines = build_lines(&words(&[(1000.0, 1200.0, "one"), (1500.0, 1800.0, "two")]));
+        let active = |t: f64| frame_at(&lines, t, STYLE).unwrap().words.iter().map(|w| w.active).collect::<Vec<_>>();
+        assert_eq!(active(1100.0), [true, false]);
+        assert_eq!(active(1300.0), [true, false], "held through the pause");
+        assert_eq!(active(1600.0), [false, true]);
+        assert_eq!(active(1900.0), [false, true]);
     }
 
     #[test]
