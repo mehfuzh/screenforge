@@ -62,7 +62,7 @@ are macOS-only.
 portable [.zip](https://github.com/mehfuzh/screenforge/releases/latest/download/ScreenForge-windows-x86_64.zip).
 Windows 10 version 2004 or later; ffmpeg is included. Recording uses the Desktop Duplication API (GDI as a fallback) and records the
 cursor, clicks, keystrokes and system audio (WASAPI loopback) like the macOS build. The
-download is not code-signed yet, so SmartScreen asks once ("More info" → "Run anyway").
+download is signed by Smartloop Inc. via Azure Trusted Signing; if SmartScreen still asks, choose "More info" → "Run anyway".
 
 **Homebrew (macOS and Linux):** `brew install zot24/tap/screenforge` installs the same builds
 (the app into /Applications on a Mac, a `screenforge` command on Linux), and `brew upgrade`

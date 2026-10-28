@@ -40,6 +40,12 @@ ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 ChangesAssociations=yes
 LicenseFile={#SourceDir}\LICENSE.txt
+#ifdef SignTool
+; bundle-windows.sh passes /Ssfsign=$p plus SignTool/SignDlib/SignMeta (signtool.exe, the Azure
+; Trusted Signing dlib and its metadata json), so this line is the full command Inno runs.
+SignTool=sfsign $q{#SignTool}$q sign /fd SHA256 /td SHA256 /tr http://timestamp.acs.microsoft.com /dlib $q{#SignDlib}$q /dmdf $q{#SignMeta}$q $f
+SignedUninstaller=yes
+#endif
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"

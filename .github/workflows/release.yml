@@ -4,6 +4,12 @@ name: Release (macOS + Linux + Windows)
 # scripts/setup-release.sh --ci:
 #   APPLE_CERTIFICATE_BASE64, APPLE_CERTIFICATE_PASSWORD  (Developer ID Application .p12)
 #   APPLE_ID, APPLE_APP_SPECIFIC_PASSWORD, APPLE_TEAM_ID   (notarytool)
+# Windows binaries and the installer are Authenticode-signed with Smartloop's Azure Trusted Signing
+# account, like smartloop-ai/smartloop-studio: azure/login with GitHub OIDC (the "release"
+# environment is the federated subject; no client secret). Secrets, set by
+# scripts/setup-windows-signing.sh:
+#   AZURE_CLIENT_ID, AZURE_TENANT_ID, AZURE_SUBSCRIPTION_ID   (github-smartloop-signing app)
+#   AZURE_TS_ENDPOINT, AZURE_TS_ACCOUNT, AZURE_TS_PROFILE     (account endpoint, name, profile)
 on:
   push:
     tags: ['v*']
@@ -150,16 +156,92 @@ jobs:
     defaults:
       run:
         shell: bash
+    # The OIDC token's subject is repo:mehfuzh/screenforge:environment:release, which is what the
+    # federated credential on the github-smartloop-signing app registration matches.
+    environment: release
+    permissions:
+      contents: read
+      id-token: write
     env:
       LIBCLANG_PATH: C:\Program Files\LLVM\bin
+      AZURE_TS_ACCOUNT: ${{ secrets.AZURE_TS_ACCOUNT }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - name: Build .zip
+      - name: Require signing secrets for published releases
+        if: ${{ startsWith(github.ref, 'refs/tags/v') || inputs.publish }}
+        env:
+          C: ${{ secrets.AZURE_CLIENT_ID }}
+          T: ${{ secrets.AZURE_TENANT_ID }}
+          S: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          E: ${{ secrets.AZURE_TS_ENDPOINT }}
+          A: ${{ secrets.AZURE_TS_ACCOUNT }}
+          P: ${{ secrets.AZURE_TS_PROFILE }}
+        run: |
+          missing=""
+          [ -n "$C" ] || missing="$missing AZURE_CLIENT_ID"
+          [ -n "$T" ] || missing="$missing AZURE_TENANT_ID"
+          [ -n "$S" ] || missing="$missing AZURE_SUBSCRIPTION_ID"
+          [ -n "$E" ] || missing="$missing AZURE_TS_ENDPOINT"
+          [ -n "$A" ] || missing="$missing AZURE_TS_ACCOUNT"
+          [ -n "$P" ] || missing="$missing AZURE_TS_PROFILE"
+          if [ -n "$missing" ]; then
+            echo "::error::Refusing to publish an unsigned Windows build. Missing secrets:$missing. Run scripts/setup-windows-signing.sh."
+            exit 1
+          fi
+      - name: Azure login (OIDC)
+        if: ${{ env.AZURE_TS_ACCOUNT != '' }}
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      # The OIDC assertion azure/login exchanged is valid for ~5 minutes, but signing happens after
+      # the Rust build. Fetch the code-signing token now so az caches it (~75 min) and the dlib's
+      # AzureCliCredential gets a cache hit at sign time. See https://github.com/Azure/login/issues/180.
+      - name: Pre-fetch Trusted Signing token
+        if: ${{ env.AZURE_TS_ACCOUNT != '' }}
+        run: az account get-access-token --scope https://codesigning.azure.net/.default --output none
+      - name: Set up Azure Trusted Signing
+        if: ${{ env.AZURE_TS_ACCOUNT != '' }}
+        env:
+          AZURE_TS_ENDPOINT: ${{ secrets.AZURE_TS_ENDPOINT }}
+          AZURE_TS_PROFILE: ${{ secrets.AZURE_TS_PROFILE }}
+        run: |
+          TSC="$RUNNER_TEMP/tsc"
+          nuget install Microsoft.Trusted.Signing.Client -Version 1.0.95 -ExcludeVersion -OutputDirectory "$(cygpath -w "$TSC")" >/dev/null
+          DLIB=$(ls "$TSC"/Microsoft.Trusted.Signing.Client/bin/x64/Azure.CodeSigning.Dlib.dll)
+          SIGNTOOL=$(ls "/c/Program Files (x86)/Windows Kits/10/bin/"10.*/x64/signtool.exe | sort -V | tail -1)
+          # ExcludeCredentials: only the Azure CLI session from azure/login can mint a token here; the
+          # managed-identity probe (169.254.169.254) hangs on hosted runners, so skip it.
+          cat > "$TSC/metadata.json" <<JSON
+          {
+            "Endpoint": "$AZURE_TS_ENDPOINT",
+            "CodeSigningAccountName": "$AZURE_TS_ACCOUNT",
+            "CertificateProfileName": "$AZURE_TS_PROFILE",
+            "ExcludeCredentials": [
+              "EnvironmentCredential", "WorkloadIdentityCredential", "ManagedIdentityCredential",
+              "SharedTokenCacheCredential", "VisualStudioCredential", "VisualStudioCodeCredential",
+              "AzurePowerShellCredential", "AzureDeveloperCliCredential", "InteractiveBrowserCredential"
+            ]
+          }
+          JSON
+          { echo "SF_SIGNTOOL=$SIGNTOOL"; echo "SF_SIGN_DLIB=$DLIB"; echo "SF_SIGN_METADATA=$TSC/metadata.json"; } >> "$GITHUB_ENV"
+          echo "signtool: $SIGNTOOL"
+      - name: Build installer and .zip
         run: ./scripts/bundle-windows.sh
         env:
           GH_TOKEN: ${{ github.token }}   # fetch-ffmpeg.sh looks up the newest static ffmpeg
+      - name: Verify signatures
+        if: ${{ env.SF_SIGNTOOL != '' }}
+        shell: pwsh
+        run: |
+          foreach ($f in 'target/windows/ScreenForge/screenforge.exe', 'target/ScreenForge-windows-x86_64-setup.exe') {
+            $sig = Get-AuthenticodeSignature $f
+            Write-Host "${f}: $($sig.Status) - $($sig.SignerCertificate.Subject)"
+            if ($sig.Status -ne 'Valid') { throw "$f signature is $($sig.Status), expected Valid" }
+          }
       - uses: actions/upload-artifact@v4
         with:
           name: windows
