@@ -55,9 +55,10 @@ if [ -n "$ISCC" ] && [ -x "$ISCC" ]; then
   SETUP="target/ScreenForge-$VERSION-windows-$ARCH-setup.exe"
   SIGNARGS=()
   if [ -n "${SF_SIGNTOOL:-}" ]; then
-    # Inno runs this (CreateProcess, so a real exe, not a script) for setup.exe and the uninstaller;
-    # $f is the file. Same signtool invocation as scripts/sign-windows.sh.
-    SIGNARGS=(/DSign "/Ssfsign=\"$(cygpath -w "$SF_SIGNTOOL")\" sign /fd SHA256 /td SHA256 /tr http://timestamp.acs.microsoft.com /dlib \"$(cygpath -w "$SF_SIGN_DLIB")\" /dmdf \"$(cygpath -w "$SF_SIGN_METADATA")\" \$f")
+    # The signtool command line lives in the .iss (SignTool= directive, same invocation as
+    # scripts/sign-windows.sh); /Ssfsign=$p makes Inno run that line as-is. Only plain paths are
+    # passed here: ISCC splits arguments the Delphi way, and embedded quotes break it.
+    SIGNARGS=('/Ssfsign=$p' "/DSignTool=$(cygpath -w "$SF_SIGNTOOL")" "/DSignDlib=$(cygpath -w "$SF_SIGN_DLIB")" "/DSignMeta=$(cygpath -w "$SF_SIGN_METADATA")")
   fi
   MSYS2_ARG_CONV_EXCL="*" "$ISCC" /Q "/DAppVersion=$VERSION" "/DSourceDir=$(cygpath -w "$PWD/$DIR")" "/DOutDir=$(cygpath -w "$PWD/target")" "${SIGNARGS[@]}" scripts/windows-installer.iss
   [ -f "$SETUP" ] || { echo "installer was not written" >&2; exit 1; }
