@@ -592,6 +592,36 @@ fn word_by_word_reveals_progressively() {
 }
 
 #[test]
+fn highlight_captions_colour_the_spoken_word_mid_frame() {
+    let Some(gpu) = gpu() else { return };
+    let f = fixture(false);
+    write_transcript(&f.project, &WORDS);
+    let mut session = Session::open(&f.project, gpu.clone()).unwrap();
+    let mut comp = Compositor::new(gpu);
+    // pixels in rows [y0, y1) (fractions of the height) that the captions turned red
+    let red = |off: &[u8], on: &[u8], w: u32, h: u32, y0: f64, y1: f64| {
+        let row = (w * 4) as usize;
+        let r = (y0 * h as f64) as usize * row..(y1 * h as f64) as usize * row;
+        let is_red = |p: &[u8]| p[0] > 200 && p[1] < 120 && p[2] < 110;
+        off[r.clone()].chunks_exact(4).zip(on[r].chunks_exact(4)).filter(|(a, b)| !is_red(a) && is_red(b)).count()
+    };
+    let (w, h, off) = render_with(&mut session, &mut comp, 1200.0, |c| {
+        c.enable_transcript = false;
+        c.position01.y = 0.5;
+    });
+    let (_, _, boxed) = render_with(&mut session, &mut comp, 1200.0, |c| c.enable_transcript = true);
+    let (_, _, hl) = render_with(&mut session, &mut comp, 1200.0, |c| {
+        c.style = Some("highlight".into());
+        c.font = "heavy".into();
+    });
+    assert_eq!(session.captions.lines.len(), 2, "short lines");
+    assert_eq!(red(&off, &boxed, w, h, 0.3, 0.7), 0);
+    let mid = red(&off, &hl, w, h, 0.3, 0.7);
+    assert!(mid > 20, "spoken word in red: {mid}");
+    assert_eq!(red(&off, &hl, w, h, 0.75, 1.0), 0, "not at the bottom");
+}
+
+#[test]
 fn export_burns_in_captions() {
     let f = fixture(false);
     write_transcript(&f.project, &WORDS);
