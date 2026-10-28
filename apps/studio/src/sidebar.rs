@@ -1938,6 +1938,11 @@ fn unsplash_ui(ed: &mut Editor, ui: &mut egui::Ui) {
             ui.label(RichText::new("on").color(theme::p().text_dim));
             browser_link(ui, "Unsplash", &crate::unsplash::referral(&get("photoUrl").unwrap_or_else(|| "https://unsplash.com/".into())));
         });
+        widgets::hint(ui, "Credit the photographer: put this in the video's description wherever you publish it.");
+        let credit = crate::unsplash::credit(v);
+        if widgets::secondary_button(ui, "Copy credit").on_hover_text(&credit).clicked() {
+            ui.ctx().copy_text(credit);
+        }
         ui.add_space(4.0);
     }
     // the button first, right to left, so the field takes the rest of the row

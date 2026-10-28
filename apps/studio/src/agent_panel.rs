@@ -179,7 +179,9 @@ impl Host for StudioHost {
     fn download_photo(&self, id: &str) -> Result<Value, String> {
         let photo = self.photos.lock().map_err(|_| "busy")?.iter().find(|p| p.id == id).cloned().ok_or("search_photos first: that id is not in the last results")?;
         let applied = crate::unsplash::download_photo(photo, &self.project_dir.join("assets"), &AtomicU32::new(0), &self.ctx)?;
-        Ok(crate::unsplash::background_value(&applied))
+        let mut value = crate::unsplash::background_value(&applied);
+        value["credit"] = json!(crate::unsplash::credit(&value));
+        Ok(value)
     }
 
     fn search_music(&self, query: &str, instrumental: bool) -> Result<Value, String> {

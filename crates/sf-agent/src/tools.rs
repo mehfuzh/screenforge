@@ -247,7 +247,7 @@ fn timeline_definitions() -> Value {
         },
         {
             "name": "use_photo",
-            "description": "Download an Unsplash photo from search_photos into the project and make it the background.",
+            "description": "Download an Unsplash photo from search_photos into the project and make it the background. The result has the credit line for the photographer: always give it to the user and tell them to put it in the video's description wherever they publish it.",
             "input_schema": { "type": "object", "properties": { "id": { "type": "string" } }, "required": ["id"] }
         },
         {
@@ -526,12 +526,14 @@ impl Workspace {
             }
             "use_photo" => {
                 let id = input.get("id").and_then(Value::as_str).ok_or("`id` is required")?;
-                let value = self.host()?.download_photo(id)?;
+                let mut value = self.host()?.download_photo(id)?;
+                // the credit goes to the agent, not into the project file
+                let credit = value.as_object_mut().and_then(|o| o.remove("credit"));
                 let author = value.get("author").and_then(Value::as_str).unwrap_or("Unsplash").to_string();
                 let bg = &mut self.project.config.styles.background;
                 bg.kind = sf_project::v4::background_type::UNSPLASH.into();
                 bg.unsplash = Some(value);
-                Ok(Outcome::edit(json!({ "ok": true }), format!("Background: photo by {author}")))
+                Ok(Outcome::edit(json!({ "ok": true, "credit": credit }), format!("Background: photo by {author}")))
             }
             "search_music" => {
                 let q = input.get("query").and_then(Value::as_str).unwrap_or("");
