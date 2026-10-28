@@ -56,14 +56,16 @@ pub fn title_words(content: &str) -> Vec<(String, bool, usize)> {
     let mut accent = false;
     for (line, text) in content.lines().enumerate() {
         for raw in text.split_whitespace() {
+            // a `*` opens the accent at the start of a word and closes it anywhere after, so
+            // punctuation may follow the closing star (`*IA*.`, `*success*,`)
             let opens = raw.starts_with('*');
-            let closes = raw.len() > 1 && raw.ends_with('*') || (raw == "*" && accent);
-            let word = raw.trim_matches('*');
+            let closes = raw.char_indices().any(|(i, c)| c == '*' && (i > 0 || (raw == "*" && accent)));
+            let word: String = raw.chars().filter(|c| *c != '*').collect();
             if opens {
                 accent = true;
             }
             if !word.is_empty() {
-                out.push((word.to_string(), accent, line));
+                out.push((word, accent, line));
             }
             if closes {
                 accent = false;
@@ -282,6 +284,9 @@ mod tests {
             accents,
             [("The", false, 0), ("probability", true, 0), ("of", false, 0), ("success.", true, 0), ("What", false, 1), ("worked", true, 1), ("last", true, 1), ("time", false, 1)]
         );
+        // punctuation after the closing star stays with the word, without the star
+        let es: Vec<(String, bool)> = title_words("Edita videos con *IA*. Solo *pídelo*, ya").into_iter().map(|(t, a, _)| (t, a)).collect();
+        assert_eq!(es, [("Edita".into(), false), ("videos".into(), false), ("con".into(), false), ("IA.".into(), true), ("Solo".into(), false), ("pídelo,".into(), true), ("ya".into(), false)]);
     }
 
     #[test]
