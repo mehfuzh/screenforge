@@ -40,6 +40,11 @@ ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 ChangesAssociations=yes
 LicenseFile={#SourceDir}\LICENSE.txt
+#ifdef Sign
+; /Ssfsign=... is passed by bundle-windows.sh (Azure Trusted Signing via scripts/sign-windows.cmd)
+SignTool=sfsign
+SignedUninstaller=yes
+#endif
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"

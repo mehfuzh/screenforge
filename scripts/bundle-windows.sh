@@ -21,6 +21,8 @@ cp "$BIN" "$DIR/screenforge.exe"
 FFDIR=$(./scripts/fetch-ffmpeg.sh)
 cp "$FFDIR/ffmpeg.exe" "$FFDIR/ffprobe.exe" "$DIR/"
 cp "$FFDIR/LICENSE.txt" "$DIR/FFMPEG-LICENSE.txt"
+# Authenticode (Azure Trusted Signing); no-op without SF_SIGNTOOL, see scripts/sign-windows.sh
+./scripts/sign-windows.sh "$DIR/screenforge.exe" "$DIR/ffmpeg.exe" "$DIR/ffprobe.exe"
 cp -R assets "$DIR/assets"
 cp LICENSE "$DIR/LICENSE.txt"
 cat > "$DIR/README.txt" <<TXT
@@ -51,7 +53,12 @@ for c in "$ISCC" "/c/Program Files (x86)/Inno Setup 6/ISCC.exe" "$LOCALAPPDATA/P
 done
 if [ -n "$ISCC" ] && [ -x "$ISCC" ]; then
   SETUP="target/ScreenForge-$VERSION-windows-$ARCH-setup.exe"
-  MSYS2_ARG_CONV_EXCL="*" "$ISCC" /Q "/DAppVersion=$VERSION" "/DSourceDir=$(cygpath -w "$PWD/$DIR")" "/DOutDir=$(cygpath -w "$PWD/target")" scripts/windows-installer.iss
+  SIGNARGS=()
+  if [ -n "${SF_SIGNTOOL:-}" ]; then
+    # Inno runs this for setup.exe and the uninstaller; $f is the file (sign-windows.sh wrapped for cmd)
+    SIGNARGS=(/DSign "/Ssfsign=\"$(cygpath -w "$PWD/scripts/sign-windows.cmd")\" \$f")
+  fi
+  MSYS2_ARG_CONV_EXCL="*" "$ISCC" /Q "/DAppVersion=$VERSION" "/DSourceDir=$(cygpath -w "$PWD/$DIR")" "/DOutDir=$(cygpath -w "$PWD/target")" "${SIGNARGS[@]}" scripts/windows-installer.iss
   [ -f "$SETUP" ] || { echo "installer was not written" >&2; exit 1; }
   cp "$SETUP" "target/ScreenForge-windows-$ARCH-setup.exe"
   echo "$SETUP"
