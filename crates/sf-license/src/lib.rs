@@ -19,7 +19,6 @@ use chrono::{NaiveDate, Utc};
 use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::OnceLock;
 
 /// Public key of the ScreenForge license issuer (replace with yours before shipping;
@@ -28,6 +27,8 @@ pub const ISSUER_PUBLIC_KEY_B64: &str = "fq9T9G8fJeZSPJtnjCsgO1V0BzXYds8UxAqAEji
 
 pub const PRICE_LABEL: &str = "US$49 once";
 pub const PRICE_LIFETIME: &str = "US$49 once";
+/// Pro: export and the AI agent (a monthly key, renewed while subscribed).
+pub const PRICE_PRO: &str = "US$20/month";
 pub const PURCHASE_URL: &str = "https://screenforge.studio/pricing.html";
 
 /// Supabase project hosting the edge functions in `backend/` (see backend/README.md).
@@ -285,42 +286,6 @@ pub fn key_file() -> Option<std::path::PathBuf> {
     Some(std::path::PathBuf::from(home).join("Library/Application Support/ScreenForge/license.key"))
 }
 
-/// Exports allowed without a license.
-///
-/// The count is kept in two places: a file next to the key (works offline) and a row on the
-/// backend keyed by a hash of the machine's hardware UUID ([`device_id`]). Deleting the app or
-/// its support folder resets the file but not the backend row, so the next sync restores the
-/// count. The higher of the two wins.
-pub const FREE_EXPORTS: u32 = 3;
-
-/// Count the backend reports for this device (0 until [`sync_free_exports`] has run).
-static SERVER_FREE_EXPORTS: AtomicU32 = AtomicU32::new(0);
-
-fn free_exports_file() -> Option<std::path::PathBuf> {
-    key_file().map(|p| p.with_file_name("free-exports"))
-}
-
-fn local_free_exports_used() -> u32 {
-    free_exports_file().and_then(|p| std::fs::read_to_string(p).ok()).and_then(|s| s.trim().parse().ok()).unwrap_or(0)
-}
-
-fn write_local_free_exports(n: u32) -> std::io::Result<()> {
-    let p = free_exports_file().ok_or_else(|| std::io::Error::other("no home dir"))?;
-    std::fs::create_dir_all(p.parent().unwrap())?;
-    std::fs::write(p, n.to_string())
-}
-
-/// How many free exports have been used on this machine: the local file or the backend's
-/// count for this device, whichever is higher.
-pub fn free_exports_used() -> u32 {
-    local_free_exports_used().max(SERVER_FREE_EXPORTS.load(Ordering::Relaxed))
-}
-
-/// Free exports still available.
-pub fn free_exports_left() -> u32 {
-    FREE_EXPORTS.saturating_sub(free_exports_used())
-}
-
 /// Stable, anonymous identifier for this machine: SHA-256 of the platform UUID
 /// (`IOPlatformUUID` on macOS, `/etc/machine-id` on Linux, `MachineGuid` on Windows), hex.
 /// The raw UUID never leaves the machine. `None` when the platform offers none.
@@ -352,41 +317,6 @@ fn parse_ioreg_uuid(text: &str) -> Option<String> {
 
 fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
-}
-
-/// Ask the backend how many free exports this device has used and reconcile with the local
-/// file. Blocking (network); call from a background thread. Silently a no-op offline or when
-/// the device has no identifier, in which case the local file alone counts.
-pub fn sync_free_exports() {
-    let Some(device) = device_id() else { return };
-    let Ok(v) = call_function("free-export", serde_json::json!({ "device": device, "v": 2 })) else { return };
-    if let Some(used) = v.get("used").and_then(|u| u.as_u64()) {
-        reconcile_server_count(used as u32);
-    }
-}
-
-fn reconcile_server_count(server: u32) {
-    SERVER_FREE_EXPORTS.fetch_max(server, Ordering::Relaxed);
-    if server > local_free_exports_used() {
-        let _ = write_local_free_exports(server);
-    }
-}
-
-/// Count one more free export: the local file right away, the backend row for this device in
-/// the background. Fails only when the local file cannot be written.
-pub fn record_free_export() -> std::io::Result<()> {
-    let n = free_exports_used() + 1;
-    write_local_free_exports(n)?;
-    if let Some(device) = device_id() {
-        std::thread::spawn(move || {
-            if let Ok(v) = call_function("free-export", serde_json::json!({ "device": device, "record": true, "v": 2 })) {
-                if let Some(used) = v.get("used").and_then(|u| u.as_u64()) {
-                    reconcile_server_count(used as u32);
-                }
-            }
-        });
-    }
-    Ok(())
 }
 
 pub fn load_saved() -> Option<String> {
@@ -496,13 +426,5 @@ mod tests {
         assert_eq!(a.len(), 64);
         assert_eq!(a, hex(&Sha256::digest("abc".as_bytes())));
         assert_ne!(a, hex(&Sha256::digest("abd".as_bytes())));
-    }
-
-    #[test]
-    fn server_count_wins_when_higher() {
-        SERVER_FREE_EXPORTS.store(0, Ordering::Relaxed);
-        SERVER_FREE_EXPORTS.fetch_max(2, Ordering::Relaxed);
-        assert!(free_exports_used() >= 2);
-        assert_eq!(free_exports_left(), FREE_EXPORTS.saturating_sub(free_exports_used()));
     }
 }

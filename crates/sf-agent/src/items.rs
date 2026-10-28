@@ -6,7 +6,7 @@ use serde_json::{json, Value};
 use sf_engine::timeline::Timeline;
 use sf_project::schema::common::Rect;
 use sf_project::v4::{Layout, Mask};
-use sf_project::{MusicClip, SceneAudioExt, SceneMusicExt};
+use sf_project::{MusicClip, SceneAudioExt, SceneMusicExt, SceneTracksExt, Track, TrackKind};
 
 use crate::tools::{clock, num, opt_num, Outcome, Workspace};
 
@@ -82,12 +82,12 @@ pub fn definitions() -> Vec<Value> {
         }),
         json!({
             "name": "remove",
-            "description": "Delete items by id (zooms, masks, camera layouts, voice-overs, music parts, audio clips), or every item of one kind.",
+            "description": "Delete items by id (zooms, masks, camera layouts, voice-overs, music parts, audio clips, titles, overlays), or every item of one kind.",
             "input_schema": {
                 "type": "object",
                 "properties": {
                     "ids": { "type": "array", "items": { "type": "string" } },
-                    "all": { "type": "string", "enum": ["zooms", "masks", "layouts", "voice_overs", "music", "audio_clips"] }
+                    "all": { "type": "string", "enum": ["zooms", "masks", "layouts", "voice_overs", "music", "audio_clips", "titles", "overlays"] }
                 }
             }
         }),
@@ -369,8 +369,16 @@ impl Workspace {
         let scene = &mut self.project.scenes[0];
         let mut audio = scene.audio_clips();
         let mut n = 0;
+        let mut tracks = scene.tracks();
+        let clip_count = |t: &[Track]| t.iter().map(|t| t.clips.len()).sum::<usize>();
         if let Some(all) = input.get("all").and_then(Value::as_str) {
             n = match all {
+                "titles" | "overlays" => {
+                    let text = all == "titles";
+                    let before = clip_count(&tracks);
+                    tracks.retain(|t| !t.is_visual() || (t.kind == TrackKind::Text) != text);
+                    before - clip_count(&tracks)
+                }
                 "zooms" => std::mem::take(&mut scene.zooms).len(),
                 "masks" => std::mem::take(&mut scene.masks).len(),
                 "layouts" => std::mem::take(&mut scene.layouts).len(),
@@ -394,7 +402,13 @@ impl Workspace {
                 sf_project::audio_clips::compact_layers(a);
             }
             n += before - (scene.zooms.len() + scene.masks.len() + scene.layouts.len() + scene.voice_overs.len() + music.len() + audio.as_ref().map_or(0, Vec::len));
+            for id in &ids {
+                if sf_project::tracks::remove_clip(&mut tracks, id) {
+                    n += 1;
+                }
+            }
         }
+        scene.set_tracks(tracks);
         if n == 0 {
             return Err("nothing matched: check the ids with get_project".into());
         }

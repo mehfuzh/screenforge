@@ -153,8 +153,7 @@ pub fn export_cancellable(session: &mut Session, comp: &mut Compositor, opts: &E
             anyhow::bail!("cancelled");
         }
         let t = start + i as f64 * frame_ms;
-        let desc = session.frame_desc_at(t, out)?;
-        comp.render(&desc);
+        session.render(comp, t, out)?;
         let px = comp.read_pixels()?;
         writer.write_frame(&px)?;
         progress(Progress { frame: i + 1, total_frames, output_ms: t });

@@ -232,7 +232,8 @@ pub fn clips_from_slices(scene: &Scene, tracks: &[AudioTrack]) -> Vec<AudioClip>
     let mut cursor = 0.0;
     for s in &scene.slices {
         let ts = if s.time_scale > 0.0 { s.time_scale } else { 1.0 };
-        for t in tracks {
+        // a title card has no recorded audio
+        for t in tracks.iter().filter(|_| !s.is_card()) {
             let vol = match t {
                 AudioTrack::Microphone => s.volume,
                 AudioTrack::SystemAudio => s.system_audio_volume,
@@ -241,7 +242,7 @@ pub fn clips_from_slices(scene: &Scene, tracks: &[AudioTrack]) -> Vec<AudioClip>
             c.volume = vol;
             out.push(c);
         }
-        cursor += s.source_duration_ms() * ts;
+        cursor += s.output_duration_ms();
     }
     out
 }

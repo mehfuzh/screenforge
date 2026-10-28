@@ -7,6 +7,8 @@
 //   5 blurred texture region tinted toward `color` (sensitive-data mask)
 //   6 dim `dst` by `color` except inside the `stops` rects (highlight mask)
 //   7 disc + ring (click effect): `extra.x` radius, `extra.y` ring width, `color` fill, `stops[0]` edge
+//   8 premultiplied texture with rounded corners (overlays, titles, held frames), blurred by
+//     `extra.xy` (uv radius) when non-zero
 
 struct Params {
     out_size: vec2<f32>,
@@ -263,6 +265,15 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
         let fa = disc * (1.0 - e) * P.color.a;
         let a = (e + fa) * P.alpha;
         return vec4<f32>((edge.rgb * e + P.color.rgb * fa) * P.alpha, a);
+    }
+    if (P.mode == 8u) {
+        var s: vec4<f32>;
+        if (P.extra.x > 0.0 || P.extra.y > 0.0) {
+            s = blurred(tuv, in.px);
+        } else {
+            s = textureSample(tex, samp, tuv);
+        }
+        return s * coverage * P.alpha;
     }
     // mode 1
     let s = textureSample(tex, samp, tuv);

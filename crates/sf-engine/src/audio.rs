@@ -77,8 +77,9 @@ pub fn audio_spans(scene: &Scene, tracks: &[AudioTrack], audio: &AudioConfig) ->
     let mut cursor = 0.0;
     for s in &scene.slices {
         let ts = if s.time_scale > 0.0 { s.time_scale } else { 1.0 };
-        let out_len = s.source_duration_ms() * ts;
-        for t in tracks {
+        let out_len = s.output_duration_ms();
+        // a title card plays no recorded audio
+        for t in tracks.iter().filter(|_| !s.is_card()) {
             let vol = match t {
                 AudioTrack::Microphone => s.volume,
                 AudioTrack::SystemAudio => s.system_audio_volume,

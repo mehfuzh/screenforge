@@ -315,6 +315,180 @@ pub fn rasterize_caption(c: &CaptionText) -> Option<TextImage> {
     Some(TextImage { width: w as u32, height: h as u32, rgba })
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Align {
+    Left,
+    Center,
+    Right,
+}
+
+impl Align {
+    pub fn from_name(s: &str) -> Self {
+        match s {
+            "center" | "centre" => Align::Center,
+            "right" => Align::Right,
+            _ => Align::Left,
+        }
+    }
+}
+
+/// One word of a title.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TitleWord {
+    pub text: String,
+    /// Drawn in [`TitleText::accent`].
+    pub accent: bool,
+    /// Index of the written line it belongs to (long lines also wrap).
+    pub line: usize,
+    pub alpha: f32,
+    /// Blur radius in px (0 = sharp).
+    pub blur_px: f32,
+}
+
+/// A title: lines of words, some in the accent colour, and an optional smaller subtitle.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TitleText {
+    pub words: Vec<TitleWord>,
+    pub subtitle: Vec<String>,
+    pub family: FontFamily,
+    pub size_px: f32,
+    pub color: Color,
+    pub accent: Color,
+    pub subtitle_color: Color,
+    pub subtitle_alpha: f32,
+    pub align: Align,
+    pub shadow: bool,
+    /// Lines wrap at this width.
+    pub max_width_px: f32,
+    /// Clear border around the text, room for blur and shadow.
+    pub pad_px: f32,
+}
+
+/// Subtitle size and line spacing relative to the title size.
+const SUBTITLE_SCALE: f32 = 0.42;
+const TITLE_LEADING: f32 = 1.12;
+const SUBTITLE_LEADING: f32 = 1.35;
+
+/// Rasterise a title. The image is the text block plus `pad_px` on every side; lines are
+/// aligned inside it by `align`. `None` when there is nothing to draw.
+pub fn rasterize_title(t: &TitleText) -> Option<TextImage> {
+    if (t.words.is_empty() && t.subtitle.is_empty()) || t.size_px < 2.0 {
+        return None;
+    }
+    let fonts = t.family.fonts();
+    if fonts.is_empty() {
+        return None;
+    }
+    let title = Shaper { fonts: fonts.clone(), scale: PxScale::from(t.size_px) };
+    let sub = Shaper { fonts, scale: PxScale::from(t.size_px * SUBTITLE_SCALE) };
+    let max_w = t.max_width_px.max(t.size_px * 2.0);
+
+    // greedy wrap: (word index, x) per visual line, plus each line's width
+    let space = title.space();
+    let mut lines: Vec<(Vec<(usize, f32)>, f32)> = vec![];
+    let mut cur: Vec<(usize, f32)> = vec![];
+    let mut x = 0.0f32;
+    let mut written = t.words.first().map(|w| w.line).unwrap_or(0);
+    for (i, w) in t.words.iter().enumerate() {
+        let ww = title.word_width(&w.text);
+        if !cur.is_empty() && (w.line != written || x + space + ww > max_w) {
+            lines.push((std::mem::take(&mut cur), x));
+            x = 0.0;
+        }
+        written = w.line;
+        let at = if cur.is_empty() { 0.0 } else { x + space };
+        cur.push((i, at));
+        x = at + ww;
+    }
+    if !cur.is_empty() {
+        lines.push((cur, x));
+    }
+    let sub_lines: Vec<(&str, f32)> = t.subtitle.iter().map(|l| (l.as_str(), sub.word_width(l))).collect();
+
+    let title_lh = t.size_px * TITLE_LEADING;
+    let sub_lh = t.size_px * SUBTITLE_SCALE * SUBTITLE_LEADING;
+    let gap = if lines.is_empty() || sub_lines.is_empty() { 0.0 } else { t.size_px * 0.3 };
+    let block_w = lines.iter().map(|l| l.1).chain(sub_lines.iter().map(|l| l.1)).fold(0.0f32, f32::max);
+    let block_h = lines.len() as f32 * title_lh + gap + sub_lines.len() as f32 * sub_lh;
+    let pad = t.pad_px.max(0.0);
+    let (w, h) = ((block_w + 2.0 * pad).ceil().max(1.0) as usize, (block_h + 2.0 * pad).ceil().max(1.0) as usize);
+    let line_x = |lw: f32| pad + match t.align {
+        Align::Left => 0.0,
+        Align::Center => (block_w - lw) / 2.0,
+        Align::Right => block_w - lw,
+    };
+
+    let mut rgba = vec![0u8; w * h * 4];
+    let mut shadow = t.shadow.then(|| vec![0f32; w * h]);
+    // draw `text` at (x, baseline) into a small buffer, blur it, and composite it
+    let mut put = |shaper: &Shaper, text: &str, x: f32, baseline: f32, col: Color, alpha: f32, blur: f32| {
+        if alpha <= 0.0 {
+            return;
+        }
+        let r = (blur * 0.5).round() as usize;
+        let m = r * 3 + 2;
+        let (x0, y0) = ((x.floor() as i64 - m as i64).max(0) as usize, ((baseline - shaper.ascent()).floor() as i64 - m as i64).max(0) as usize);
+        let (bw, bh) = ((shaper.word_width(text).ceil() as usize + 2 * m + 2).min(w - x0.min(w)), (shaper.line_height().ceil() as usize + 2 * m + 2).min(h - y0.min(h)));
+        if bw == 0 || bh == 0 {
+            return;
+        }
+        let mut cov = vec![0f32; bw * bh];
+        shaper.draw(text, x - x0 as f32, baseline - y0 as f32, &mut cov, bw, bh);
+        if r > 0 {
+            for _ in 0..3 {
+                box_blur(&mut cov, bw, bh, r);
+            }
+        }
+        for yy in 0..bh {
+            for xx in 0..bw {
+                let a = cov[yy * bw + xx] * alpha * col.a;
+                if a <= 0.0 {
+                    continue;
+                }
+                let i = (y0 + yy) * w + x0 + xx;
+                if let Some(sh) = shadow.as_mut() {
+                    sh[i] = sh[i].max(a);
+                }
+                let p = &mut rgba[i * 4..i * 4 + 4];
+                for (k, ch) in [col.r, col.g, col.b].into_iter().enumerate() {
+                    p[k] = (ch * a * 255.0 + p[k] as f32 * (1.0 - a)).round().min(255.0) as u8;
+                }
+                p[3] = (a * 255.0 + p[3] as f32 * (1.0 - a)).round().min(255.0) as u8;
+            }
+        }
+    };
+    let mut y = pad;
+    for (line, lw) in &lines {
+        let base = y + (title_lh - title.line_height()) / 2.0 + title.ascent();
+        for (i, wx) in line {
+            let word = &t.words[*i];
+            put(&title, &word.text, line_x(*lw) + wx, base, if word.accent { t.accent } else { t.color }, word.alpha, word.blur_px);
+        }
+        y += title_lh;
+    }
+    y += gap;
+    for (text, lw) in &sub_lines {
+        let base = y + (sub_lh - sub.line_height()) / 2.0 + sub.ascent();
+        put(&sub, text, line_x(*lw), base, t.subtitle_color, t.subtitle_alpha, 0.0);
+        y += sub_lh;
+    }
+    if let Some(mut sh) = shadow {
+        // a soft shadow under everything drawn, composited behind the letters
+        let r = (t.size_px * 0.06).round().max(1.0) as usize;
+        for _ in 0..2 {
+            box_blur(&mut sh, w, h, r);
+        }
+        for (i, a) in sh.iter().enumerate() {
+            let a = (a * 1.4).min(1.0) * 0.6;
+            let p = &mut rgba[i * 4..i * 4 + 4];
+            let top = p[3] as f32 / 255.0;
+            let under = a * (1.0 - top);
+            p[3] = ((top + under) * 255.0).round().min(255.0) as u8;
+        }
+    }
+    Some(TextImage { width: w as u32, height: h as u32, rgba })
+}
+
 /// Blur `buf` (`w`×`h`) with a `(2r+1)`-wide box, horizontally then vertically.
 fn box_blur(buf: &mut [f32], w: usize, h: usize, r: usize) {
     let mut tmp = vec![0f32; buf.len()];
@@ -518,6 +692,54 @@ mod tests {
         assert!((w * 3 / 4..w * 3 / 4 + 4).any(|x| red(at(x, row))) || (0..h).any(|y| red(at(w * 3 / 4, y))));
         assert!((w / 2..w).flat_map(|x| (0..h).map(move |y| (x, y))).any(|(x, y)| at(x, y).iter().take(3).all(|v| *v > 230)), "white text on the box");
         assert!(!(0..w / 3).flat_map(|x| (0..h).map(move |y| (x, y))).any(|(x, y)| red(at(x, y))));
+    }
+
+    fn title(words: &[(&str, bool, usize)]) -> TitleText {
+        TitleText {
+            words: words.iter().map(|(t, a, l)| TitleWord { text: t.to_string(), accent: *a, line: *l, alpha: 1.0, blur_px: 0.0 }).collect(),
+            subtitle: vec![],
+            family: FontFamily::Sans,
+            size_px: 48.0,
+            color: Color::WHITE,
+            accent: Color::from_hex("#8ea2ff").unwrap(),
+            subtitle_color: Color::from_hex("#a1a1aa").unwrap(),
+            subtitle_alpha: 1.0,
+            align: Align::Left,
+            shadow: false,
+            max_width_px: 4000.0,
+            pad_px: 10.0,
+        }
+    }
+
+    #[test]
+    fn titles_draw_lines_accents_and_a_subtitle() {
+        let one = rasterize_title(&title(&[("Every", false, 0), ("move", true, 0)])).unwrap();
+        let two = rasterize_title(&title(&[("Every", false, 0), ("move", true, 1)])).unwrap();
+        assert!(two.height > one.height + 40 && two.width < one.width, "{}x{} vs {}x{}", one.width, one.height, two.width, two.height);
+        // accent pixels are bluish: blue clearly above red
+        let blue = one.rgba.chunks_exact(4).filter(|p| p[3] > 200 && p[2] as i32 - p[0] as i32 > 60).count();
+        assert!(blue > 50, "accent pixels {blue}");
+        let mut t = title(&[("Every", false, 0)]);
+        t.subtitle = vec!["simulated, then predicted".into()];
+        let with_sub = rasterize_title(&t).unwrap();
+        assert!(with_sub.height > one.height);
+        // a narrow width wraps the words
+        let mut narrow = title(&[("Every", false, 0), ("move", false, 0), ("simulated", false, 0)]);
+        narrow.max_width_px = 200.0;
+        assert!(rasterize_title(&narrow).unwrap().height > one.height + 40);
+    }
+
+    #[test]
+    fn hidden_and_blurred_words() {
+        let sharp = rasterize_title(&title(&[("Hello", false, 0)])).unwrap();
+        let mut t = title(&[("Hello", false, 0)]);
+        t.words[0].blur_px = 8.0;
+        let soft = rasterize_title(&t).unwrap();
+        let solid = |img: &TextImage| img.rgba.chunks_exact(4).filter(|p| p[3] > 240).count();
+        assert_eq!((soft.width, soft.height), (sharp.width, sharp.height), "blur does not move the layout");
+        assert!(solid(&soft) * 3 < solid(&sharp), "{} vs {}", solid(&soft), solid(&sharp));
+        t.words[0].alpha = 0.0;
+        assert!(rasterize_title(&t).unwrap().rgba.chunks_exact(4).all(|p| p[3] == 0));
     }
 
     fn keys(k: &[&str]) -> KeyCaps {

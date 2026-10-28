@@ -1035,8 +1035,53 @@ pub struct Slice {
     pub external_device_audio_volume: f64,
     pub hide_cursor: bool,
     pub disable_smooth_mouse_movement: bool,
+    /// ScreenForge extension: how the previous clip hands over to this one (from black for
+    /// the first clip). `None` = a hard cut.
+    #[serde(default, rename = "sfTransition", skip_serializing_if = "Option::is_none")]
+    pub transition: Option<Transition>,
+    /// ScreenForge extension: a title card, a clip that shows only a background (and the titles
+    /// over it) for its own length instead of the recording. Its source range is empty, at the
+    /// start of the clip after it.
+    #[serde(default, rename = "sfCard", skip_serializing_if = "Option::is_none")]
+    pub card: Option<Card>,
     #[serde(flatten)]
     pub extra: Extra,
+}
+
+/// A title card's length and background.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Card {
+    pub duration_ms: f64,
+    /// `#rrggbb`; `None` = the project's background (wallpaper, gradient or colour).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub background: Option<String>,
+}
+
+impl Card {
+    /// New cards are a plain dark fill, so the title reads whatever the project's wallpaper.
+    pub const DEFAULT_FILL: &'static str = "#0f1220";
+    pub const DEFAULT_MS: f64 = 3000.0;
+    pub const MIN_MS: f64 = 500.0;
+}
+
+/// A transition into a slice. The last frame of the previous clip is held and blended into
+/// the start of this one, so the timeline keeps its length.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Transition {
+    /// `crossfade` | `fade-black` (dip to black) | `blur` (the old shot blurs away).
+    pub kind: String,
+    pub duration_ms: f64,
+}
+
+impl Transition {
+    pub const KINDS: [&'static str; 3] = ["crossfade", "fade-black", "blur"];
+    pub const DEFAULT_MS: f64 = 500.0;
+
+    pub fn new(kind: &str) -> Self {
+        Transition { kind: kind.into(), duration_ms: Self::DEFAULT_MS }
+    }
 }
 
 impl Slice {
@@ -1051,8 +1096,20 @@ impl Slice {
             external_device_audio_volume: 1.0,
             hide_cursor: false,
             disable_smooth_mouse_movement: false,
+            transition: None,
+            card: None,
             extra: Extra::new(),
         }
+    }
+
+    /// A title card `duration_ms` long, anchored at source time `anchor_ms` (the start of the
+    /// clip after it, so that clip's first frame is ready when the card hands over).
+    pub fn card(anchor_ms: f64, duration_ms: f64) -> Self {
+        Slice { card: Some(Card { duration_ms: duration_ms.max(Card::MIN_MS), background: None }), ..Self::new(anchor_ms, anchor_ms) }
+    }
+
+    pub fn is_card(&self) -> bool {
+        self.card.is_some()
     }
 
     pub fn source_duration_ms(&self) -> f64 {
@@ -1062,7 +1119,10 @@ impl Slice {
     /// Duration on the output timeline. Screen Studio's `timeScale` multiplies source time:
     /// a slice with `timeScale: 0.5` plays in half the time (2× speed).
     pub fn output_duration_ms(&self) -> f64 {
-        self.source_duration_ms() * self.time_scale
+        match &self.card {
+            Some(c) => c.duration_ms.max(0.0),
+            None => self.source_duration_ms() * if self.time_scale > 0.0 { self.time_scale } else { 1.0 },
+        }
     }
 }
 

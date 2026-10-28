@@ -29,12 +29,14 @@ pub mod preset;
 pub mod recording;
 pub mod schema;
 pub mod superjson;
+pub mod tracks;
 pub mod transcript;
 
 pub use package::{ImportProgress, ProjectPackage, PACKAGE_EXTENSION, PRESET_EXTENSION, SCREEN_STUDIO_EXTENSION, SCREEN_STUDIO_PRESET_EXTENSION};
 pub use preset::Preset;
 pub use audio_clips::{AudioClip, AudioTrack, SceneAudioExt};
 pub use music_clips::{MusicClip, SceneMusicExt};
+pub use tracks::{Clip, ClipAnim, MediaItem, MediaKind, SceneTracksExt, TextStyle, Track, TrackKind};
 pub use schema::v4::{self as v4, Project};
 
 #[derive(Debug, thiserror::Error)]

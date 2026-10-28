@@ -303,12 +303,11 @@ fn frame(path: &std::path::Path, at_ms: f64, out: &std::path::Path, height: u32)
     let fps = 60.0;
     let warm = (at_ms - 2000.0).max(0.0);
     let mut t = warm;
-    let mut desc = None;
-    while t <= at_ms + 1e-6 {
-        desc = Some(session.frame_desc_at(t, size)?);
+    while t < at_ms {
+        session.frame_desc_at(t, size)?;
         t += 1000.0 / fps;
     }
-    comp.render(&desc.unwrap());
+    session.render(&mut comp, at_ms, size)?;
     let px = comp.read_pixels()?;
     image::save_buffer(out, &px, size.width, size.height, image::ColorType::Rgba8)?;
     println!("wrote {} ({}x{})", out.display(), size.width, size.height);

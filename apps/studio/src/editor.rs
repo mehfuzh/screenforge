@@ -15,6 +15,68 @@ use crate::timeline::TimelineWidget;
 use crate::crop;
 use crate::widgets;
 
+/// A button of the preview's tool rail.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum RailTool {
+    TitleCard,
+    AutoZooms,
+    Mask,
+    Title,
+    Media,
+    Transition,
+    VoiceOver,
+}
+
+/// The rail's buttons: only things added at the playhead (settings live in the sidebar), in
+/// groups (what goes on screen; editing the video; recording), most used first. The "More
+/// tools" menu takes them from the bottom on a short window. A single zoom is added from the
+/// zoom lane, its menu or the sidebar.
+const RAIL_TOOLS: [RailTool; 6] = [RailTool::Title, RailTool::Media, RailTool::Transition, RailTool::Mask, RailTool::AutoZooms, RailTool::VoiceOver];
+/// A divider follows these buttons on the rail.
+const RAIL_GROUP_ENDS: [RailTool; 2] = [RailTool::Media, RailTool::AutoZooms];
+
+/// What the Text button offers.
+const TEXT_CHOICES: [RailTool; 2] = [RailTool::Title, RailTool::TitleCard];
+
+impl RailTool {
+    fn icon(self) -> widgets::Icon {
+        match self {
+            RailTool::AutoZooms => widgets::Icon::Sparkle,
+            RailTool::Mask => widgets::Icon::Mask,
+            RailTool::Title => widgets::Icon::Text,
+            RailTool::TitleCard => widgets::Icon::TitleCard,
+            RailTool::Media => widgets::Icon::Media,
+            RailTool::Transition => widgets::Icon::Transition,
+            RailTool::VoiceOver => widgets::Icon::Mic,
+        }
+    }
+
+    /// Name in the "More tools" menu.
+    fn label(self) -> &'static str {
+        match self {
+            RailTool::AutoZooms => "Automatic zooms",
+            RailTool::Mask => "Blur mask",
+            RailTool::Title => "Title over the video",
+            RailTool::TitleCard => "Title card",
+            RailTool::Media => "Image or video",
+            RailTool::Transition => "Transition",
+            RailTool::VoiceOver => "Voice-over",
+        }
+    }
+
+    fn tooltip(self) -> &'static str {
+        match self {
+            RailTool::AutoZooms => "Automatic zooms from clicks",
+            RailTool::Mask => "Add blur mask at playhead (M)",
+            RailTool::Title => "A title over the video at the playhead (T)",
+            RailTool::TitleCard => "A blank clip with a title, before the clip at the playhead",
+            RailTool::Media => "Add image or video over the recording (I)",
+            RailTool::Transition => "Add transition at the nearest cut",
+            RailTool::VoiceOver => "Voice-over (R)",
+        }
+    }
+}
+
 pub struct Editor {
     /// Opened straight after recording: closing asks whether to keep it.
     pub fresh_recording: bool,
@@ -35,6 +97,13 @@ pub struct Editor {
     pub selected_mask: Option<String>,
     /// Mask region being dragged on the preview.
     pub mask_drag: Option<crate::masks::RegionDrag>,
+    /// Frames drawn since the project opened, until the window has been grown to fit the
+    /// whole tool rail (once; see `fit_window_to_rail`).
+    rail_fit_frames: u8,
+    /// Selected title or overlay (clip id in `sfTracks`).
+    pub selected_clip: Option<String>,
+    /// Drags and typing in progress on titles and overlays.
+    pub layers: crate::layers::LayerUi,
     /// Selected detached audio clip (id).
     pub selected_audio: Option<String>,
     /// Selected background music clip (id); ⌫ removes it, or the music with its last clip.
@@ -136,6 +205,9 @@ impl Editor {
             selected_slice: None,
             selected_zoom: None,
             selected_mask: None,
+            selected_clip: None,
+            rail_fit_frames: 0,
+            layers: Default::default(),
             mask_drag: None,
             selected_audio: None,
             selected_music: None,
@@ -236,9 +308,44 @@ impl Editor {
         self.after_edit();
     }
 
+    /// Bring the sidebar's inspector into view: the Agent page has none, so it moves to the
+    /// General page, and a hidden sidebar opens.
+    pub fn show_inspector(&mut self) {
+        if self.section == Section::Agent {
+            self.section = Section::General;
+        }
+        self.sidebar_open = true;
+    }
+
+    /// Select a title or overlay (and nothing else), with its settings in the sidebar.
+    pub fn select_clip(&mut self, id: String) {
+        if self.selected_clip.as_deref() != Some(id.as_str()) {
+            self.show_inspector();
+        }
+        self.selected_clip = Some(id);
+        self.selected_mask = None;
+        self.selected_zoom = None;
+        self.selected_slice = None;
+        self.selected_audio = None;
+        self.selected_music = None;
+        self.selected_voice_over = None;
+    }
+
+    /// Select clip `index` of the main track (and nothing else).
+    pub fn select_slice(&mut self, index: usize) {
+        self.selected_slice = Some(index);
+        self.selected_clip = None;
+        self.selected_mask = None;
+        self.selected_zoom = None;
+        self.selected_audio = None;
+        self.selected_music = None;
+        self.selected_voice_over = None;
+    }
+
     /// Select a mask (and nothing else).
     pub fn select_mask(&mut self, id: String) {
         self.selected_mask = Some(id);
+        self.selected_clip = None;
         self.selected_zoom = None;
         self.selected_slice = None;
         self.selected_audio = None;
@@ -374,6 +481,7 @@ impl Editor {
 
     /// Select a background music clip (and nothing else).
     pub fn select_music(&mut self, id: String) {
+        self.selected_clip = None;
         self.selected_music = Some(id);
         self.selected_zoom = None;
         self.selected_slice = None;
@@ -480,12 +588,12 @@ impl Editor {
     /// Microphone rows for the voice-over menus: the system default, then each microphone.
     pub fn voice_mic_rows(&mut self, ui: &mut egui::Ui) {
         let mics = self.voice_mics.get_or_insert_with(crate::voice_over::microphones).clone();
-        if ui.selectable_label(self.voice_mic.is_none(), crate::voice_over::default_label(&mics)).clicked() {
+        if crate::widgets::menu_item(ui, self.voice_mic.is_none(), crate::voice_over::default_label(&mics)).clicked() {
             self.voice_mic = None;
         }
         // Linux lists the system default as its own entry: that is the row above
         for m in mics.iter().filter(|m| m.id != "default") {
-            if ui.selectable_label(self.voice_mic.as_ref().is_some_and(|v| v.id == m.id), &m.name).clicked() {
+            if crate::widgets::menu_item(ui, self.voice_mic.as_ref().is_some_and(|v| v.id == m.id), &m.name).clicked() {
                 self.voice_mic = Some(m.clone());
             }
         }
@@ -570,6 +678,7 @@ impl Editor {
 
     /// Select a voice-over (and nothing else).
     pub fn select_voice_over(&mut self, id: String) {
+        self.selected_clip = None;
         self.selected_voice_over = Some(id);
         self.selected_zoom = None;
         self.selected_slice = None;
@@ -657,10 +766,14 @@ impl Editor {
         self.preview_size = if self.crop.is_some() { self.session.source_size(height) } else { self.session.output_size(height) };
         // while a sped-up clip plays, decode only the frames that will be shown
         self.session.decode_speed = if self.playing { self.session.timeline.speed_at_output(self.playhead_ms) } else { 1.0 };
-        let desc = if self.crop.is_some() { self.session.source_frame_desc_at(self.playhead_ms, self.preview_size) } else { self.session.frame_desc_at(self.playhead_ms, self.preview_size) };
-        match desc {
-            Ok(desc) => {
-                self.compositor.render(&desc);
+        let rendered = if self.crop.is_some() {
+            self.session.source_frame_desc_at(self.playhead_ms, self.preview_size).map(|desc| self.compositor.render(&desc))
+        } else {
+            // through the session, so a transition finds the frame it blends from
+            self.session.render(&mut self.compositor, self.playhead_ms, self.preview_size)
+        };
+        match rendered {
+            Ok(()) => {
                 self.last_rendered_ms = Some(self.playhead_ms);
             }
             Err(e) => {
@@ -771,12 +884,19 @@ impl Editor {
         let mut layer_delta = 0i32;
         let mut record = false;
         let mut agent = false;
+        let mut tool: Option<RailTool> = None;
         ctx.input_mut(|i| {
             agent = i.consume_key(egui::Modifiers::COMMAND, egui::Key::L);
             if i.consume_key(egui::Modifiers::ALT, egui::Key::ArrowDown) { layer_delta = 1; }
             if i.consume_key(egui::Modifiers::ALT, egui::Key::ArrowUp) { layer_delta = -1; }
             toggle = i.consume_key(egui::Modifiers::NONE, egui::Key::Space);
             record = i.consume_key(egui::Modifiers::NONE, egui::Key::R);
+            // the rail's tools: T title, I image or video, M mask
+            for (key, t) in [(egui::Key::T, RailTool::Title), (egui::Key::I, RailTool::Media), (egui::Key::M, RailTool::Mask)] {
+                if i.consume_key(egui::Modifiers::NONE, key) {
+                    tool = Some(t);
+                }
+            }
             if i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowLeft) { self.playhead_ms = (self.playhead_ms - frame).max(0.0); }
             if i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowRight) { self.playhead_ms = (self.playhead_ms + frame).min(self.duration_ms()); }
             if i.consume_key(egui::Modifiers::SHIFT, egui::Key::ArrowLeft) { self.playhead_ms = (self.playhead_ms - 1000.0).max(0.0); }
@@ -802,6 +922,7 @@ impl Editor {
         });
         if toggle { self.toggle_play(); }
         if record && self.voice_rec.is_none() { self.start_voice_over(); }
+        if let Some(t) = tool { self.run_rail_tool(t); }
         if split { self.split_at_playhead(); }
         if del { self.delete_selected(); }
         if undo { self.undo(); }
@@ -903,14 +1024,123 @@ impl Editor {
             self.set_status("Removed mask");
             return;
         }
+        if let Some(id) = self.selected_clip.clone() {
+            crate::layers::remove(self, &id);
+            return;
+        }
         if let Some(i) = self.selected_slice.take() {
-            if self.session.pkg.project.scenes[0].slices.len() > 1 {
+            let slices = &self.session.pkg.project.scenes[0].slices;
+            if slices.get(i).is_some_and(|s| s.is_card()) {
+                crate::layers::remove_card(self, i);
+            } else if slices.iter().filter(|s| !s.is_card()).count() > 1 {
                 self.edit(|p| {
                     let s = &mut p.scenes[0];
                     s.slices = sf_engine::timeline::edit::delete(&s.slices, i);
                 });
                 self.set_status("Deleted clip");
             }
+        }
+    }
+
+    /// Once, a few frames after the project opens (when the window has its editor size and
+    /// the lanes are laid out): when the rail's buttons do not all fit beside the preview and
+    /// the screen has room, make the window taller by what is missing and centre it again.
+    /// The user's own resizing is left alone afterwards.
+    fn fit_window_to_rail(&mut self, ctx: &egui::Context, stage_h: f32, rail_h: f32) {
+        const SETTLE_FRAMES: u8 = 6;
+        if self.rail_fit_frames > SETTLE_FRAMES {
+            return;
+        }
+        self.rail_fit_frames += 1;
+        if self.rail_fit_frames <= SETTLE_FRAMES || stage_h >= rail_h {
+            return;
+        }
+        let (inner, mon) = ctx.input(|i| (i.viewport().inner_rect, i.viewport().monitor_size));
+        let (Some(inner), Some(mon)) = (inner, mon) else { return };
+        // the menu bar and a little air above and below
+        let h = (inner.height() + rail_h - stage_h).min(mon.y - 80.0);
+        if h > inner.height() + 1.0 {
+            ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize([inner.width(), h].into()));
+            ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition([inner.left(), ((mon.y - h) / 2.0 - 10.0).max(25.0)].into()));
+        }
+    }
+
+    /// Tooltip of a rail button (the voice-over one says what a click does now).
+    fn rail_tooltip(&self, t: RailTool) -> &'static str {
+        match t {
+            RailTool::VoiceOver if self.voice_rec.is_some() => "Stop voice-over (Space)",
+            RailTool::VoiceOver => "Voice-over (R)",
+            t => t.tooltip(),
+        }
+    }
+
+    fn run_rail_tool(&mut self, t: RailTool) {
+        match t {
+            RailTool::AutoZooms => {
+                let zooms = self.session.auto_zooms();
+                self.edit(move |p| p.scenes[0].zooms = zooms);
+                self.set_status("Generated automatic zooms");
+            }
+            RailTool::Mask => crate::masks::add_at_playhead(self),
+            RailTool::Title => crate::layers::add_title(self),
+            RailTool::TitleCard => {
+                let index = self.session.timeline.span_at_output(self.playhead_ms).map(|s| s.index).unwrap_or(0);
+                crate::layers::add_card(self, index);
+            }
+            RailTool::Media => crate::layers::add_media(self),
+            RailTool::Transition => crate::layers::add_transition(self),
+            RailTool::VoiceOver => {
+                if self.voice_rec.is_some() {
+                    self.stop_voice_over();
+                } else if self.voice_hud {
+                    self.voice_hud = false;
+                } else {
+                    self.open_voice_over_hud();
+                }
+            }
+        }
+    }
+
+    /// The rail's buttons in `slots` places: every tool when they fit, else the first ones and
+    /// a "More tools" arrow last, whose menu lists the rest.
+    fn rail_buttons(&mut self, ui: &mut egui::Ui, slots: usize) {
+        let shown = if slots >= RAIL_TOOLS.len() { RAIL_TOOLS.len() } else { slots.saturating_sub(1) };
+        let mut run = None;
+        // the Text button offers both kinds of title, as editors' Text tools do
+        let choices = |t: RailTool| if t == RailTool::Title { &TEXT_CHOICES[..] } else { std::slice::from_ref(&RAIL_TOOLS[RAIL_TOOLS.iter().position(|r| *r == t).unwrap_or(0)]) };
+        for t in &RAIL_TOOLS[..shown] {
+            let on = *t == RailTool::VoiceOver && (self.voice_rec.is_some() || self.voice_hud);
+            let tip = if *t == RailTool::Title { "Text (T)" } else { self.rail_tooltip(*t) };
+            let b = widgets::rail_icon(ui, t.icon(), on, tip);
+            // a thin divider in the gap after the last button of a group (not after the last shown)
+            if RAIL_GROUP_ENDS.contains(t) && RAIL_TOOLS[..shown].last() != Some(t) {
+                let y = b.rect.bottom() + ui.spacing().item_spacing.y / 2.0;
+                ui.painter().line_segment([pos2(b.rect.left() + 8.0, y), pos2(b.rect.right() - 8.0, y)], Stroke::new(1.0, theme::p().border));
+            }
+            if *t == RailTool::Title {
+                egui::Popup::menu(&b).show(|ui| {
+                    for k in &TEXT_CHOICES {
+                        if widgets::icon_text_button(ui, Some(k.icon()), k.label(), false).on_hover_text(self.rail_tooltip(*k)).clicked() {
+                            run = Some(*k);
+                        }
+                    }
+                });
+            } else if b.clicked() {
+                run = Some(*t);
+            }
+        }
+        if shown < RAIL_TOOLS.len() {
+            let more = widgets::rail_icon(ui, widgets::Icon::ChevronDown, false, "More tools");
+            egui::Popup::menu(&more).show(|ui| {
+                for k in RAIL_TOOLS[shown..].iter().flat_map(|t| choices(*t)) {
+                    if widgets::icon_text_button(ui, Some(k.icon()), k.label(), false).on_hover_text(self.rail_tooltip(*k)).clicked() {
+                        run = Some(*k);
+                    }
+                }
+            });
+        }
+        if let Some(t) = run {
+            self.run_rail_tool(t);
         }
     }
 
@@ -1011,7 +1241,7 @@ impl Editor {
                         }
                     }
                     ui.add_space(6.0);
-                    widgets::icon_button(ui, widgets::Icon::Command, 16.0, "Shortcuts: Space play · S split · R record voice-over · ⌥↑↓ audio layer · ⌫ delete · ⌘Z undo · ⌘S save · ⌘⇧E export · [ ] jump cuts · ⌘1…⌘0 sidebar · ⌘L agent · ⌘\\ toggle sidebar");
+                    widgets::icon_button(ui, widgets::Icon::Command, 16.0, "Shortcuts: Space play · S split · R record voice-over · T title · I image or video · M mask · ⌥↑↓ audio layer · ⌫ delete · ⌘Z undo · ⌘S save · ⌘⇧E export · [ ] jump cuts · ⌘1…⌘0 sidebar · ⌘L agent · ⌘\\ toggle sidebar");
                     if let Some((s, t)) = &self.status {
                         if t.elapsed().as_secs() < 4 {
                             ui.label(RichText::new(s).color(theme::p().text_dim));
@@ -1081,6 +1311,9 @@ impl Editor {
                     if crate::masks::ui(self, ui, img_rect) {
                         self.invalidate_preview();
                     }
+                    if crate::layers::preview_ui(self, ui, img_rect) {
+                        self.invalidate_preview();
+                    }
                     if resp.clicked() {
                         self.toggle_play();
                     }
@@ -1089,36 +1322,20 @@ impl Editor {
             } else {
                 ui.painter().text(stage.center(), Align2::CENTER_CENTER, "Rendering…", FontId::proportional(14.0), theme::p().text_dim);
             }
-            // floating tool rail (left)
-            let rail = Rect::from_min_size(pos2(stage.left() + 4.0, stage.center().y - 134.0), vec2(56.0, 268.0));
-            ui.painter().rect(rail, CornerRadius::same(14), theme::p().card, Stroke::new(1.0, theme::p().border), egui::StrokeKind::Inside);
-            let mut rail_ui = ui.new_child(egui::UiBuilder::new().max_rect(rail.shrink2(vec2(8.0, 10.0))).layout(egui::Layout::top_down(egui::Align::Center)));
-            rail_ui.spacing_mut().item_spacing.y = 8.0;
-            if widgets::rail_icon(&mut rail_ui, widgets::Icon::Zoom, false, "Add zoom at playhead (3 s)").clicked() {
-                let t = self.playhead_ms;
-                let src = self.session.timeline.output_to_source(t).unwrap_or(0.0);
-                self.edit(move |p| p.scenes[0].zooms.push(sf_project::v4::Zoom::auto(src, src + 3000.0, sf_project::v4::Zoom::DEFAULT_LEVEL)));
-            }
-            if widgets::rail_icon(&mut rail_ui, widgets::Icon::Sparkle, false, "Automatic zooms from clicks").clicked() {
-                let zooms = self.session.auto_zooms();
-                self.edit(move |p| p.scenes[0].zooms = zooms);
-                self.set_status("Generated automatic zooms");
-            }
-            if widgets::rail_icon(&mut rail_ui, widgets::Icon::Layout, false, "Camera layout").clicked() {
-                self.section = Section::CameraLayout;
-            }
-            if widgets::rail_icon(&mut rail_ui, widgets::Icon::Mask, false, "Add blur mask at playhead").clicked() {
-                crate::masks::add_at_playhead(self);
-            }
-            let recording = self.voice_rec.is_some();
-            if widgets::rail_icon(&mut rail_ui, widgets::Icon::Mic, recording || self.voice_hud, if recording { "Stop voice-over (Space)" } else { "Voice-over (R)" }).clicked() {
-                if recording {
-                    self.stop_voice_over();
-                } else if self.voice_hud {
-                    self.voice_hud = false;
-                } else {
-                    self.open_voice_over_hud();
-                }
+            // floating tool rail (left): one column of the buttons that fit beside the preview;
+            // on a short window the last place is a "More tools" arrow with the rest in a menu,
+            // and with no room for a single button the rail hides
+            let (icon, gap, pad) = (40.0, 8.0, 10.0);
+            let slots = ((stage.height() - 8.0 - 2.0 * pad + gap) / (icon + gap)).floor().max(0.0) as usize;
+            let slots = slots.min(RAIL_TOOLS.len());
+            self.fit_window_to_rail(ui.ctx(), stage.height(), RAIL_TOOLS.len() as f32 * (icon + gap) - gap + 2.0 * pad + 8.0);
+            if slots > 0 {
+                let h = slots as f32 * (icon + gap) - gap + 2.0 * pad;
+                let rail = Rect::from_min_size(pos2(stage.left() + 4.0, (stage.center().y - h / 2.0).max(stage.top() + 4.0)), vec2(56.0, h));
+                ui.painter().rect(rail, CornerRadius::same(14), theme::p().card, Stroke::new(1.0, theme::p().border), egui::StrokeKind::Inside);
+                let mut rail_ui = ui.new_child(egui::UiBuilder::new().max_rect(rail.shrink2(vec2(8.0, pad))).layout(egui::Layout::top_down(egui::Align::Center)));
+                rail_ui.spacing_mut().item_spacing.y = gap;
+                self.rail_buttons(&mut rail_ui, slots);
             }
             if self.voice_hud || self.voice_rec.is_some() {
                 self.voice_over_hud(ui, stage);
@@ -1510,7 +1727,7 @@ impl Editor {
                 ui.set_min_width(220.0);
                 for (label, preset) in sf_project::schema::common::AspectRatio::PRESETS {
                     let value = preset.map(|(w, h)| sf_project::schema::common::AspectRatio::ratio(w, h)).unwrap_or(sf_project::schema::common::AspectRatio::AUTO);
-                    if ui.selectable_label(aspect == value, *label).clicked() {
+                    if crate::widgets::menu_item(ui, aspect == value, *label).clicked() {
                         self.edit(move |p| p.config.output.aspect_ratio = value);
                         ui.close();
                     }
@@ -1537,23 +1754,26 @@ impl Editor {
                 }
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if widgets::icon_button(ui, widgets::Icon::Zoom, 16.0, "Preview size +").clicked() {
+                // the same margin as before Auto on the left
+                ui.add_space(8.0);
+                if widgets::toolbar_icon_button(ui, widgets::Icon::Zoom, "Preview size +").clicked() {
                     self.preview_scale = (self.preview_scale * 1.15).min(3.0);
                 }
-                if ui.add(egui::Button::new(RichText::new("−").size(16.0)).frame(false)).on_hover_text("Preview size −").clicked() {
+                if widgets::toolbar_icon_button(ui, widgets::Icon::ZoomOut, "Preview size −").clicked() {
                     self.preview_scale = (self.preview_scale / 1.15).max(0.5);
                 }
                 let q = match self.preview_quality {
                     PreviewQuality::Full => "Full",
                     PreviewQuality::Performance => "Performance",
                 };
-                let b = widgets::icon_text_button(ui, Some(widgets::Icon::Gear), &format!("Preview quality  {q}"), true);
+                let b = widgets::icon_text_button(ui, Some(widgets::Icon::Gear), q, true).on_hover_text("Preview quality");
                 egui::Popup::menu(&b).show(|ui| {
-                    if ui.selectable_label(self.preview_quality == PreviewQuality::Full, "Full").clicked() {
+                    ui.label(RichText::new("Preview quality").small().color(theme::p().text_dim));
+                    if crate::widgets::menu_item(ui, self.preview_quality == PreviewQuality::Full, "Full").clicked() {
                         self.preview_quality = PreviewQuality::Full;
                         self.invalidate_preview();
                     }
-                    if ui.selectable_label(self.preview_quality == PreviewQuality::Performance, "Performance").clicked() {
+                    if crate::widgets::menu_item(ui, self.preview_quality == PreviewQuality::Performance, "Performance").clicked() {
                         self.preview_quality = PreviewQuality::Performance;
                         self.invalidate_preview();
                     }

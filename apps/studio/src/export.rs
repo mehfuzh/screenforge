@@ -49,10 +49,6 @@ pub struct ExportDialog {
     /// A code was emailed for this address; the dialog asks for it.
     code_sent_to: Option<String>,
     code: String,
-    /// User opened the license section while free exports remain.
-    show_license: bool,
-    /// The free-export count was reconciled with the backend since the dialog last opened.
-    free_exports_synced: bool,
     progress: Option<sf_export::Progress>,
     result: Option<Result<PathBuf, String>>,
     started: Option<std::time::Instant>,
@@ -63,13 +59,13 @@ pub struct ExportDialog {
 /// that loads the license and talks to the backend.
 impl Default for ExportDialog {
     fn default() -> Self {
-        ExportDialog { open: false, license: sf_license::Status::Invalid("no key".into()), email: String::new(), activation: None, check_in: None, activation_msg: None, code_sent_to: None, code: String::new(), show_license: false, free_exports_synced: false, format: Format::Mp4, fps: 60.0, height: 1080, quality: QualityPreset::SocialMedia, codec: VideoCodec::H264, audio: true, job: None, progress: None, result: None, started: None }
+        ExportDialog { open: false, license: sf_license::Status::Invalid("no key".into()), email: String::new(), activation: None, check_in: None, activation_msg: None, code_sent_to: None, code: String::new(), format: Format::Mp4, fps: 60.0, height: 1080, quality: QualityPreset::SocialMedia, codec: VideoCodec::H264, audio: true, job: None, progress: None, result: None, started: None }
     }
 }
 
 impl ExportDialog {
     /// The dialog for a newly opened editor: loads the saved license and starts the one quiet
-    /// check-in with the backend (or the free-export count sync without a license).
+    /// check-in with the backend.
     pub fn new() -> Self {
         let license_key = sf_license::load_saved().unwrap_or_default();
         let license = if license_key.is_empty() { sf_license::Status::Invalid("no key".into()) } else { sf_license::verify(&license_key) };
@@ -86,9 +82,6 @@ impl ExportDialog {
         } else {
             None
         };
-        if !license.is_valid() {
-            std::thread::spawn(sf_license::sync_free_exports);
-        }
         ExportDialog { license, email, check_in, ..Default::default() }
     }
 }
@@ -106,20 +99,6 @@ impl ExportDialog {
 
     /// Drain background messages (export progress, activation) and handle Escape.
     pub fn poll(&mut self, ctx: &egui::Context) {
-        // each time the dialog opens, pick up free exports used on this device from elsewhere
-        // (a previous install, a wiped support folder) before the count is shown
-        if self.open && !self.free_exports_synced {
-            self.free_exports_synced = true;
-            if !self.license.is_valid() {
-                let ctx = ctx.clone();
-                std::thread::spawn(move || {
-                    sf_license::sync_free_exports();
-                    ctx.request_repaint();
-                });
-            }
-        } else if !self.open {
-            self.free_exports_synced = false;
-        }
         if let Some(rx) = &self.check_in {
             match rx.try_recv() {
                 Ok(r) => {
@@ -128,8 +107,8 @@ impl ExportDialog {
                     // the key file was renewed or removed: read it again
                     self.license = sf_license::load_saved().map(|k| sf_license::verify(&k)).unwrap_or_else(|| sf_license::Status::Invalid("no key".into()));
                     if matches!(r, Ok(Some(false))) && had_valid && !self.license.is_valid() {
+                        // the license form shows whenever there is no valid license
                         self.activation_msg = Some((false, "This license was moved to another computer. Press Activate to move it back here.".into()));
-                        self.show_license = true;
                     }
                 }
                 Err(std::sync::mpsc::TryRecvError::Empty) => ctx.request_repaint_after(std::time::Duration::from_millis(500)),
@@ -176,9 +155,6 @@ impl ExportDialog {
                 match m {
                     Msg::Progress(p) => self.progress = Some(p),
                     Msg::Done(r) => {
-                        if r.is_ok() && !self.license.is_valid() {
-                            let _ = sf_license::record_free_export();
-                        }
                         // a cancelled export just returns to the dialog
                         self.result = match r {
                             Err(e) if e.contains("cancelled") => None,
@@ -269,23 +245,9 @@ impl ExportDialog {
     pub fn settings_ui(&mut self, ed: &mut Editor, ui: &mut egui::Ui) {
             ui.label(RichText::new("Export").size(18.0).strong());
             ui.add_space(4.0);
-            let left = sf_license::free_exports_left();
-            if !self.license.is_valid() && left > 0 && !self.show_license {
-                // free exports remain: one line, no form
-                ui.horizontal(|ui| {
-                    widgets::hint(ui, &format!("{left} of {} free exports left.", sf_license::FREE_EXPORTS));
-                    if ui.link(RichText::new("Get a license").size(12.5).color(theme::p().accent_hover)).clicked() {
-                        self.show_license = true;
-                    }
-                });
-            }
-            if !self.license.is_valid() && (left == 0 || self.show_license) {
+            if !self.license.is_valid() {
                 widgets::title(ui, "License");
-                if left > 0 {
-                    widgets::hint(ui, &format!("{left} free exports left. A license removes the limit ({}).", sf_license::PRICE_LABEL));
-                } else {
-                    widgets::hint(ui, &format!("Your {} free exports are used up. Exporting needs a ScreenForge license ({}).", sf_license::FREE_EXPORTS, sf_license::PRICE_LABEL));
-                }
+                widgets::hint(ui, "Recording and editing are free; exporting needs Pro or Creator.");
                 ui.add_space(4.0);
                 ui.label("Email used at checkout");
                 ui.add_space(2.0);
@@ -299,7 +261,7 @@ impl ExportDialog {
                     widgets::text_field(ui, &mut self.code, "123456");
                 }
                 ui.add_space(8.0);
-                ui.horizontal(|ui| {
+                ui.horizontal_wrapped(|ui| {
                     let busy = self.activation.is_some();
                     let start = |this: &mut Self, f: Box<dyn FnOnce() -> Result<sf_license::Activation, String> + Send>| {
                         let (tx, rx) = channel();
@@ -322,14 +284,18 @@ impl ExportDialog {
                         let email = self.email.clone();
                         start(self, Box::new(move || sf_license::activate(&email, true)));
                     }
-                    if widgets::accent_button(ui, &format!("Buy · {}", sf_license::PRICE_LIFETIME)).clicked() {
+                    // both ways to export: Pro with the agent, or Creator for export alone
+                    if widgets::accent_button(ui, &format!("Pro · {}", sf_license::PRICE_PRO)).on_hover_text("Unlimited export and the AI agent with 1,000 credits a month").clicked() {
+                        open_checkout(&self.email, "pro");
+                    }
+                    if widgets::secondary_button(ui, &format!("Creator · {}", sf_license::PRICE_LIFETIME)).on_hover_text("Unlimited export, without the AI agent").clicked() {
                         open_checkout(&self.email, "lifetime");
                     }
                 });
                 if let Some((ok, msg)) = &self.activation_msg {
                     ui.colored_label(if *ok { theme::p().accent_hover } else { theme::p().danger }, msg);
                 }
-                widgets::hint(ui, "After paying, press Activate: we email you a code to confirm this computer, then the key is stored on it. Nothing to copy. A license works on one computer at a time; activating another computer moves it there.");
+                widgets::hint(ui, "After paying, press Activate: we email you a code to confirm this computer, then the key is stored on it. Nothing to copy. It works on one computer at a time; activating another computer moves it there.");
                 ui.add_space(6.0);
                 ui.separator();
             }
@@ -383,7 +349,7 @@ impl ExportDialog {
             ui.add_space(6.0);
             ui.horizontal(|ui| {
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    let licensed = self.license.is_valid() || sf_license::free_exports_left() > 0;
+                    let licensed = self.license.is_valid();
                     let btn = ui.add_enabled_ui(licensed, |ui| widgets::accent_button(ui, "Export to file…")).inner;
                     if btn.clicked() {
                         let ext = match (self.format, self.codec) {

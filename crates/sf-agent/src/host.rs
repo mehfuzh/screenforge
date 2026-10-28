@@ -39,6 +39,12 @@ pub trait Host: Send + Sync {
     fn screen_motion(&self) -> Result<Vec<(f64, f64, crate::motion::Motion)>, String>;
     /// JPEG stills of the screen video at source times (ms), one per time.
     fn screen_frames(&self, source_ms: &[f64]) -> Result<Vec<Vec<u8>>, String>;
+    /// Copy the image or video at `path` into the project's media folder and describe it
+    /// (a video with its length), for an overlay.
+    fn import_media(&self, path: &str) -> Result<sf_project::tracks::MediaItem, String> {
+        let _ = path;
+        Err("adding images and videos over the recording is not available here".into())
+    }
     /// Read `text` aloud with AI voice `voice` (a [`VOICES`] id) at `speed`, saved in the
     /// project's voice-over folder with its words for captions.
     fn speak(&self, text: &str, voice: &str, speed: f64) -> Result<Spoken, String> {
@@ -96,7 +102,8 @@ Audio: /config/audio: muteMicrophone, volume (microphone) 0–2, microphoneAudio
 Animations: /config/animations/screenMovementSpring {stiffness 5–600, damping 5–200, mass 0.1–15} (zoom camera), mouseMovementSpring (same, or null for raw cursor), motionBlurAmount 0–1; /config/zooms/startAnimationEarly, sfZoomOnTyping (zoom follows typing; absent = on).
 Crop: /config/crop/rect01 {x, y, width, height} 0–1 of the recording.
 Device frame (a phone or tablet around the recording; tall recordings stand upright, wide ones lie on their side): /config/device/frameKey = one of options.deviceFrames, or null for none (also set /config/device/enableMockup true).
-Per clip (index from get_project): /scenes/0/slices/<i>/hideCursor, disableSmoothMouseMovement, volume.
+Per clip (index from get_project): /scenes/0/slices/<i>/hideCursor, disableSmoothMouseMovement, volume. Transitions between clips: set_transition, not by hand.
+Titles and overlay images or videos: add_title, add_overlay, update_clip, remove_clip, not by hand.
 Project name: /name.";
 
 /// `get_options`: the host's catalogs plus what every project offers.
