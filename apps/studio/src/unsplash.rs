@@ -271,8 +271,27 @@ pub fn background_value(a: &Applied) -> serde_json::Value {
     })
 }
 
+/// The credit to paste into a video description for an Unsplash background (`value` as from
+/// [`background_value`]): the photographer and the photo, each with its link.
+pub fn credit(value: &serde_json::Value) -> String {
+    let get = |k: &str| value.get(k).and_then(|v| v.as_str()).filter(|s| !s.is_empty());
+    let mut s = format!("Photo by {}", get("author").unwrap_or("an Unsplash photographer"));
+    if let Some(url) = get("authorUrl") {
+        s += &format!(" ({})", referral(url));
+    }
+    s += &format!(" on Unsplash ({})", referral(get("photoUrl").unwrap_or("https://unsplash.com/")));
+    s
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn credit_names_the_photographer() {
+        let v = serde_json::json!({ "author": "Ann", "authorUrl": "https://unsplash.com/@ann", "photoUrl": "https://unsplash.com/photos/abc" });
+        assert_eq!(super::credit(&v), "Photo by Ann (https://unsplash.com/@ann?utm_source=screenforge&utm_medium=referral) on Unsplash (https://unsplash.com/photos/abc?utm_source=screenforge&utm_medium=referral)");
+        assert_eq!(super::credit(&serde_json::json!({})), "Photo by an Unsplash photographer on Unsplash (https://unsplash.com/?utm_source=screenforge&utm_medium=referral)");
+    }
+
     #[test]
     fn ids_and_links_are_sanitised() {
         assert_eq!(super::safe_id("a/../b_C-9"), "ab_C-9");

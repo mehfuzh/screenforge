@@ -731,7 +731,7 @@ mod tests {
             Ok(json!([{ "id": "p1", "description": "mountains" }]))
         }
         fn download_photo(&self, id: &str) -> Result<Value, String> {
-            Ok(json!({ "image": format!("unsplash-{id}.jpg"), "id": id, "author": "Ann" }))
+            Ok(json!({ "image": format!("unsplash-{id}.jpg"), "id": id, "author": "Ann", "credit": "Photo by Ann on Unsplash" }))
         }
         fn import_file(&self, path: &str) -> Result<String, String> {
             Ok(path.rsplit('/').next().unwrap().to_string())
@@ -764,9 +764,11 @@ mod tests {
         assert!(v["settings"].as_str().unwrap().contains("/config/output/paddingRatio01"));
         assert!(v["gradients"].as_array().is_some_and(|g| !g.is_empty()));
         w.run("search_photos", &json!({ "query": "mountains" })).unwrap();
-        w.run("use_photo", &json!({ "id": "p1" })).unwrap();
+        let o = w.run("use_photo", &json!({ "id": "p1" })).unwrap();
+        assert!(o.result.contains("Photo by Ann on Unsplash"), "the credit goes back to the agent");
         let bg = &w.project.config.styles.background;
         assert_eq!((bg.kind.as_str(), bg.unsplash.as_ref().unwrap()["image"].as_str()), ("unsplash", Some("unsplash-p1.jpg")));
+        assert!(bg.unsplash.as_ref().unwrap().get("credit").is_none(), "the credit is not saved in the project");
         w.run("import_file", &json!({ "path": "/Users/me/song.mp3", "use_as": "music" })).unwrap();
         assert_eq!(w.project.config.audio.background_audio_file_name.as_deref(), Some("song.mp3"));
         let v: Value = serde_json::from_str(&w.run("search_music", &json!({ "query": "calm" })).unwrap().result).unwrap();
