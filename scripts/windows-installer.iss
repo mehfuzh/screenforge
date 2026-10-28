@@ -41,7 +41,7 @@ ArchitecturesInstallIn64BitMode=x64compatible
 ChangesAssociations=yes
 LicenseFile={#SourceDir}\LICENSE.txt
 #ifdef Sign
-; /Ssfsign=... is passed by bundle-windows.sh (Azure Trusted Signing via scripts/sign-windows.cmd)
+; /Ssfsign=... is passed by bundle-windows.sh (signtool + Azure Trusted Signing dlib)
 SignTool=sfsign
 SignedUninstaller=yes
 #endif
