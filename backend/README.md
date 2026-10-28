@@ -59,8 +59,9 @@ functions with `--no-verify-jwt`, or keep JWT verification: the anon key is sent
 
 Every export needs a license; there are no free exports since v0.1.40. Releases up to v0.1.39
 allowed three without one and still call `free-export` (`{ device }` when the export dialog opens,
-`{ device, record: true }` after an unlicensed export), so the function and the `free_exports`
-table stay deployed until those versions are gone. Newer versions never call it.
+`{ device, record: true }` after an unlicensed export). The function now answers every device with
+`{ used: 3 }`, without touching the database, so those versions find their free exports used up
+too. Newer versions never call it; the `free_exports` table is no longer written.
 
 ## Unsplash backgrounds
 
