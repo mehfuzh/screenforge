@@ -266,7 +266,7 @@ impl Section {
     }
 }
 
-fn cfg_slider(ed: &mut Editor, ui: &mut egui::Ui, label: &str, get: impl Fn(&sf_project::Project) -> f64, set: impl Fn(&mut sf_project::Project, f64), range: std::ops::RangeInclusive<f64>, default: Option<f64>, suffix: &str) {
+pub(crate) fn cfg_slider(ed: &mut Editor, ui: &mut egui::Ui, label: &str, get: impl Fn(&sf_project::Project) -> f64, set: impl Fn(&mut sf_project::Project, f64), range: std::ops::RangeInclusive<f64>, default: Option<f64>, suffix: &str) {
     let mut v = get(&ed.session.pkg.project);
     let r = widgets::labeled_slider(ui, label, &mut v, range, default, suffix);
     if r.response.changed() || r.reset {
@@ -307,6 +307,17 @@ pub fn ui(ed: &mut Editor, ui: &mut egui::Ui, section: Section) {
         }
         if ed.selected_mask.is_some() {
             mask_item_ui(ed, ui);
+            ui.add_space(12.0);
+            ui.separator();
+        }
+        if ed.selected_clip.is_some() {
+            crate::layers::clip_item_ui(ed, ui);
+            ui.add_space(12.0);
+            ui.separator();
+        }
+        if ed.selected_slice.is_some() {
+            crate::layers::card_item_ui(ed, ui);
+            crate::layers::transition_item_ui(ed, ui);
             ui.add_space(12.0);
             ui.separator();
         }
@@ -1435,7 +1446,7 @@ fn audio_ui(ed: &mut Editor, ui: &mut egui::Ui) {
         let mut categories: Vec<String> = library.iter().filter_map(|n| n.split('/').next().map(str::to_string)).collect();
         categories.dedup();
         let none_sel = current.is_none();
-        if ui.selectable_label(none_sel, if part.is_some() { "None (delete this part)" } else { "None" }).clicked() && !none_sel {
+        if crate::widgets::menu_item(ui, none_sel, if part.is_some() { "None (delete this part)" } else { "None" }).clicked() && !none_sel {
             match &part {
                 Some(_) => ed.delete_selected(),
                 None => ed.remove_music(),
@@ -1455,7 +1466,7 @@ fn audio_ui(ed: &mut Editor, ui: &mut egui::Ui) {
                 for track in library.iter().filter(|n| n.starts_with(&format!("{cat}/"))) {
                     let label = sf_session::assets::background_audio_label(track);
                     let sel = current.as_deref().is_some_and(|c| sf_session::assets::background_audio_key(c) == sf_session::assets::background_audio_key(track));
-                    if ui.selectable_label(sel, label).clicked() && !sel {
+                    if crate::widgets::menu_item(ui, sel, label).clicked() && !sel {
                         picked = Some(track.clone());
                     }
                 }

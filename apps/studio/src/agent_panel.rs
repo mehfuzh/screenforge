@@ -228,6 +228,18 @@ impl Host for StudioHost {
     fn speak(&self, text: &str, voice: &str, speed: f64) -> Result<sf_agent::host::Spoken, String> {
         crate::narration::speak_into(&self.project_dir, text, voice, speed)
     }
+
+    fn import_media(&self, path: &str) -> Result<sf_project::tracks::MediaItem, String> {
+        let src = PathBuf::from(path.trim());
+        let src = match src.strip_prefix("~") {
+            Ok(rest) => std::env::var_os("HOME").map(|h| PathBuf::from(h).join(rest)).unwrap_or(src.clone()),
+            Err(_) => src,
+        };
+        if !src.is_file() {
+            return Err(format!("no file at {}", src.display()));
+        }
+        crate::layers::import(&self.project_dir, &src)
+    }
 }
 
 /// Signing in (or switching account) with the emailed code, as Export → Activate does.

@@ -412,11 +412,11 @@ impl Picker {
         // inputs
         let cam_label = self.camera.as_ref().and_then(|id| self.inputs.cameras.iter().find(|c| &c.id == id)).map(|c| c.name.clone()).unwrap_or_else(|| "No camera".into());
         let cam_menu = input_menu(ui, widgets::Icon::Camera, &cam_label, self.camera.is_some(), |ui| {
-            if ui.selectable_label(self.camera.is_none(), "Don't record camera").clicked() {
+            if crate::widgets::menu_item(ui, self.camera.is_none(), "Don't record camera").clicked() {
                 self.camera = None;
             }
             for c in &self.inputs.cameras {
-                if ui.selectable_label(self.camera.as_deref() == Some(&c.id), &c.name).clicked() {
+                if crate::widgets::menu_item(ui, self.camera.as_deref() == Some(&c.id), &c.name).clicked() {
                     self.camera = Some(c.id.clone());
                     // ask now so the system prompt is answered before the recording starts
                     let _ = sf_recording::permissions::request_camera();
@@ -443,22 +443,22 @@ impl Picker {
             ui.ctx().request_repaint_after(std::time::Duration::from_millis(50));
         }
         let mic_menu = input_menu_level(ui, widgets::Icon::Mic, &mic_label, self.microphone.is_some(), mic_level, |ui| {
-            if ui.selectable_label(self.microphone.is_none(), "Don't record microphone").clicked() {
+            if crate::widgets::menu_item(ui, self.microphone.is_none(), "Don't record microphone").clicked() {
                 self.microphone = None;
             }
             for c in &self.inputs.microphones {
-                if ui.selectable_label(self.microphone.as_deref() == Some(&c.id), &c.name).clicked() {
+                if crate::widgets::menu_item(ui, self.microphone.as_deref() == Some(&c.id), &c.name).clicked() {
                     self.microphone = Some(c.id.clone());
                 }
             }
         });
         let sys_label = if self.system_audio { "System audio" } else { "No system audio" };
         let sys_menu = input_menu(ui, widgets::Icon::Audio, sys_label, self.system_audio, |ui| {
-            if ui.selectable_label(!self.system_audio, "Don't record system audio").clicked() {
+            if crate::widgets::menu_item(ui, !self.system_audio, "Don't record system audio").clicked() {
                 self.system_audio = false;
             }
             let supported = self.inputs.system_audio_supported;
-            let r = ui.add_enabled_ui(supported, |ui| ui.selectable_label(self.system_audio, "Record system audio from all apps")).inner;
+            let r = ui.add_enabled_ui(supported, |ui| crate::widgets::menu_item(ui, self.system_audio, "Record system audio from all apps")).inner;
             if r.clicked() {
                 self.system_audio = true;
             }
@@ -494,14 +494,14 @@ impl Picker {
             ui.set_min_width(240.0);
             ui.label(RichText::new("Recording countdown").small().color(theme::p().text_dim));
             for (ms, l) in [(0u64, "None"), (3000, "3 seconds"), (5000, "5 seconds"), (10000, "10 seconds")] {
-                if ui.selectable_label(self.countdown_ms == ms, l).clicked() {
+                if crate::widgets::menu_item(ui, self.countdown_ms == ms, l).clicked() {
                     self.countdown_ms = ms;
                 }
             }
             ui.separator();
             ui.label(RichText::new("Appearance").small().color(theme::p().text_dim));
             for (choice, l) in [(Appearance::ScreenForge, "ScreenForge Dark"), (Appearance::ScreenForgeLight, "ScreenForge Light"), (Appearance::System, "Match system"), (Appearance::Dark, "Catppuccin Mocha"), (Appearance::Light, "Solarized Light"), (Appearance::OsakaJade, "Osaka Jade")] {
-                if ui.selectable_label(prefs.appearance == choice, l).clicked() {
+                if crate::widgets::menu_item(ui, prefs.appearance == choice, l).clicked() {
                     action = Some(PickerAction::SetAppearance(choice));
                 }
             }

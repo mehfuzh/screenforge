@@ -257,6 +257,48 @@ pub enum MaskLayer {
     Highlight { dst: Rect, corner_radius: f32, opacity: f32, holes: Vec<Rect> },
 }
 
+/// An image or video over the recording (overlay clips and titles): a premultiplied texture
+/// with rounded corners, an optional drop shadow, faded by `opacity` and blurred by `blur_px`.
+#[derive(Debug, Clone)]
+pub struct OverlayLayer {
+    pub texture: std::sync::Arc<Texture>,
+    /// Part of the texture shown (normalized).
+    pub src01: Rect,
+    pub dst: Rect,
+    pub corner_radius: f32,
+    pub opacity: f32,
+    /// Blur radius in output pixels (0 = sharp).
+    pub blur_px: f32,
+    pub shadow: Option<ShadowLayer>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TransitionKind {
+    Crossfade,
+    FadeBlack,
+    Blur,
+}
+
+impl TransitionKind {
+    /// From the `sfTransition.kind` value (`crossfade` | `fade-black` | `blur`).
+    pub fn from_name(s: &str) -> Self {
+        match s {
+            "fade-black" => TransitionKind::FadeBlack,
+            "blur" => TransitionKind::Blur,
+            _ => TransitionKind::Crossfade,
+        }
+    }
+}
+
+/// A transition drawn over the frame: the held frame `held` (see [`FrameDesc::hold`]) blends
+/// into this one as `progress` goes from 0 to 1. Without a held frame it comes from black.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TransitionDraw {
+    pub kind: TransitionKind,
+    pub progress: f32,
+    pub held: Option<u64>,
+}
+
 /// A translucent disc with a ring at its edge (click effects).
 #[derive(Debug, Clone, Copy)]
 pub struct RingLayer {
@@ -276,6 +318,7 @@ pub enum Layer {
     Solid(SolidLayer),
     Mask(MaskLayer),
     Ring(RingLayer),
+    Overlay(OverlayLayer),
 }
 
 /// Everything needed to draw one output frame.
@@ -285,6 +328,15 @@ pub struct FrameDesc {
     pub height: u32,
     pub background: BackgroundLayer,
     pub layers: Vec<Layer>,
+    /// Keep a copy of this frame under this key, for a transition that follows.
+    pub hold: Option<u64>,
+    pub transition: Option<TransitionDraw>,
+}
+
+impl FrameDesc {
+    pub fn new(width: u32, height: u32, background: BackgroundLayer, layers: Vec<Layer>) -> Self {
+        FrameDesc { width, height, background, layers, hold: None, transition: None }
+    }
 }
 
 pub use gpu::Compositor;

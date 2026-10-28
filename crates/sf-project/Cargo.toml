@@ -13,6 +13,7 @@ thiserror.workspace = true
 chrono.workspace = true
 nanoid.workspace = true
 tracing.workspace = true
+sha2 = "0.10"
 
 [dev-dependencies]
 tempfile = "3"

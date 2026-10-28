@@ -87,6 +87,7 @@ pub fn definitions() -> Value {
     let mut tools = timeline_definitions();
     if let Value::Array(list) = &mut tools {
         list.extend(crate::items::definitions());
+        list.extend(crate::layers::definitions());
     }
     tools
 }
@@ -372,7 +373,7 @@ impl Workspace {
         if self.project.scenes.is_empty() {
             return Err("the project has no scene".into());
         }
-        let outcome = match self.run_item(name, input) {
+        let outcome = match self.run_item(name, input).or_else(|| self.run_layer(name, input)) {
             Some(r) => r,
             None => self.run_timeline(name, input),
         }?;
@@ -642,7 +643,11 @@ impl Workspace {
         let clips: Vec<Value> = tl
             .spans()
             .iter()
-            .map(|s| json!({ "index": s.index, "startMs": ms(s.output_start_ms), "endMs": ms(s.output_end_ms), "sourceStartMs": ms(s.source_start_ms), "sourceEndMs": ms(s.source_end_ms), "speed": ms(1.0 / s.time_scale) }))
+            .map(|s| {
+                let tr = scene.slices.get(s.index).and_then(|sl| sl.transition.as_ref()).map(|t| json!({ "kind": t.kind, "durationMs": t.duration_ms }));
+                let card = scene.slices.get(s.index).and_then(|sl| sl.card.as_ref()).map(|c| json!({ "background": c.background }));
+                json!({ "index": s.index, "startMs": ms(s.output_start_ms), "endMs": ms(s.output_end_ms), "sourceStartMs": ms(s.source_start_ms), "sourceEndMs": ms(s.source_end_ms), "speed": ms(1.0 / s.time_scale), "transition": tr, "titleCard": card })
+            })
             .collect();
         let zooms: Vec<Value> = scene
             .zooms
@@ -668,10 +673,13 @@ impl Workspace {
                 json!({ "id": l.id, "startMs": a, "endMs": b, "type": l.kind, "disabled": l.is_disabled })
             })
             .collect();
+        let (titles, overlays) = self.layers_overview(&tl);
         json!({
             "name": self.project.name,
             "durationMs": ms(tl.duration_ms()),
             "clips": clips,
+            "titles": titles,
+            "overlays": overlays,
             "zooms": zooms,
             "masks": masks,
             "cameraLayouts": layouts,

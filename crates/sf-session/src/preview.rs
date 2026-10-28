@@ -25,13 +25,11 @@ pub fn write_quicklook_preview(project: &Path) -> Result<()> {
     let at = (total * 0.1).max(1000.0).min((total - 100.0).max(0.0));
     // warm the camera/cursor springs so the frame looks like playback
     let mut t = (at - 2000.0).max(0.0);
-    let mut desc = None;
-    while t <= at + 1e-6 {
-        desc = Some(session.frame_desc_at(t, size)?);
+    while t < at {
+        session.frame_desc_at(t, size)?;
         t += 1000.0 / 60.0;
     }
-    let Some(desc) = desc else { anyhow::bail!("empty project") };
-    comp.render(&desc);
+    session.render(&mut comp, at, size)?;
     let px = comp.read_pixels()?;
     let out = project.join(sf_project::package::QUICKLOOK_PREVIEW);
     std::fs::create_dir_all(out.parent().unwrap())?;

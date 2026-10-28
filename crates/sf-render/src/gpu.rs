@@ -3,7 +3,7 @@ use std::sync::Arc;
 use bytemuck::{Pod, Zeroable};
 use sf_project::schema::common::Rect;
 
-use crate::{BackgroundLayer, CameraGrade, Color, FrameDesc, Layer, LutTexture, MaskLayer, ShadowLayer, Texture};
+use crate::{BackgroundLayer, CameraGrade, Color, FrameDesc, Layer, LutTexture, MaskLayer, ShadowLayer, Texture, TransitionDraw, TransitionKind};
 
 /// Device + queue, either created headless (export, tests) or borrowed from egui/eframe.
 #[derive(Clone)]
@@ -137,9 +137,13 @@ const MODE_SPRITE: u32 = 4;
 const MODE_BLUR: u32 = 5;
 const MODE_DIM: u32 = 6;
 const MODE_RING: u32 = 7;
+const MODE_OVERLAY: u32 = 8;
 
 /// Maximum draws per frame (uniform ring size).
 const MAX_DRAWS: usize = 256;
+
+/// One quad to draw: its parameters, texture and optional LUT.
+type Draw = (Params, Arc<Texture>, Option<Arc<LutTexture>>);
 
 pub struct Compositor {
     gpu: Gpu,
@@ -152,6 +156,8 @@ pub struct Compositor {
     identity_lut: Arc<LutTexture>,
     target: Option<Texture>,
     readback: Option<(wgpu::Buffer, u32)>,
+    /// A copy of the last frame rendered with `FrameDesc::hold`, by its key.
+    held: Option<(u64, Arc<Texture>)>,
 }
 
 impl Compositor {
@@ -224,7 +230,7 @@ impl Compositor {
         });
         let white = Texture::from_rgba(device, &gpu.queue, 1, 1, &[255, 255, 255, 255], "white");
         let identity_lut = LutTexture::identity(device, &gpu.queue);
-        Compositor { gpu, pipeline, bind_layout, sampler, uniform_buf, uniform_stride, white, identity_lut, target: None, readback: None }
+        Compositor { gpu, pipeline, bind_layout, sampler, uniform_buf, uniform_stride, white, identity_lut, target: None, readback: None, held: None }
     }
 
     pub fn gpu(&self) -> &Gpu {
@@ -233,6 +239,11 @@ impl Compositor {
 
     pub fn target(&self) -> Option<&Texture> {
         self.target.as_ref()
+    }
+
+    /// Whether the frame held under `key` (see `FrameDesc::hold`) is available.
+    pub fn has_held(&self, key: u64) -> bool {
+        self.held.as_ref().is_some_and(|(k, t)| *k == key && Some((t.width, t.height)) == self.target.as_ref().map(|t| (t.width, t.height)))
     }
 
     fn ensure_target(&mut self, w: u32, h: u32) {
@@ -246,7 +257,7 @@ impl Compositor {
     pub fn render(&mut self, desc: &FrameDesc) {
         self.ensure_target(desc.width, desc.height);
         let out_size = [desc.width as f32, desc.height as f32];
-        let mut draws: Vec<(Params, Arc<Texture>, Option<Arc<LutTexture>>)> = Vec::with_capacity(desc.layers.len() * 2 + 1);
+        let mut draws: Vec<Draw> = Vec::with_capacity(desc.layers.len() * 2 + 1);
 
         // background
         match &desc.background {
@@ -344,7 +355,19 @@ impl Compositor {
                     p.stops[0] = color4(r.edge);
                     draws.push((p, self.white.clone(), None));
                 }
+                Layer::Overlay(o) => {
+                    if let Some(mut sh) = o.shadow {
+                        sh.opacity *= o.opacity;
+                        draws.push((shadow_params(out_size, &o.dst, o.corner_radius, sh), self.white.clone(), None));
+                    }
+                    let (tw, th) = (o.dst.width.max(1.0) as f32, o.dst.height.max(1.0) as f32);
+                    let blur = if o.blur_px > 0.25 { [o.blur_px / tw, o.blur_px / th] } else { [0.0, 0.0] };
+                    draws.push((Params { out_size, mode: MODE_OVERLAY, dst: rect4(&o.dst), uv: uv4(&o.src01), radius: o.corner_radius, alpha: o.opacity, extra: [blur[0], blur[1], 0.0, 0.0], ..Default::default() }, o.texture.clone(), None));
+                }
             }
+        }
+        if let Some(tr) = desc.transition {
+            self.push_transition(&mut draws, out_size, tr);
         }
         let draws: Vec<_> = draws.into_iter().take(MAX_DRAWS).collect();
 
@@ -391,7 +414,43 @@ impl Compositor {
                 pass.draw(0..6, 0..1);
             }
         }
+        if let Some(key) = desc.hold {
+            let (w, h) = (target.width, target.height);
+            let reuse = self.held.as_ref().filter(|(_, t)| (t.width, t.height) == (w, h)).map(|(_, t)| t.clone());
+            let held = reuse.unwrap_or_else(|| Arc::new(Texture::new(&self.gpu.device, w, h, "held-frame")));
+            encoder.copy_texture_to_texture(
+                wgpu::TexelCopyTextureInfo { texture: &target.texture, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
+                wgpu::TexelCopyTextureInfo { texture: &held.texture, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
+                wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+            );
+            self.held = Some((key, held));
+        }
         self.gpu.queue.submit([encoder.finish()]);
+    }
+
+    /// Draws that blend the held frame into this one (or this one in from black).
+    fn push_transition(&self, draws: &mut Vec<Draw>, out_size: [f32; 2], tr: TransitionDraw) {
+        let p = tr.progress.clamp(0.0, 1.0);
+        let full = [0.0, 0.0, out_size[0], out_size[1]];
+        let held = tr.held.filter(|k| self.has_held(*k)).and(self.held.as_ref()).map(|(_, t)| t.clone());
+        let black = |a: f32| (Params { out_size, mode: MODE_SOLID, dst: full, color: [0.0, 0.0, 0.0, 1.0], alpha: a, ..Default::default() }, self.white.clone(), None);
+        let frame = |tex: Arc<Texture>, a: f32, blur: f32| {
+            let extra = [blur / out_size[0].max(1.0), blur / out_size[1].max(1.0), 0.0, 0.0];
+            (Params { out_size, mode: MODE_OVERLAY, dst: full, alpha: a, extra, ..Default::default() }, tex, None)
+        };
+        match (tr.kind, held) {
+            (TransitionKind::FadeBlack, Some(h)) if p < 0.5 => {
+                draws.push(frame(h, 1.0, 0.0));
+                draws.push(black(p * 2.0));
+            }
+            (TransitionKind::FadeBlack, _) if p < 0.5 && tr.held.is_some() => draws.push(black(1.0)),
+            (TransitionKind::FadeBlack, _) if tr.held.is_some() => draws.push(black((1.0 - p) * 2.0)),
+            (TransitionKind::Crossfade, Some(h)) => draws.push(frame(h, 1.0 - p, 0.0)),
+            // the old shot blurs away as the new one shows through
+            (TransitionKind::Blur, Some(h)) => draws.push(frame(h, 1.0 - p, p * out_size[1] * 0.04)),
+            // from black: the first clip, or a held frame that is missing
+            _ => draws.push(black(1.0 - p)),
+        }
     }
 
     /// Copy the last rendered frame back to the CPU as tightly packed RGBA8.
@@ -480,6 +539,8 @@ mod tests {
                 // mirrored webcam in the bottom-left corner: its top-left quadrant shows the texture's top-right (green)
                 Layer::Camera(CameraLayer { texture: screen_tex.clone(), src01: Rect::UNIT, dst: Rect { x: 0.0, y: 16.0, width: 16.0, height: 16.0 }, corner_radius: 8.0, mirror: true, shadow: None, grade: None, lut: None }),
             ],
+            hold: None,
+            transition: None,
         };
         c.render(&desc);
         let px = c.read_pixels().unwrap();
@@ -513,6 +574,8 @@ mod tests {
             height: 16,
             background: BackgroundLayer::Color(Color::BLACK),
             layers: vec![Layer::Camera(CameraLayer { texture: tex.clone(), src01: Rect::UNIT, dst, corner_radius: 0.0, mirror: false, shadow: None, grade: Some(grade), lut })],
+            hold: None,
+            transition: None,
         };
         let centre = |px: &[u8]| px[(8 * 16 + 8) * 4..(8 * 16 + 8) * 4 + 3].to_vec();
         // neutral grade leaves the pixel alone
@@ -564,6 +627,8 @@ mod tests {
                 Layer::Mask(MaskLayer::Highlight { dst: Rect { x: 0.0, y: 32.0, width: 64.0, height: 32.0 }, corner_radius: 0.0, opacity: 1.0, holes: vec![Rect { x: 0.0, y: 32.0, width: 16.0, height: 32.0 }] }),
                 Layer::Ring(RingLayer { center: [48.0, 16.0], radius: 6.0, ring_width: 1.0, fill: Color::WHITE, edge: Color::WHITE }),
             ],
+            hold: None,
+            transition: None,
         };
         c.render(&desc);
         let out = c.read_pixels().unwrap();

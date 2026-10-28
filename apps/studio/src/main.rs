@@ -9,6 +9,7 @@ mod camera_bubble;
 mod captions;
 mod crop;
 mod editor;
+mod layers;
 mod export;
 mod masks;
 mod mic_meter;

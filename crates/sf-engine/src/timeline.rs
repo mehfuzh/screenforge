@@ -15,6 +15,8 @@ pub struct SliceSpan {
     pub source_start_ms: f64,
     pub source_end_ms: f64,
     pub time_scale: f64,
+    /// A title card: no recording plays, the source time stays at its anchor.
+    pub card: bool,
 }
 
 impl SliceSpan {
@@ -31,7 +33,18 @@ impl SliceSpan {
         t >= self.source_start_ms && t < self.source_end_ms
     }
     pub fn output_to_source(&self, t: f64) -> f64 {
+        if self.card {
+            return self.source_start_ms;
+        }
         self.source_start_ms + (t - self.output_start_ms) / self.time_scale
+    }
+    /// Width on the timeline view: a clip's source length, a title card's own length.
+    pub fn view_duration_ms(&self) -> f64 {
+        if self.card {
+            self.output_duration_ms()
+        } else {
+            self.source_duration_ms()
+        }
     }
     pub fn source_to_output(&self, t: f64) -> f64 {
         self.output_start_ms + (t - self.source_start_ms) * self.time_scale
@@ -49,14 +62,15 @@ impl Timeline {
         let mut cursor = 0.0;
         for (index, s) in slices.iter().enumerate() {
             let ts = if s.time_scale > 0.0 { s.time_scale } else { 1.0 };
-            let out = s.source_duration_ms() * ts;
+            let out = s.output_duration_ms();
             spans.push(SliceSpan {
                 index,
                 output_start_ms: cursor,
                 output_end_ms: cursor + out,
                 source_start_ms: s.source_start_ms,
-                source_end_ms: s.source_end_ms,
-                time_scale: ts,
+                source_end_ms: if s.is_card() { s.source_start_ms } else { s.source_end_ms },
+                time_scale: if s.is_card() { 1.0 } else { ts },
+                card: s.is_card(),
             });
             cursor += out;
         }
@@ -103,7 +117,7 @@ impl Timeline {
 
     /// Length of the timeline view (ms): every slice at its source length.
     pub fn view_duration_ms(&self) -> f64 {
-        self.spans.iter().map(|s| s.source_duration_ms()).sum()
+        self.spans.iter().map(|s| s.view_duration_ms()).sum()
     }
 
     /// Position of output time `t` on the timeline view, where slices keep their source
@@ -115,7 +129,7 @@ impl Timeline {
             if t < s.output_end_ms {
                 return if t <= s.output_start_ms { view + (t - s.output_start_ms) } else { view + (t - s.output_start_ms) / s.time_scale };
             }
-            view += s.source_duration_ms();
+            view += s.view_duration_ms();
         }
         view + (t - self.duration_ms())
     }
@@ -124,7 +138,7 @@ impl Timeline {
     pub fn view_to_output(&self, v: f64) -> f64 {
         let mut view = 0.0;
         for s in &self.spans {
-            let len = s.source_duration_ms();
+            let len = s.view_duration_ms();
             if v < view + len {
                 return if v <= view { s.output_start_ms + (v - view) } else { s.output_start_ms + (v - view) * s.time_scale };
             }
@@ -164,6 +178,8 @@ pub mod edit {
         let mut right = orig;
         right.id = sf_project::ids::new_id();
         right.source_start_ms = src;
+        // a split is not a new shot: the transition stays on the left piece
+        right.transition = None;
         out.splice(span.index..=span.index, [left, right]);
         out
     }

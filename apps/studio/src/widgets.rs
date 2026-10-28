@@ -255,6 +255,33 @@ pub fn text_field(ui: &mut Ui, text: &mut String, hint: &str) -> Response {
         .inner
 }
 
+/// A multi-line [`text_field`]: the same frame and padding, as wide as the column, at least
+/// `rows` lines tall.
+pub fn text_area(ui: &mut Ui, text: &mut String, hint: &str, rows: usize) -> Response {
+    let pal = theme::p();
+    let id = ui.next_auto_id().with("text_area");
+    let focused = ui.memory(|m| m.has_focus(id));
+    egui::Frame::NONE
+        .fill(pal.bg)
+        .stroke(Stroke::new(1.0, if focused { pal.accent } else { pal.border }))
+        .corner_radius(CornerRadius::same(BUTTON_RADIUS))
+        .inner_margin(egui::Margin::symmetric(12, 8))
+        .show(ui, |ui| {
+            ui.add(
+                egui::TextEdit::multiline(text)
+                    .id(id)
+                    .hint_text(RichText::new(hint).color(pal.text_faint))
+                    .font(egui::FontId::proportional(14.0))
+                    .text_color(pal.text)
+                    .frame(egui::Frame::NONE)
+                    .margin(egui::Margin::ZERO)
+                    .desired_rows(rows)
+                    .desired_width(ui.available_width()),
+            )
+        })
+        .inner
+}
+
 /// Paint a rounded card background behind `rect`.
 pub fn card(painter: &egui::Painter, rect: Rect) {
     painter.rect(rect, CornerRadius::same(theme::RADIUS as u8 + 4), theme::p().card, Stroke::new(1.0, theme::p().border), egui::StrokeKind::Inside);
@@ -280,9 +307,11 @@ pub enum Icon {
     Play,
     Flag,
     Restart,
+    /// Magnifier with a plus (a zoom, a bigger preview).
     Zoom,
+    /// Magnifier with a minus (a smaller preview).
+    ZoomOut,
     Sparkle,
-    Layout,
     Mask,
     General,
     Cursor,
@@ -326,6 +355,14 @@ pub enum Icon {
     Heart,
     /// Filled heart (a favourite).
     HeartFilled,
+    /// A capital T (add a title).
+    Text,
+    /// A frame with a T in it (a title card: a clip with only a background and a title).
+    TitleCard,
+    /// A picture frame with a hill and a sun (add an image or video over the recording).
+    Media,
+    /// Two overlapping frames (a transition between clips).
+    Transition,
 }
 
 /// Live level as an equalizer: the most recent `levels` (0..1, oldest first) as bars that
@@ -535,10 +572,14 @@ pub fn paint_icon(p: &egui::Painter, rect: Rect, icon: Icon, color: Color32) {
             line((0.05, -0.95), (0.35, -0.62));
             line((0.05, -0.3), (0.35, -0.62));
         }
-        Icon::Zoom => {
-            p.circle_stroke(pos2(c.x - 0.15 * r, c.y - 0.15 * r), 0.55 * r, s);
-            line((0.25, 0.25), (0.8, 0.8));
-            line((-0.45, -0.15), (0.15, -0.15));
+        Icon::Zoom | Icon::ZoomOut => {
+            // lens and handle together are centred in the box
+            p.circle_stroke(pos2(c.x - 0.2 * r, c.y - 0.2 * r), 0.55 * r, s);
+            line((0.2, 0.2), (0.75, 0.75));
+            line((-0.5, -0.2), (0.1, -0.2));
+            if icon == Icon::Zoom {
+                line((-0.2, -0.5), (-0.2, 0.1));
+            }
         }
         Icon::Sparkle | Icon::Animations => {
             line((0.0, -0.9), (0.0, 0.9));
@@ -547,7 +588,7 @@ pub fn paint_icon(p: &egui::Painter, rect: Rect, icon: Icon, color: Color32) {
             line((-0.5, 0.5), (0.5, -0.5));
             p.circle_filled(c, 0.22 * r, color);
         }
-        Icon::Layout | Icon::CameraLayout => {
+        Icon::CameraLayout => {
             p.rect_stroke(rr(-0.9, -0.7, 0.9, 0.7), 2.0, s, egui::StrokeKind::Middle);
             p.rect_filled(rr(0.25, 0.1, 0.75, 0.55), 1.5, color);
         }
@@ -658,7 +699,51 @@ pub fn paint_icon(p: &egui::Painter, rect: Rect, icon: Icon, color: Color32) {
             line((-0.3, 0.3), (0.6, -0.9));
             line((0.3, 0.3), (-0.6, -0.9));
         }
+        Icon::Text => {
+            line((-0.7, -0.75), (0.7, -0.75));
+            line((-0.7, -0.75), (-0.7, -0.5));
+            line((0.7, -0.75), (0.7, -0.5));
+            line((0.0, -0.75), (0.0, 0.8));
+            line((-0.3, 0.8), (0.3, 0.8));
+        }
+        Icon::TitleCard => {
+            p.rect_stroke(rr(-0.9, -0.7, 0.9, 0.7), 2.0, s, egui::StrokeKind::Middle);
+            line((-0.4, -0.35), (0.4, -0.35));
+            line((0.0, -0.35), (0.0, 0.4));
+        }
+        Icon::Media => {
+            p.rect_stroke(rr(-0.9, -0.7, 0.9, 0.7), 2.0, s, egui::StrokeKind::Middle);
+            p.circle_stroke(pos2(c.x + 0.4 * r, c.y - 0.3 * r), 0.15 * r, s);
+            let hill = vec![pos2(c.x - 0.9 * r, c.y + 0.55 * r), pos2(c.x - 0.3 * r, c.y - 0.05 * r), pos2(c.x + 0.15 * r, c.y + 0.35 * r), pos2(c.x + 0.4 * r, c.y + 0.15 * r), pos2(c.x + 0.9 * r, c.y + 0.6 * r)];
+            p.add(egui::Shape::line(hill, s));
+        }
+        Icon::Transition => {
+            p.rect_stroke(rr(-0.9, -0.65, 0.25, 0.4), 2.0, s, egui::StrokeKind::Middle);
+            p.rect_stroke(rr(-0.25, -0.4, 0.9, 0.65), 2.0, s, egui::StrokeKind::Middle);
+            line((-0.25, 0.4), (0.25, -0.4));
+        }
     }
+}
+
+/// A row of a menu or list: as wide as the menu, a quiet highlight on hover, and the chosen
+/// row marked with a check instead of a filled pill.
+pub fn menu_item(ui: &mut Ui, selected: bool, text: impl AsRef<str>) -> Response {
+    let pal = theme::p();
+    let enabled = ui.is_enabled();
+    let galley = ui.painter().layout_no_wrap(text.as_ref().to_string(), egui::FontId::proportional(14.0), pal.text);
+    // a justified layout (menus) stretches the row to the menu's width
+    let resp = ui.allocate_response(vec2(galley.size().x + 44.0, 24.0), Sense::click());
+    let resp = if enabled { resp.on_hover_cursor(egui::CursorIcon::PointingHand) } else { resp };
+    let rect = resp.rect;
+    let p = ui.painter();
+    if resp.hovered() && enabled {
+        p.rect_filled(rect, CornerRadius::same(2), pal.card_2);
+    }
+    if selected {
+        paint_icon(p, Rect::from_center_size(pos2(rect.left() + 15.0, rect.center().y), vec2(12.0, 12.0)), Icon::Check, if enabled { pal.accent } else { pal.text_faint });
+    }
+    p.galley(pos2(rect.left() + 30.0, rect.center().y - galley.size().y / 2.0), galley, if enabled { pal.text } else { pal.text_faint });
+    resp
 }
 
 /// Icon-only button (quiet).
@@ -676,6 +761,18 @@ pub fn icon_button_tinted(ui: &mut Ui, icon: Icon, size: f32, tooltip: &str, hov
     }
     let color = if resp.hovered() { hover } else { theme::p().text_dim };
     paint_icon(ui.painter(), Rect::from_center_size(rect.center(), vec2(size, size)), icon, color);
+    resp.on_hover_text(tooltip)
+}
+
+/// Icon-only button for a toolbar of [`icon_text_button`]s: the same height, hover fill,
+/// corner radius and icon size, so they line up.
+pub fn toolbar_icon_button(ui: &mut Ui, icon: Icon, tooltip: &str) -> Response {
+    let (rect, resp) = ui.allocate_exact_size(vec2(32.0, 32.0), Sense::click());
+    let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
+    if resp.hovered() {
+        ui.painter().rect_filled(rect, CornerRadius::same(8), theme::p().card_2);
+    }
+    paint_icon(ui.painter(), Rect::from_center_size(rect.center(), vec2(15.0, 15.0)), icon, theme::p().text);
     resp.on_hover_text(tooltip)
 }
 

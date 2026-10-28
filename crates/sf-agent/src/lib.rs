@@ -15,6 +15,7 @@ pub mod agent;
 pub mod client;
 pub mod host;
 mod items;
+mod layers;
 pub mod motion;
 pub mod tools;
 

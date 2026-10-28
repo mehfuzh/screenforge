@@ -140,14 +140,11 @@ fn gpu() -> Option<Gpu> {
 fn render(session: &mut Session, comp: &mut Compositor, at_ms: f64, height: u32) -> (u32, u32, Vec<u8>) {
     let size = session.output_size(height);
     let mut t: f64 = 0.0;
-    loop {
-        let desc = session.frame_desc_at(t.min(at_ms), size).unwrap();
-        if t >= at_ms {
-            comp.render(&desc);
-            break;
-        }
+    while t < at_ms {
+        session.frame_desc_at(t, size).unwrap();
         t += 1000.0 / 60.0;
     }
+    session.render(comp, at_ms, size).unwrap();
     (size.width, size.height, comp.read_pixels().unwrap())
 }
 
@@ -693,4 +690,172 @@ fn transcribes_speech_into_captions() {
     let srt = f.root.join("speech.srt");
     sf(&["srt", p, "-o", srt.to_str().unwrap()]);
     assert!(std::fs::read_to_string(&srt).unwrap().to_lowercase().contains("captions"));
+}
+
+// ── titles, overlay media and transitions ──
+
+/// Set the scene's tracks and slices, then rebuild the session.
+fn set_scene(session: &mut Session, tracks: Vec<sf_project::Track>, slices: Option<Vec<Slice>>) {
+    use sf_project::SceneTracksExt;
+    let scene = &mut session.pkg.project.scenes[0];
+    scene.set_tracks(tracks);
+    if let Some(s) = slices {
+        scene.slices = s;
+    }
+    session.rebuild();
+}
+
+/// Render `at_ms` twice, with the tracks shown and hidden: (shown, hidden) pixels.
+fn with_and_without_tracks(session: &mut Session, comp: &mut Compositor, at_ms: f64) -> (u32, u32, Vec<u8>, Vec<u8>) {
+    let (w, h, on) = render(session, comp, at_ms, 360);
+    let mut tracks = session.visuals.tracks.clone();
+    tracks.iter_mut().for_each(|t| t.hidden = true);
+    set_scene(session, tracks.clone(), None);
+    let (_, _, off) = render(session, comp, at_ms, 360);
+    tracks.iter_mut().for_each(|t| t.hidden = false);
+    set_scene(session, tracks, None);
+    (w, h, on, off)
+}
+
+fn brightness(px: &[u8]) -> f64 {
+    px.chunks_exact(4).map(|p| (p[0] as f64 + p[1] as f64 + p[2] as f64) / 3.0).sum::<f64>() / (px.len() / 4) as f64
+}
+
+#[test]
+fn titles_show_for_their_clip_and_blur_in_word_by_word() {
+    let Some(gpu) = gpu() else { return };
+    let f = fixture(false);
+    let mut session = Session::open(&f.project, gpu.clone()).unwrap();
+    let mut comp = Compositor::new(gpu);
+    let mut clip = sf_project::Clip::title(1000.0, 2000.0, "Every *move*, simulated.");
+    let style = clip.text.as_mut().unwrap();
+    style.size_ratio = 0.12;
+    style.align = "center".into();
+    style.position01 = sf_project::schema::common::Point::new(0.5, 0.5);
+    let mut tracks = vec![];
+    sf_project::tracks::add_clip(&mut tracks, clip);
+    set_scene(&mut session, tracks, None);
+
+    let ink = |session: &mut Session, comp: &mut Compositor, t: f64| {
+        let (w, h, on, off) = with_and_without_tracks(session, comp, t);
+        band_diff(&on, &off, w, h, 0.35, 0.65)
+    };
+    let before = ink(&mut session, &mut comp, 900.0);
+    let entering = ink(&mut session, &mut comp, 1120.0);
+    let shown = ink(&mut session, &mut comp, 2000.0);
+    let after = ink(&mut session, &mut comp, 3100.0);
+    assert_eq!(before, 0.0);
+    assert_eq!(after, 0.0);
+    assert!(shown > 3.0, "title drawn: {shown}");
+    assert!(entering > 0.0 && entering < shown * 0.8, "words still coming in: {entering} of {shown}");
+}
+
+#[test]
+fn overlay_images_draw_over_the_recording_and_blur_it() {
+    let Some(gpu) = gpu() else { return };
+    let f = fixture(false);
+    let png = f.root.join("card.png");
+    image::RgbaImage::from_pixel(160, 90, image::Rgba([255, 0, 255, 255])).save(&png).unwrap();
+    let item = sf_project::tracks::import_media(&f.project, &png, None, false).unwrap();
+    let mut session = Session::open(&f.project, gpu.clone()).unwrap();
+    {
+        use sf_project::SceneTracksExt;
+        session.pkg.project.scenes[0].add_media(item.clone());
+    }
+    let mut comp = Compositor::new(gpu);
+    let mut clip = sf_project::Clip::overlay(&item, 500.0, 2500.0);
+    clip.anim_in = None;
+    clip.anim_out = None;
+    let mut tracks = vec![];
+    sf_project::tracks::add_clip(&mut tracks, clip);
+    set_scene(&mut session, tracks.clone(), None);
+
+    let (w, h, on, off) = with_and_without_tracks(&mut session, &mut comp, 1500.0);
+    let at = |px: &[u8], x: u32, y: u32| px[((y * w + x) * 4) as usize..((y * w + x) * 4 + 3) as usize].to_vec();
+    let mid = at(&on, w / 2, h / 2);
+    assert!(mid[0] > 240 && mid[1] < 15 && mid[2] > 240, "magenta card in the middle: {mid:?}");
+    assert_ne!(at(&off, w / 2, h / 2), mid);
+    // outside the card the recording is untouched until the clip asks for shallow focus
+    assert_eq!(band_diff(&on, &off, w, h, 0.0, 0.1), 0.0);
+    tracks[0].clips[0].backdrop_blur = 1.0;
+    set_scene(&mut session, tracks, None);
+    let (_, _, blurred, _) = with_and_without_tracks(&mut session, &mut comp, 1500.0);
+    assert!(band_diff(&blurred, &off, w, h, 0.0, 0.1) > 1.0, "the recording behind is blurred");
+}
+
+#[test]
+fn linked_clips_move_with_cuts() {
+    let Some(gpu) = gpu() else { return };
+    let f = fixture(false);
+    let mut session = Session::open(&f.project, gpu).unwrap();
+    let mut clip = sf_project::Clip::title(0.0, 500.0, "pinned");
+    clip.link = Some(sf_project::tracks::Link { source_ms: 3000.0 });
+    // cut 1–2 s: source 3 s now plays at output 2 s
+    set_scene(&mut session, vec![sf_project::Track { clips: vec![clip], ..sf_project::Track::text() }], Some(vec![Slice::new(0.0, 1000.0), Slice::new(2000.0, 4000.0)]));
+    assert_eq!(session.visuals.tracks[0].clips[0].output_start_ms, 2000.0);
+    assert_eq!(session.visuals.active(&session.timeline, 2100.0).len(), 1);
+    assert!(session.visuals.active(&session.timeline, 500.0).is_empty());
+}
+
+#[test]
+fn transitions_blend_the_last_frame_after_a_cut() {
+    let Some(gpu) = gpu() else { return };
+    let f = fixture(false);
+    let mut session = Session::open(&f.project, gpu.clone()).unwrap();
+    let mut comp = Compositor::new(gpu.clone());
+    let mut slices = vec![Slice::new(0.0, 1500.0), Slice::new(2500.0, 4000.0)];
+    set_scene(&mut session, vec![], Some(slices.clone()));
+    let (w, h, cut) = render(&mut session, &mut comp, 1800.0, 360);
+
+    slices[1].transition = Some(sf_project::v4::Transition { kind: "crossfade".into(), duration_ms: 600.0 });
+    set_scene(&mut session, vec![], Some(slices.clone()));
+    let (_, _, played) = render(&mut session, &mut comp, 1800.0, 360);
+    assert!(mean_abs_diff(&cut, &played) > 2.0, "mid-crossfade differs from the hard cut");
+    let (_, _, done) = render(&mut session, &mut comp, 2200.0, 360);
+    let (_, _, cut_done) = {
+        let mut hard = slices.clone();
+        hard[1].transition = None;
+        set_scene(&mut session, vec![], Some(hard));
+        render(&mut session, &mut comp, 2200.0, 360)
+    };
+    assert!(mean_abs_diff(&done, &cut_done) < 0.5, "after the transition it is the plain frame");
+
+    // a fresh compositor seeking straight into the transition renders the held frame first
+    set_scene(&mut session, vec![], Some(slices.clone()));
+    let mut fresh = Compositor::new(gpu);
+    session.render(&mut fresh, 1800.0, session.output_size(360)).unwrap();
+    let seeked = fresh.read_pixels().unwrap();
+    assert!(mean_abs_diff(&seeked, &played) < 1.0, "seek matches playback: {}", mean_abs_diff(&seeked, &played));
+    assert_eq!((w, h), (session.output_size(360).width, session.output_size(360).height));
+
+    // the first clip comes in from black
+    slices[0].transition = Some(sf_project::v4::Transition::new("fade-black"));
+    set_scene(&mut session, vec![], Some(slices));
+    let (_, _, first) = render(&mut session, &mut comp, 0.0, 360);
+    assert!(brightness(&first) < 5.0, "black at the start: {}", brightness(&first));
+}
+
+#[test]
+fn title_cards_show_only_their_fill_then_hand_over_to_the_recording() {
+    let Some(gpu) = gpu() else { return };
+    let f = fixture(false);
+    let mut session = Session::open(&f.project, gpu.clone()).unwrap();
+    let mut comp = Compositor::new(gpu);
+    let (_, _, plain) = render(&mut session, &mut comp, 700.0, 360);
+    {
+        let scene = &mut session.pkg.project.scenes[0];
+        sf_engine::tracks::add_title_card(scene, 0, "Intro", 2000.0);
+        scene.slices[0].card.as_mut().unwrap().background = Some("#000000".into());
+    }
+    let tracks = { use sf_project::SceneTracksExt; session.pkg.project.scenes[0].tracks() };
+    set_scene(&mut session, tracks, None);
+    assert_eq!(session.duration_ms(), DURATION_MS + 2000.0);
+
+    // on the card: black with the title, no recording, camera or cursor
+    let (w, h, on, off) = with_and_without_tracks(&mut session, &mut comp, 1500.0);
+    assert!(brightness(&off) < 0.5, "only the fill: {}", brightness(&off));
+    assert!(band_diff(&on, &off, w, h, 0.4, 0.6) > 1.0, "the title is on it");
+    // after the crossfade (0.6 s) the recording plays from where it did before the card
+    let (_, _, after) = render(&mut session, &mut comp, 2700.0, 360);
+    assert!(mean_abs_diff(&after, &plain) < 2.0, "{}", mean_abs_diff(&after, &plain));
 }

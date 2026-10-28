@@ -79,8 +79,8 @@ are not recorded, so automatic zooms and cursor effects are not available there 
 If the dialog never appears or recording reports that no ScreenCast portal was found (common
 after switching between desktops), restart the portal: `systemctl --user restart xdg-desktop-portal`.
 
-**Pricing:** recording and editing are free and open source (Apache-2.0), and so are your first
-three exports.
+**Pricing:** recording and editing are free and open source (Apache-2.0); exporting needs a
+license.
 
 - **Pro**, US$20/month: the AI agent with 1,000 credits a month (one credit is about US$0.01 of
   Claude usage) and unlimited export. Credit packs (500 / 1,250 / 2,500 for US$10 / 25 / 50)

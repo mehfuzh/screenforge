@@ -1,29 +1,21 @@
-// Free-export counter per device. The app calls this with { device } to read the count
-// (device = SHA-256 hex of the machine's hardware UUID, never the UUID itself) and with
-// { device, record: true } after a successful unlicensed export to add one. Returns { used }.
-//
-// Builds up to 0.1.29 read the count on every repaint of the editor (an ExportDialog was
-// rebuilt each frame), tens of thousands of calls an hour, enough to take the database down.
-// Their reads (no `v: 2`) are answered with 0 without touching the database: they then keep
-// their local count, as they do offline. Recording an export still counts for every build.
+// Free-export counter per device, kept only for builds up to 0.1.39, which allowed three
+// exports without a license and ask here how many this device has used ({ device } to read,
+// { device, record: true } after an unlicensed export). There are no free exports any more,
+// so every device is answered as having used all three: those builds take the higher of
+// this and their local count, and stop exporting without a license the next time the
+// export dialog opens. Builds from 0.1.40 never call this. Nothing touches the database
+// (builds up to 0.1.29 read on every repaint), and nothing is stored.
 import { serve } from "https://deno.land/std@0.190.0/http/server.ts";
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2.57.2";
+
+/// The free exports old builds allowed; reporting them all used leaves none.
+const RETIRED_FREE_EXPORTS = 3;
 
 const cors = { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type" };
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { ...cors, "Content-Type": "application/json" } });
 
 serve(async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: cors });
-  const { device, record, v } = await req.json().catch(() => ({}));
+  const { device } = await req.json().catch(() => ({}));
   if (typeof device !== "string" || !/^[0-9a-f]{64}$/.test(device)) return json({ error: "device required" }, 400);
-  if (record !== true && v !== 2) return json({ used: 0 });
-  const db = createClient(Deno.env.get("SUPABASE_URL") ?? "", Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "", { auth: { persistSession: false } });
-  if (record === true) {
-    const { data, error } = await db.rpc("record_free_export", { p_device: device });
-    if (error) return json({ error: error.message }, 500);
-    return json({ used: data ?? 0 });
-  }
-  const { data, error } = await db.from("free_exports").select("used").eq("device_id", device).maybeSingle();
-  if (error) return json({ error: error.message }, 500);
-  return json({ used: data?.used ?? 0 });
+  return json({ used: RETIRED_FREE_EXPORTS });
 });

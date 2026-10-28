@@ -22,5 +22,6 @@ pub mod spring;
 pub mod shortcuts;
 pub mod stage;
 pub mod timeline;
+pub mod tracks;
 
 pub use glam::{DVec2, Vec2};

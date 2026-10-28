@@ -202,7 +202,10 @@ impl TimelineWidget {
         // can be dragged down onto a new layer
         let audio_lanes = self.audio_lanes(ed);
         let audio_track_h = if show_audio_lane { audio_lanes_h(audio_lanes) + GAP } else { 0.0 };
-        let (rect, resp) = ui.allocate_exact_size(vec2(avail.x, avail.y.max(RULER_H + MARKER_H + CLIP_H + audio_track_h + mask_track_h + zoom_track_h + GAP * 2.0)), Sense::click_and_drag());
+        // titles and media over the recording, one lane per track
+        let layers_h = crate::layers::lanes_height(ed);
+        let layer_track_h = if layers_h > 0.0 { layers_h + GAP } else { 0.0 };
+        let (rect, resp) = ui.allocate_exact_size(vec2(avail.x, avail.y.max(RULER_H + MARKER_H + CLIP_H + audio_track_h + layer_track_h + mask_track_h + zoom_track_h + GAP * 2.0)), Sense::click_and_drag());
         let painter = ui.painter_at(rect);
         painter.rect_filled(rect, 0.0, theme::p().bg);
 
@@ -372,9 +375,19 @@ impl TimelineWidget {
             }
             let selected = ed.selected_slice == Some(span.index);
             let block = Rect::from_min_max(pos2(x0 + 1.5, clip_top), pos2(x1 - 1.5, clip_top + CLIP_H));
-            glass_block(&painter, block, 8.0, if selected { theme::p().clip_selected } else { theme::p().clip }, selected);
+            // a title card has no recording: the title colour, its name and length, and no
+            // texture, waveform or trim handles (its length is set in the sidebar)
+            let card_colour = if selected { theme::p().title } else { theme::p().title.gamma_multiply(0.8) };
+            glass_block(&painter, block, 8.0, if span.card { card_colour } else if selected { theme::p().clip_selected } else { theme::p().clip }, selected);
+            if span.card && r.width() > 50.0 {
+                let icon = Rect::from_center_size(pos2(r.left() + 18.0, clip_top + 18.0), vec2(14.0, 14.0));
+                crate::widgets::paint_icon(&painter, icon, crate::widgets::Icon::Text, theme::p().text);
+                let secs = span.output_duration_ms() / 1000.0;
+                painter.with_clip_rect(r.shrink(2.0)).text(pos2(r.left() + 32.0, clip_top + 18.0), egui::Align2::LEFT_CENTER, "Title card", egui::FontId::proportional(12.0), theme::p().text);
+                painter.with_clip_rect(r.shrink(2.0)).text(pos2(r.center().x, clip_top + CLIP_H - 18.0), egui::Align2::CENTER_CENTER, format!("{secs:.1}s"), egui::FontId::proportional(14.0), theme::p().text);
+            }
             // faint vertical "beat" lines like Screen Studio's clip texture
-            let mut lx = x0 + 1.5 + 120.0;
+            let mut lx = if span.card { f32::INFINITY } else { x0 + 1.5 + 120.0 };
             while lx < x1 - 10.0 {
                 if lx > rect.left() && lx < rect.right() {
                     painter.line_segment([pos2(lx, clip_top + 10.0), pos2(lx, clip_top + CLIP_H - 10.0)], Stroke::new(1.0, theme::p().clip.gamma_multiply(0.18)));
@@ -382,7 +395,7 @@ impl TimelineWidget {
                 lx += 120.0;
             }
             // linked audio: its waveform is drawn inside the video clip, centred
-            if audio_in_clips && main_vol > 0.0 {
+            if audio_in_clips && main_vol > 0.0 && !span.card {
                 if let Some((_, peaks, dur)) = &self.peaks {
                     if *dur > 0.0 && !peaks.is_empty() {
                         let mid = clip_top + CLIP_H - 18.0;
@@ -403,7 +416,7 @@ impl TimelineWidget {
             let secs = span.output_duration_ms() / 1000.0;
             let dur = if secs >= 10.0 { format!("{secs:.0}s") } else { format!("{secs:.1}s") };
             let label = format!("{dur}  ⏱ {}×", trim_float(speed));
-            if r.width() > 60.0 {
+            if r.width() > 60.0 && !span.card {
                 if audio_in_clips {
                     // label on top, waveform underneath
                     painter.text(pos2(r.center().x, r.top() + 16.0), egui::Align2::CENTER_CENTER, label, egui::FontId::proportional(14.0), theme::p().text);
@@ -411,6 +424,10 @@ impl TimelineWidget {
                     painter.text(pos2(r.center().x, r.top() + 16.0), egui::Align2::CENTER_CENTER, "Clip", egui::FontId::proportional(12.0), theme::p().text_dim);
                     painter.text(pos2(r.center().x, r.bottom() - 18.0), egui::Align2::CENTER_CENTER, label, egui::FontId::proportional(15.0), theme::p().text);
                 }
+            }
+            // a transition into this clip: a badge on its left edge
+            if ed.session.pkg.project.scenes[0].slices.get(span.index).is_some_and(|s| s.transition.is_some()) && x0 >= rect.left() - 12.0 && x0 <= rect.right() {
+                crate::layers::paint_transition_badge(&painter, x0 + 14.0, clip_top);
             }
             // cut marker badge at the start of every clip but the first
             if span.index > 0 && x0 >= rect.left() && x0 <= rect.right() {
@@ -425,9 +442,13 @@ impl TimelineWidget {
             let body = ui.interact(r, body_id, Sense::click_and_drag());
             if let Some(p) = body.interact_pointer_pos() {
                 if body.clicked() {
+                    if span.card {
+                        ed.show_inspector();
+                    }
                     ed.selected_slice = Some(index);
                     ed.selected_zoom = None;
                     ed.selected_mask = None;
+                    ed.selected_clip = None;
                     ed.selected_audio = None;
                     seek_to = Some(ms_of(p.x));
                 }
@@ -438,6 +459,7 @@ impl TimelineWidget {
                     ed.selected_slice = Some(index);
                     ed.selected_zoom = None;
                     ed.selected_mask = None;
+                    ed.selected_clip = None;
                     ed.selected_audio = None;
                     self.ctx_ms = ms_of(p.x);
                 }
@@ -446,7 +468,7 @@ impl TimelineWidget {
             body.context_menu(|ui| clip_menu(ed, ui, index, ctx_ms));
 
             // trim handles
-            if full.width() > HANDLE_W * 3.0 {
+            if full.width() > HANDLE_W * 3.0 && !span.card {
                 for is_left in [true, false] {
                     let hr = if is_left { Rect::from_min_max(pos2(x0, clip_top), pos2(x0 + HANDLE_W, clip_top + CLIP_H)) } else { Rect::from_min_max(pos2(x1 - HANDLE_W, clip_top), pos2(x1, clip_top + CLIP_H)) };
                     let hr = hr.intersect(rect);
@@ -462,6 +484,7 @@ impl TimelineWidget {
                             ed.selected_slice = Some(index);
                             ed.selected_zoom = None;
                             ed.selected_mask = None;
+                            ed.selected_clip = None;
                             let slices = &ed.session.pkg.project.scenes[0].slices;
                             let (lo, hi) = clip_bounds(slices, index, src_duration);
                             let mut targets: Vec<f64> = spans.iter().filter(|s| s.index <= index).map(|s| s.output_start_ms).collect();
@@ -507,8 +530,14 @@ impl TimelineWidget {
             self.lane_items_ui(ed, ui, rect, audio_top, audio_lanes, x_of, ms_of, &mut seek_to);
         }
 
+        // title and overlay lanes (shown once the project has some; add them from the tool rail)
+        let layers_top = audio_top + audio_track_h;
+        if layer_track_h > 0.0 {
+            crate::layers::lanes_ui(ed, ui, rect, layers_top, x_of, ms_of, &mut seek_to, &mut self.ctx_ms);
+        }
+
         // mask track (only shown once the project has masks; add them from the tool rail)
-        let mask_top = audio_top + audio_track_h;
+        let mask_top = layers_top + layer_track_h;
         let clip_boundaries: Vec<f64> = spans.iter().map(|s| s.output_start_ms).chain(std::iter::once(duration)).collect();
         if has_masks {
             let track_rect = Rect::from_min_max(pos2(rect.left(), mask_top), pos2(rect.right(), mask_top + ZOOM_H));
@@ -652,6 +681,7 @@ impl TimelineWidget {
                 Lane::Zoom => {
                     ed.selected_zoom = Some(z.id.clone());
                     ed.selected_mask = None;
+                    ed.selected_clip = None;
                     ed.selected_slice = None;
                 }
                 Lane::Mask => ed.select_mask(z.id.clone()),
@@ -1127,6 +1157,7 @@ impl TimelineWidget {
                 ed.selected_audio = Some(c.id.clone());
                 ed.selected_zoom = None;
                 ed.selected_mask = None;
+                ed.selected_clip = None;
                 ed.selected_slice = None;
                 if let Some(pp) = probe.interact_pointer_pos() {
                     *seek_to = Some(ms_of(pp.x));
@@ -1141,6 +1172,7 @@ impl TimelineWidget {
                     ed.selected_audio = Some(id.clone());
                     ed.selected_zoom = None;
                     ed.selected_mask = None;
+                    ed.selected_clip = None;
                     ed.selected_slice = None;
                     *seek_to = Some(ms_of(p.x));
                 }
@@ -1295,7 +1327,7 @@ fn audio_menu(ed: &mut Editor, ui: &mut egui::Ui, id: &str, at_ms: f64) {
     ui.separator();
     ui.menu_button(format!("Speed ({}×)", clip.speed), |ui| {
         for sp in SPEEDS {
-            if ui.selectable_label((sp - clip.speed).abs() < 1e-6, format!("{sp}×")).clicked() {
+            if crate::widgets::menu_item(ui, (sp - clip.speed).abs() < 1e-6, format!("{sp}×")).clicked() {
                 ed.set_audio_clip_speed(id, sp);
                 ui.close();
             }
@@ -1317,7 +1349,7 @@ fn audio_menu(ed: &mut Editor, ui: &mut egui::Ui, id: &str, at_ms: f64) {
     ui.menu_button("Volume", |ui| {
         for v in [0.0, 0.25, 0.5, 0.75, 1.0, 1.5, 2.0] {
             let idc = id.to_string();
-            if ui.selectable_label((clip.volume - v).abs() < 1e-6, format!("{:.0}%", v * 100.0)).clicked() {
+            if crate::widgets::menu_item(ui, (clip.volume - v).abs() < 1e-6, format!("{:.0}%", v * 100.0)).clicked() {
                 ed.edit(move |p| {
                     let scene = &mut p.scenes[0];
                     if let Some(mut cs) = scene.audio_clips() {
@@ -1378,7 +1410,7 @@ fn voice_over_menu(ed: &mut Editor, ui: &mut egui::Ui, id: &str, at_ms: f64) {
     }
     ui.menu_button("Volume", |ui| {
         for v in [0.5, 0.75, 1.0, 1.25, 1.5, 2.0] {
-            if ui.selectable_label((vo.volume - v).abs() < 1e-6, format!("{:.0}%", v * 100.0)).clicked() {
+            if crate::widgets::menu_item(ui, (vo.volume - v).abs() < 1e-6, format!("{:.0}%", v * 100.0)).clicked() {
                 ed.edit_voice_over(id, move |o| {
                     o.volume = v;
                     o.is_disabled = false;
@@ -1420,7 +1452,7 @@ fn music_menu(ed: &mut Editor, ui: &mut egui::Ui, id: &str, at_ms: f64) {
             let cur = if out { clip.fade_out_ms } else { clip.fade_in_ms };
             ui.menu_button(title, |ui| {
                 for (ms, label) in FADES {
-                    if ui.selectable_label((cur - ms).abs() < 1.0, label).clicked() {
+                    if crate::widgets::menu_item(ui, (cur - ms).abs() < 1.0, label).clicked() {
                         ed.edit_music_clip(id, move |m| if out { m.fade_out_ms = ms } else { m.fade_in_ms = ms });
                         ui.close();
                     }
@@ -1437,7 +1469,7 @@ fn music_menu(ed: &mut Editor, ui: &mut egui::Ui, id: &str, at_ms: f64) {
     }
     ui.menu_button("Volume", |ui| {
         for v in [0.05, 0.1, 0.2, 0.3, 0.5, 0.75, 1.0] {
-            if ui.selectable_label((a.background_audio_volume - v).abs() < 1e-6, format!("{:.0}%", v * 100.0)).clicked() {
+            if crate::widgets::menu_item(ui, (a.background_audio_volume - v).abs() < 1e-6, format!("{:.0}%", v * 100.0)).clicked() {
                 ed.edit(move |p| {
                     p.config.audio.background_audio_volume = v;
                     p.config.audio.mute_background_audio = false;
@@ -1761,6 +1793,17 @@ fn clip_menu(ed: &mut Editor, ui: &mut egui::Ui, index: usize, at_ms: f64) {
     let slices = ed.session.pkg.project.scenes[0].slices.clone();
     let Some(slice) = slices.get(index) else { return };
     ui.set_min_width(160.0);
+    if slice.is_card() {
+        crate::layers::transition_menu(ed, ui, index);
+        ui.separator();
+        if ui.button("Delete title card").clicked() {
+            crate::layers::remove_card(ed, index);
+            ui.close();
+        }
+        return;
+    }
+    crate::layers::card_menu(ed, ui, index);
+    ui.separator();
     let rec_tracks = crate::audio::AudioPlayer::available_tracks(&ed.session);
     if !rec_tracks.is_empty() && !ed.session.pkg.project.scenes[0].is_audio_detached() {
         if ui.button("Detach audio").on_hover_text("Move the audio to its own track to split, move, trim or speed it up separately").clicked() {
@@ -1783,7 +1826,9 @@ fn clip_menu(ed: &mut Editor, ui: &mut egui::Ui, index: usize, at_ms: f64) {
         ed.edit(move |p| p.scenes[0].slices = edit::split_at_output(&p.scenes[0].slices, at_ms));
         ed.set_status("Split");
     }
-    if ui.add_enabled(slices.len() > 1, egui::Button::new("Delete")).clicked() {
+    crate::layers::transition_menu(ed, ui, index);
+    // the video keeps at least one clip of the recording
+    if ui.add_enabled(slices.iter().filter(|s| !s.is_card()).count() > 1, egui::Button::new("Delete")).clicked() {
         ed.selected_slice = None;
         ed.edit(move |p| p.scenes[0].slices = edit::delete(&p.scenes[0].slices, index));
         ed.set_status("Deleted clip");
@@ -1792,7 +1837,7 @@ fn clip_menu(ed: &mut Editor, ui: &mut egui::Ui, index: usize, at_ms: f64) {
     ui.menu_button(format!("Speed ({speed}×)"), |ui| {
         for s in SPEEDS {
             let sel = (speed - s).abs() < 1e-6;
-            if ui.selectable_label(sel, format!("{s}×")).clicked() {
+            if crate::widgets::menu_item(ui, sel, format!("{s}×")).clicked() {
                 if !sel {
                     ed.edit_speed(move |p| p.scenes[0].slices = edit::set_speed(&p.scenes[0].slices, index, s));
                 }
@@ -1809,7 +1854,7 @@ fn clip_menu(ed: &mut Editor, ui: &mut egui::Ui, index: usize, at_ms: f64) {
         ed.edit(move |p| p.scenes[0].slices[index].disable_smooth_mouse_movement = no_smooth);
     }
     ui.separator();
-    let contiguous = slices.get(index + 1).map(|n| (slice.source_end_ms - n.source_start_ms).abs() < 1.0).unwrap_or(false);
+    let contiguous = slices.get(index + 1).filter(|n| !n.is_card()).map(|n| (slice.source_end_ms - n.source_start_ms).abs() < 1.0).unwrap_or(false);
     if ui.add_enabled(contiguous, egui::Button::new("Merge with next")).clicked() {
         ed.edit(move |p| p.scenes[0].slices = edit::merge_with_next(&p.scenes[0].slices, index));
         ed.set_status("Merged clips");
@@ -1850,6 +1895,7 @@ fn zoom_menu(ed: &mut Editor, ui: &mut egui::Ui, id: &str) {
             ed.edit(move |p| p.scenes[0].zooms.insert(i + 1, dup));
             ed.selected_zoom = Some(dup_id);
             ed.selected_mask = None;
+            ed.selected_clip = None;
         } else {
             ed.set_status("No room after this zoom to duplicate it");
         }
@@ -1857,7 +1903,7 @@ fn zoom_menu(ed: &mut Editor, ui: &mut egui::Ui, id: &str) {
     ui.menu_button(format!("Zoom level ({:.2}×)", z.zoom), |ui| {
         for l in ZOOM_LEVELS {
             let sel = (z.zoom - l).abs() < 1e-6;
-            if ui.selectable_label(sel, format!("{l}×")).clicked() {
+            if crate::widgets::menu_item(ui, sel, format!("{l}×")).clicked() {
                 if !sel {
                     ed.edit(move |p| p.scenes[0].zooms[i].zoom = l);
                 }
@@ -1886,7 +1932,7 @@ fn mask_menu(ed: &mut Editor, ui: &mut egui::Ui, id: &str) {
     let m = ed.session.pkg.project.scenes[0].masks[i].clone();
     ui.set_min_width(160.0);
     for (kind, label) in [(Mask::SENSITIVE_DATA, "Blur"), (Mask::HIGHLIGHT, "Highlight")] {
-        if ui.selectable_label(m.kind == kind, label).clicked() {
+        if crate::widgets::menu_item(ui, m.kind == kind, label).clicked() {
             ed.edit(move |p| p.scenes[0].masks[i].kind = kind.into());
             ui.close();
         }
@@ -1898,6 +1944,7 @@ fn mask_menu(ed: &mut Editor, ui: &mut egui::Ui, id: &str) {
     }
     if ui.button("Remove").clicked() {
         ed.selected_mask = None;
+        ed.selected_clip = None;
         ed.edit(move |p| { p.scenes[0].masks.remove(i); });
         ed.set_status("Removed mask");
     }

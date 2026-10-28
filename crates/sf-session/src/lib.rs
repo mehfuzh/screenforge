@@ -18,6 +18,7 @@ pub mod layout;
 pub mod shortcuts;
 pub mod source;
 pub mod stream;
+pub mod tracks;
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -33,7 +34,7 @@ use sf_media::Frame;
 use sf_project::schema::common::Rect;
 use sf_project::v4::{ClickEffect, Mask};
 use sf_project::ProjectPackage;
-use sf_render::{BackgroundLayer, CameraGrade, CameraLayer, Color, FrameDesc, Gpu, Layer, LutTexture, MaskLayer, RingLayer, ScreenLayer, ShadowLayer, SolidLayer, SpriteLayer, Texture};
+use sf_render::{BackgroundLayer, CameraGrade, CameraLayer, Color, Compositor, FrameDesc, Gpu, Layer, LutTexture, MaskLayer, RingLayer, ScreenLayer, ShadowLayer, SolidLayer, SpriteLayer, Texture, TransitionDraw, TransitionKind};
 
 use crate::layout::{CameraSlot, ResolvedLayout};
 pub use source::SourceInfo;
@@ -87,6 +88,10 @@ pub struct Session {
     pub decode_speed: f64,
     pub captions: captions::Captions,
     pub shortcuts: shortcuts::Shortcuts,
+    /// Titles and overlay media (`sfTracks`).
+    pub visuals: tracks::VisualTracks,
+    /// Bumped on every rebuild, so frames held for transitions before an edit are not reused.
+    generation: u64,
     /// Where the screen was drawn in the last frame (output px), for editing masks on the preview.
     pub last_screen_px: Option<Rect>,
 }
@@ -105,6 +110,7 @@ impl Session {
         let camera_rect = SpringVec::new(SpringParams::from(pkg.project.config.animations.screen_movement_spring), [0.0; 4]);
         let captions = captions::Captions::load(&pkg, source.process_time_start_ms, &timeline);
         let shortcuts = shortcuts::Shortcuts::load(&pkg, &cursor_track);
+        let visuals = tracks::VisualTracks::load(&pkg, &timeline);
         let mut s = Session {
             pkg,
             source,
@@ -129,6 +135,8 @@ impl Session {
             decode_speed: 1.0,
             captions,
             shortcuts,
+            visuals,
+            generation: 0,
             last_screen_px: None,
         };
         s.load_cursor_sprites();
@@ -186,6 +194,8 @@ impl Session {
         self.last_output_ms = None;
         self.reload_captions();
         self.shortcuts = shortcuts::Shortcuts::load(&self.pkg, &self.cursor_track);
+        self.visuals.reload(&self.pkg, &self.timeline);
+        self.generation += 1;
     }
 
     pub fn duration_ms(&self) -> f64 {
@@ -368,6 +378,9 @@ impl Session {
         let output_ms = output_ms.clamp(0.0, self.duration_ms().max(0.0));
         let source_ms = self.frame_source_ms(output_ms);
         let span = self.timeline.span_at_output(output_ms).cloned();
+        if let Some(card) = span.filter(|s| s.card) {
+            return Ok(self.card_frame(output_ms, card.index, out));
+        }
         let speed = span.map(|s| 1.0 / s.time_scale).unwrap_or(1.0);
         let jump = match self.last_output_ms {
             Some(prev) if output_ms >= prev && output_ms - prev < 500.0 => false,
@@ -445,9 +458,19 @@ impl Session {
             None => (screen_px, shadow, inset),
         };
         self.last_screen_px = screen_visible.then_some(screen_px);
+        let active = self.visuals.active(&self.timeline, output_ms);
         if screen_visible {
             layers.push(Layer::Screen(ScreenLayer { texture: self.screen.texture.clone(), src01: crop, dst: screen_px, corner_radius, shadow, inset }));
             self.push_masks(&mut layers, source_ms, screen_px, corner_radius);
+            // shallow focus behind titles and overlays that ask for it
+            let (blur, dim) = tracks::VisualTracks::backdrop(&active);
+            if blur > 0.0 {
+                let radius_px = tracks::VisualTracks::backdrop_radius_px(blur, self.screen.texture.height);
+                layers.push(Layer::Mask(MaskLayer::Blur { texture: self.screen.texture.clone(), src01: crop, clip01: crop, dst: screen_px, corner_radius, radius_px, cover: Color::BLACK, cover_mix: 0.0 }));
+            }
+            if dim > 0.0 {
+                layers.push(Layer::Solid(SolidLayer { dst: screen_px, color: Color::BLACK.with_alpha((dim * 0.7) as f32), corner_radius, shadow: None }));
+            }
             self.push_click_effects(&mut layers, source_ms, screen_px, zoom_factor * s, &cfg.cursor.click_effect, to_crop01);
             for part in device.iter().flat_map(|d| &d.over) {
                 layers.push(Layer::Solid(SolidLayer { dst: part.rect, color: Color::from_hex(part.color).unwrap_or(Color::BLACK), corner_radius: part.radius as f32, shadow: None }));
@@ -517,11 +540,73 @@ impl Session {
             }
         }
 
+        // ── titles and overlay media ──
+        let package = self.pkg.path.clone();
+        self.visuals.push_layers(&self.gpu, &package, &active, output_ms, out.width, out.height, self.decode_max_width, &mut layers);
+
         // ── captions and shortcut labels, above everything ──
         self.captions.push_layer(&self.pkg, &self.gpu, source_ms, out.width, out.height, &mut layers);
         self.shortcuts.push_layer(&self.pkg, &self.gpu, source_ms, out.width, out.height, &mut layers);
 
-        Ok(FrameDesc { width: out.width, height: out.height, background: self.background_layer(), layers })
+        let mut desc = FrameDesc::new(out.width, out.height, self.background_layer(), layers);
+        self.add_transition(&mut desc, output_ms);
+        Ok(desc)
+    }
+
+    /// A frame of the title card `index`: its background and the titles over it, no
+    /// recording, camera, cursor or captions.
+    fn card_frame(&mut self, output_ms: f64, index: usize, out: OutputSize) -> FrameDesc {
+        // the clip after the card starts like after a seek (springs snap into place)
+        self.last_output_ms = None;
+        self.last_screen_px = None;
+        let colour = self.pkg.project.scenes[0].slices.get(index).and_then(|s| s.card.as_ref()).and_then(|c| c.background.as_deref()).and_then(Color::from_hex);
+        let background = match colour {
+            Some(c) => BackgroundLayer::Color(c),
+            None => self.background_layer(),
+        };
+        let active = self.visuals.active(&self.timeline, output_ms);
+        let mut layers = vec![];
+        let package = self.pkg.path.clone();
+        self.visuals.push_layers(&self.gpu, &package, &active, output_ms, out.width, out.height, self.decode_max_width, &mut layers);
+        let mut desc = FrameDesc::new(out.width, out.height, background, layers);
+        self.add_transition(&mut desc, output_ms);
+        desc
+    }
+
+    /// Mark a frame to keep for a transition that follows, and draw the one playing.
+    fn add_transition(&self, desc: &mut FrameDesc, output_ms: f64) {
+        let slices = &self.pkg.project.scenes[0].slices;
+        desc.hold = sf_engine::tracks::hold_before(slices, &self.timeline, output_ms).map(|i| self.held_key(i));
+        desc.transition = sf_engine::tracks::transition_at(slices, &self.timeline, output_ms).map(|tr| TransitionDraw {
+            kind: TransitionKind::from_name(&tr.kind),
+            progress: tr.progress,
+            // the first clip has nothing before it: it comes in from black
+            held: (tr.slice > 0).then(|| self.held_key(tr.slice)),
+        });
+    }
+
+    /// Key of the frame held for the transition into slice `index`.
+    fn held_key(&self, index: usize) -> u64 {
+        (self.generation << 20) | index as u64
+    }
+
+    /// Render the frame at `output_ms` into `comp`. A transition blends the last frame of the
+    /// clip before it, which the compositor keeps while playing through; after a seek into a
+    /// transition that frame is rendered first.
+    pub fn render(&mut self, comp: &mut Compositor, output_ms: f64, out: OutputSize) -> Result<()> {
+        let desc = self.frame_desc_at(output_ms, out)?;
+        let missing = desc.transition.and_then(|t| t.held).filter(|k| !comp.has_held(*k));
+        if let (Some(_), Some(tr)) = (missing, sf_engine::tracks::transition_at(&self.pkg.project.scenes[0].slices, &self.timeline, output_ms)) {
+            if let Some(start) = self.timeline.spans().get(tr.slice).map(|s| s.output_start_ms) {
+                let before = self.frame_desc_at(start - 1.0, out)?;
+                comp.render(&before);
+                let desc = self.frame_desc_at(output_ms, out)?;
+                comp.render(&desc);
+                return Ok(());
+            }
+        }
+        comp.render(&desc);
+        Ok(())
     }
 
     /// The camera LUT named by `config.camera.lut`: the project's `assets/` first (imported
@@ -570,7 +655,7 @@ impl Session {
         self.last_output_ms = None;
         let dst = Rect { x: 0.0, y: 0.0, width: out.width as f64, height: out.height as f64 };
         let screen = ScreenLayer { texture: self.screen.texture.clone(), src01: Rect::UNIT, dst, corner_radius: 0.0, shadow: None, inset: None };
-        Ok(FrameDesc { width: out.width, height: out.height, background: BackgroundLayer::Color(Color::BLACK), layers: vec![Layer::Screen(screen)] })
+        Ok(FrameDesc::new(out.width, out.height, BackgroundLayer::Color(Color::BLACK), vec![Layer::Screen(screen)]))
     }
 
     /// Re-read the transcripts (after generating one, or toggling sound labels).

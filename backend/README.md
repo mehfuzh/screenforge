@@ -57,12 +57,11 @@ that call it with an email alone are asked to update. Set `SUPABASE_URL` and
 `SUPABASE_ANON_KEY` in `crates/sf-license/src/lib.rs` to the project's values (and deploy the
 functions with `--no-verify-jwt`, or keep JWT verification: the anon key is sent as a bearer token).
 
-The first three exports work without any license (`sf_license::FREE_EXPORTS`). The count is
-kept in a file next to the key **and** in the `free_exports` table, keyed by a SHA-256 of the
-machine's hardware UUID (`IOPlatformUUID`; the raw UUID never leaves the Mac). The app calls
-`free-export` with `{ device }` when the export dialog opens and `{ device, record: true }` after
-each unlicensed export, and takes the higher of the local and server counts, so deleting the app
-or its support folder does not restart the free exports. Offline, the local file alone counts.
+Every export needs a license; there are no free exports since v0.1.40. Releases up to v0.1.39
+allowed three without one and still call `free-export` (`{ device }` when the export dialog opens,
+`{ device, record: true }` after an unlicensed export). The function now answers every device with
+`{ used: 3 }`, without touching the database, so those versions find their free exports used up
+too. Newer versions never call it; the `free_exports` table is no longer written.
 
 ## Unsplash backgrounds
 
