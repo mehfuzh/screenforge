@@ -1094,7 +1094,10 @@ mod tests {
         // the output aspect ratio is a number, as the guide says, not "9:16"
         w.run("patch_project", &json!({ "ops": [{ "op": "replace", "path": "/config/output/aspectRatio", "value": 0.5625 }] })).unwrap();
         assert_eq!(w.project.config.output.aspect_ratio.as_f64(), Some(0.5625));
-        assert!(w.run("patch_project", &json!({ "ops": [{ "op": "replace", "path": "/config/output/aspectRatio", "value": "9:16" }] })).is_err());
+        // a "w:h" string is read as the number all the same; nonsense is still refused
+        w.run("patch_project", &json!({ "ops": [{ "op": "replace", "path": "/config/output/aspectRatio", "value": "9:16" }] })).unwrap();
+        assert_eq!(w.project.config.output.aspect_ratio.as_f64(), Some(0.5625));
+        assert!(w.run("patch_project", &json!({ "ops": [{ "op": "replace", "path": "/config/output/aspectRatio", "value": "wide" }] })).is_err());
         w.run("patch_project", &json!({ "ops": [
             { "op": "add", "path": "/config/camera/sfColorGrade", "value": grade },
             { "op": "add", "path": "/config/camera/sfFaceTrackingZoom", "value": 1.4 }
