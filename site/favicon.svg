@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="188 202 648 648">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="152 242 720 540">
   <defs>
     <linearGradient id="fire" x1="0" y1="0" x2="0" y2="1">
       <stop offset="0" stop-color="#ffd98a"/>
@@ -6,19 +6,18 @@
       <stop offset="0.75" stop-color="#ff4a5c"/>
       <stop offset="1" stop-color="#c81f78"/>
     </linearGradient>
-    <linearGradient id="dotfire" x1="0" y1="0" x2="0" y2="1">
+    <linearGradient id="dot" x1="0" y1="0" x2="0" y2="1">
       <stop offset="0" stop-color="#ffd98a"/>
       <stop offset="0.45" stop-color="#ff8a45"/>
       <stop offset="1" stop-color="#ff4a5c"/>
     </linearGradient>
   </defs>
-  <path fill="url(#fire)" fill-rule="evenodd" d="
-    M512 214
-    C548 282 610 322 650 356
-    C716 404 760 482 760 590
-    A248 248 0 1 1 264 590
-    C264 482 308 404 374 356
-    C414 322 476 282 512 214 Z
-    M512 412 A178 178 0 1 0 512.1 412 Z"/>
-  <circle fill="url(#dotfire)" cx="512" cy="590" r="104"/>
+  <rect x="172" y="262" width="680" height="500" rx="96" fill="url(#fire)"/>
+  <path fill="#140f1a" d="M268 262 H756 A96 96 0 0 1 852 358 V398 H172 V358 A96 96 0 0 1 268 262 Z"/>
+  <rect x="172" y="262" width="680" height="500" rx="96" fill="none" stroke="url(#fire)" stroke-width="40"/>
+  <circle cx="264" cy="330" r="26" fill="url(#dot)"/>
+  <circle cx="342" cy="330" r="26" fill="url(#dot)"/>
+  <circle cx="420" cy="330" r="26" fill="url(#dot)"/>
+  <circle cx="512" cy="580" r="132" fill="#140f1a"/>
+  <circle cx="512" cy="580" r="76" fill="url(#dot)"/>
 </svg>
