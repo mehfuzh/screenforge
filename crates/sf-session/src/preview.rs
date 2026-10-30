@@ -31,6 +31,11 @@ pub fn write_quicklook_preview(project: &Path) -> Result<()> {
     }
     session.render(&mut comp, at, size)?;
     let px = comp.read_pixels()?;
+    // the project may have been renamed or moved to the Trash while the frame rendered:
+    // creating the folder again would leave an empty project behind holding only this preview
+    if !sf_project::ProjectPackage::is_package(project) {
+        return Ok(());
+    }
     let out = project.join(sf_project::package::QUICKLOOK_PREVIEW);
     std::fs::create_dir_all(out.parent().unwrap())?;
     // write next to it and rename, so readers never see a half-written file

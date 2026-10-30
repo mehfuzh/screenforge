@@ -304,7 +304,7 @@ impl App {
                         ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
                     }
                     crate::tray::TrayAction::OpenProject => {
-                        if let Some(p) = project_dialog().pick_folder() {
+                        if let Some(p) = pick_project() {
                             *open_request = Some(p);
                         }
                     }
@@ -390,9 +390,16 @@ impl App {
                 if matches!(self.screen, Screen::Opening(..)) {
                     self.show_picker(ctx);
                 }
-                if e.chain().any(|c| matches!(c.downcast_ref::<sf_project::Error>(), Some(sf_project::Error::Cancelled))) {
+                let project_err = |want: fn(&sf_project::Error) -> bool| e.chain().any(|c| c.downcast_ref::<sf_project::Error>().is_some_and(want));
+                if project_err(|e| matches!(e, sf_project::Error::Cancelled)) {
                     if let Screen::Picker(p) = &mut self.screen {
                         p.set_status(format!("Import of “{}” cancelled", ed_name(&path)));
+                    }
+                } else if project_err(|e| matches!(e, sf_project::Error::NotAPackage(_))) {
+                    // a folder named like a project with no project inside (an empty leftover):
+                    // a short notice over the bar, not an error dialog
+                    if let Screen::Picker(p) = &mut self.screen {
+                        p.set_status(format!("“{}” has no recording in it", ed_name(&path)));
                     }
                 } else {
                     self.error = Some(format!("Could not open {}:\n{e:#}", path.display()));
@@ -441,9 +448,28 @@ impl App {
 /// Open dialog for ScreenForge projects, starting in the projects folder; Screen Studio projects
 /// are imported when opened.
 fn project_dialog() -> rfd::FileDialog {
-    let dialog = rfd::FileDialog::new().add_filter("ScreenForge or Screen Studio project", &[sf_project::PACKAGE_EXTENSION, sf_project::SCREEN_STUDIO_EXTENSION]);
+    let dialog = rfd::FileDialog::new();
+    // macOS shows projects as packages the filter can match. Elsewhere a project is a plain
+    // folder: a filter there hides every other folder (no way to browse to it), and Explorer
+    // opens a folder on double-click, so the pick is resolved with `pick_project` instead.
+    let dialog = if cfg!(target_os = "macos") { dialog.add_filter("ScreenForge or Screen Studio project", &[sf_project::PACKAGE_EXTENSION, sf_project::SCREEN_STUDIO_EXTENSION]) } else { dialog.set_title("Open a ScreenForge or Screen Studio project") };
     let folder = sf_session::create::default_projects_folder();
     if folder.is_dir() { dialog.set_directory(folder) } else { dialog }
+}
+
+/// Ask for a project. macOS lists projects as packages (files: a folder picker greys them out);
+/// elsewhere they are folders, and one picked inside a project (after opening it in Explorer or
+/// the Linux file chooser) resolves to the project that holds it.
+fn pick_project() -> Option<PathBuf> {
+    let picked = if cfg!(target_os = "macos") { project_dialog().pick_file() } else { project_dialog().pick_folder() };
+    picked.map(project_root)
+}
+
+/// `path` or its nearest ancestor that is a ScreenForge or Screen Studio project; `path` itself
+/// when none is, so opening it reports what is wrong.
+fn project_root(path: PathBuf) -> PathBuf {
+    let is_project = |p: &std::path::Path| p.extension().is_some_and(|e| e == sf_project::PACKAGE_EXTENSION || e == sf_project::SCREEN_STUDIO_EXTENSION);
+    path.ancestors().find(|p| is_project(p)).map(|p| p.to_path_buf()).unwrap_or(path)
 }
 
 /// Placeholder while a project loads: its name and a spinner, centred on the editor background.
@@ -936,7 +962,7 @@ impl eframe::App for App {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Title("New project".into()));
             }
             Some(PickerAction::OpenProjectDialog) => {
-                if let Some(p) = project_dialog().pick_folder() {
+                if let Some(p) = pick_project() {
                     open_request = Some(p);
                 }
             }
