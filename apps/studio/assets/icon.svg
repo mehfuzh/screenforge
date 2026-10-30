@@ -23,7 +23,9 @@
   <rect x="100" y="100" width="824" height="824" rx="185" fill="url(#bg)"/>
   <g clip-path="url(#tile)">
     <circle cx="512" cy="580" r="260" fill="#ff5a4a" opacity="0.4" filter="url(#glow)"/>
-    <!-- a window: fire body, dark title bar with traffic lights, fire outline so the bar reads on the dark tile -->
+    <!-- a window: fire body, dark title bar with traffic lights, fire outline so the bar reads on the dark tile;
+         scaled to ~65% of the tile so it has the same breathing room as the system icons -->
+    <g transform="translate(512 512) scale(0.8) translate(-512 -512)">
     <rect x="172" y="262" width="680" height="500" rx="96" fill="url(#fire)"/>
     <path fill="#140f1a" d="M268 262 H756 A96 96 0 0 1 852 358 V398 H172 V358 A96 96 0 0 1 268 262 Z"/>
     <rect x="172" y="262" width="680" height="500" rx="96" fill="none" stroke="url(#fire)" stroke-width="40"/>
@@ -33,5 +35,6 @@
     <!-- record dot -->
     <circle cx="512" cy="580" r="132" fill="#140f1a"/>
     <circle cx="512" cy="580" r="76" fill="url(#dot)"/>
+    </g>
   </g>
 </svg>
