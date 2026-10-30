@@ -264,7 +264,8 @@ const STATUS_H: f32 = 28.0 + 8.0;
 const STATUS_WINDOW_H: f32 = BAR_WINDOW_H + STATUS_H;
 /// How long a status notice stays up.
 const STATUS_FOR: std::time::Duration = std::time::Duration::from_secs(4);
-pub const MENU_WINDOW_H: f32 = 440.0;
+/// Window height while a menu is open: tall enough for the settings menu above the bar.
+pub const MENU_WINDOW_H: f32 = 600.0;
 /// Project card in the recent panel (thumbnail, name, age).
 const CARD_SIZE: egui::Vec2 = vec2(176.0, 150.0);
 /// Page dots sit this far above the recent panel's bottom edge (centre of the dots).
@@ -491,56 +492,50 @@ impl Picker {
             ui.ctx().request_repaint();
         }
         bar_menu(&gear, egui::RectAlign::TOP_END, |ui| {
-            ui.set_min_width(240.0);
-            ui.label(RichText::new("Recording countdown").small().color(theme::p().text_dim));
-            for (ms, l) in [(0u64, "None"), (3000, "3 seconds"), (5000, "5 seconds"), (10000, "10 seconds")] {
-                if crate::widgets::menu_item(ui, self.countdown_ms == ms, l).clicked() {
-                    self.countdown_ms = ms;
+            menu_section(ui, "Recording countdown", true);
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 4.0;
+                ui.add_space(6.0);
+                for (ms, l) in [(0u64, "Off"), (3000, "3s"), (5000, "5s"), (10000, "10s")] {
+                    if menu_chip(ui, self.countdown_ms == ms, l).clicked() {
+                        self.countdown_ms = ms;
+                    }
                 }
-            }
-            ui.separator();
-            ui.label(RichText::new("Appearance").small().color(theme::p().text_dim));
+            });
+            menu_section(ui, "Appearance", false);
             for (choice, l) in [(Appearance::ScreenForge, "ScreenForge Dark"), (Appearance::ScreenForgeLight, "ScreenForge Light"), (Appearance::System, "Match system"), (Appearance::Dark, "Catppuccin Mocha"), (Appearance::Light, "Solarized Light"), (Appearance::OsakaJade, "Osaka Jade")] {
                 if crate::widgets::menu_item(ui, prefs.appearance == choice, l).clicked() {
                     action = Some(PickerAction::SetAppearance(choice));
                 }
             }
-            ui.separator();
-            if sf_recording::permissions::accessibility().is_granted() {
-                ui.label(RichText::new("Zooms follow typing: on").small().color(theme::p().text_dim));
-            } else if ui.button("Let zooms follow typing…").on_hover_text("Allow Accessibility so automatic zooms follow the text caret while you type").clicked() {
+            menu_section(ui, "Auto zoom", false);
+            let typing = sf_recording::permissions::accessibility().is_granted();
+            let r = crate::widgets::menu_item(ui, typing, if typing { "Zooms follow typing" } else { "Let zooms follow typing…" });
+            if !typing && r.on_hover_text("Allow Accessibility so automatic zooms follow the text caret while you type").clicked() {
                 if sf_recording::permissions::request_accessibility() != sf_recording::PermissionStatus::Granted {
                     let _ = sf_recording::permissions::open_settings(sf_recording::Permission::Accessibility);
                 }
             }
-            ui.separator();
-            ui.label(RichText::new(format!("Updates · v{}", crate::update::version())).small().color(theme::p().text_dim));
+            menu_section(ui, &format!("Updates · v{}", crate::update::version()), false);
             match &update {
                 crate::update::State::Available { version, url } => {
-                    if ui.button(RichText::new(format!("Update to v{version}…")).color(theme::p().accent)).on_hover_text("Open the release page to download it").clicked() {
+                    if crate::widgets::menu_item(ui, false, format!("Update to v{version}…")).on_hover_text("Open the release page to download it").clicked() {
                         crate::os::open(url);
                     }
                 }
-                crate::update::State::Checking => {
-                    ui.label(RichText::new("Checking…").small().color(theme::p().text_dim));
-                }
-                crate::update::State::UpToDate => {
-                    ui.label(RichText::new("ScreenForge is up to date").small().color(theme::p().text_dim));
-                }
-                crate::update::State::Failed(_) => {
-                    ui.label(RichText::new("Could not reach GitHub").small().color(theme::p().text_dim));
-                }
+                crate::update::State::Checking => menu_note(ui, "Checking…"),
+                crate::update::State::UpToDate => menu_note(ui, "ScreenForge is up to date"),
+                crate::update::State::Failed(_) => menu_note(ui, "Could not reach GitHub"),
                 crate::update::State::Idle => {}
             }
-            if !matches!(update, crate::update::State::Checking) && ui.button("Check for updates now").clicked() {
+            if !matches!(update, crate::update::State::Checking) && crate::widgets::menu_item(ui, false, "Check for updates now").clicked() {
                 action = Some(PickerAction::CheckUpdates);
             }
-            let mut auto = prefs.check_updates;
-            if ui.checkbox(&mut auto, "Check automatically").on_hover_text("Once a day at launch: one request to GitHub's public releases API, nothing about you is sent").changed() {
-                action = Some(PickerAction::SetCheckUpdates(auto));
+            if crate::widgets::menu_item(ui, prefs.check_updates, "Check automatically").on_hover_text("Once a day at launch: one request to GitHub's public releases API, nothing about you is sent").clicked() {
+                action = Some(PickerAction::SetCheckUpdates(!prefs.check_updates));
             }
-            ui.separator();
-            if ui.button("Quit ScreenForge").clicked() {
+            menu_rule(ui);
+            if crate::widgets::menu_item(ui, false, "Quit ScreenForge").clicked() {
                 action = Some(PickerAction::Quit);
             }
         });
@@ -581,7 +576,10 @@ impl Picker {
             self.status = None;
         }
         let status_h = if self.status.is_some() { STATUS_WINDOW_H } else { 0.0 };
-        let wanted = if self.show_recent || lingering { PILL_MARGIN + PILL_SIZE.y + RECENT_WINDOW_H } else if any_menu { MENU_WINDOW_H } else { BAR_WINDOW_H.max(status_h) };
+        // a menu opened from the recent panel (which closes it but lingers) still needs its full height
+        let recent_h = if self.show_recent || lingering { PILL_MARGIN + PILL_SIZE.y + RECENT_WINDOW_H } else { 0.0 };
+        let menu_h = if any_menu { MENU_WINDOW_H } else { 0.0 };
+        let wanted = recent_h.max(menu_h).max(BAR_WINDOW_H.max(status_h));
         // never shrink mid-click: resizing moves the bar in window coordinates, and the release
         // would land somewhere else and lose the click
         self.wanted_height = if ui.input(|i| i.pointer.any_down()) { wanted.max(self.wanted_height) } else { wanted };
@@ -720,6 +718,54 @@ impl Picker {
         }
     }
 
+}
+
+/// A settings-menu group heading, with a hairline above it unless it is the first group.
+fn menu_section(ui: &mut Ui, title: &str, first: bool) {
+    if !first {
+        menu_rule(ui);
+    }
+    ui.add_space(2.0);
+    ui.horizontal(|ui| {
+        ui.add_space(10.0);
+        ui.label(RichText::new(title.to_uppercase()).size(11.0).strong().color(theme::p().text_faint));
+    });
+    ui.add_space(2.0);
+}
+
+/// Hairline between settings-menu groups. Spans the menu's width without claiming any, so
+/// the menu stays as narrow as its widest row.
+fn menu_rule(ui: &mut Ui) {
+    ui.add_space(3.0);
+    let r = ui.allocate_space(vec2(0.0, 1.0)).1;
+    let span = ui.max_rect().x_range().shrink(6.0);
+    ui.painter().hline(span, r.center().y, Stroke::new(1.0, theme::glass_alpha(30)));
+    ui.add_space(3.0);
+}
+
+/// One option of a compact segmented choice in the settings menu (the countdown).
+fn menu_chip(ui: &mut Ui, selected: bool, text: &str) -> egui::Response {
+    let pal = theme::p();
+    let galley = ui.painter().layout_no_wrap(text.to_string(), FontId::proportional(13.0), pal.on_glass);
+    let (rect, resp) = ui.allocate_exact_size(vec2(galley.size().x + 20.0, 24.0), Sense::click());
+    let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
+    let p = ui.painter();
+    if selected || resp.hovered() {
+        p.rect_filled(rect, CornerRadius::same(2), theme::glass_alpha(if selected { 44 } else { 24 }));
+    }
+    if selected {
+        p.rect_stroke(rect, CornerRadius::same(2), Stroke::new(1.0, pal.accent_hover), egui::StrokeKind::Inside);
+    }
+    p.galley(rect.center() - galley.size() / 2.0, galley, pal.on_glass);
+    resp
+}
+
+/// Quiet status line inside the settings menu, aligned with the row text.
+fn menu_note(ui: &mut Ui, text: &str) {
+    ui.horizontal(|ui| {
+        ui.add_space(30.0);
+        ui.label(RichText::new(text).size(12.0).color(theme::p().text_dim));
+    });
 }
 
 fn divider(ui: &mut Ui) {

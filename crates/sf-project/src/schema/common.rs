@@ -127,12 +127,38 @@ impl Default for CursorSet {
     }
 }
 
-/// `output.aspectRatio`: `"auto"` or a number (width / height).
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+/// `output.aspectRatio`: `"auto"` or a number (width / height). Reading also accepts a ratio
+/// written as text ("9:16", "16/9", "4x3", "1.7778") and stores it as the number.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
 #[serde(untagged)]
 pub enum AspectRatio {
     Ratio(f64),
     Auto(AutoTag),
+}
+
+impl<'de> Deserialize<'de> for AspectRatio {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Raw {
+            Ratio(f64),
+            Text(String),
+        }
+        let text = match Raw::deserialize(d)? {
+            Raw::Ratio(r) => return Ok(AspectRatio::Ratio(r)),
+            Raw::Text(t) => t,
+        };
+        let t = text.trim();
+        if t.eq_ignore_ascii_case("auto") {
+            return Ok(AspectRatio::AUTO);
+        }
+        let num = |s: &str| s.trim().parse::<f64>().ok().filter(|v| v.is_finite() && *v > 0.0);
+        let r = match t.split_once([':', '/', 'x', 'X']) {
+            Some((w, h)) => num(w).zip(num(h)).map(|(w, h)| w / h),
+            None => num(t),
+        };
+        r.map(AspectRatio::Ratio).ok_or_else(|| serde::de::Error::custom(format!("aspect ratio must be \"auto\" or width / height as a number, not {text:?}")))
+    }
 }
 
 /// Serializes as the literal string `"auto"`.
