@@ -1171,8 +1171,14 @@ impl Editor {
             let rect = ui.max_rect();
             let name = self.session.pkg.project.name.clone();
             if let Some(buf) = self.title_edit.as_mut() {
-                let edit_rect = Rect::from_center_size(rect.center(), vec2(420.0, 30.0));
-                let resp = ui.put(edit_rect, egui::TextEdit::singleline(buf).font(FontId::proportional(15.0)).horizontal_align(egui::Align::Center).desired_width(420.0));
+                // the field grows with the name and the extension stays beside it, as on the title
+                let ext = ui.painter().layout_no_wrap(format!(".{}", sf_project::PACKAGE_EXTENSION), FontId::proportional(15.0), theme::p().text_faint);
+                let text_w = ui.painter().layout_no_wrap(buf.clone(), FontId::proportional(15.0), theme::p().text).size().x;
+                let field_w = (text_w + 24.0).clamp(160.0, 420.0);
+                let x0 = rect.center().x - (field_w + 4.0 + ext.size().x) / 2.0;
+                let edit_rect = Rect::from_min_size(pos2(x0, rect.center().y - 15.0), vec2(field_w, 30.0));
+                let resp = ui.put(edit_rect, egui::TextEdit::singleline(buf).font(FontId::proportional(15.0)).horizontal_align(egui::Align::Center).desired_width(field_w));
+                ui.painter().galley(pos2(edit_rect.right() + 4.0, rect.center().y - ext.size().y / 2.0), ext, theme::p().text_faint);
                 resp.request_focus();
                 let enter = ui.input(|i| i.key_pressed(egui::Key::Enter));
                 let escape = ui.input(|i| i.key_pressed(egui::Key::Escape));
@@ -1650,7 +1656,6 @@ impl Editor {
         self.path = new_path.clone();
         self.session.pkg.project.name = new_name.clone();
         self.save();
-        self.set_status(format!("Renamed to {new_name}"));
         self.renamed_to = Some(new_path);
     }
 
