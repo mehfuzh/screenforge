@@ -43,6 +43,8 @@ pub struct App {
     appending: bool,
     /// SF_START_NEW was handled.
     started_new: bool,
+    /// A file dialog open on its own thread (see `ask`), answering with the pick or `None`.
+    picking: Option<std::sync::mpsc::Receiver<Option<PathBuf>>>,
     /// First-launch permissions window.
     perm_setup: Option<crate::permissions::PermissionsSetup>,
     /// Closing a just-recorded project: ask keep / move to Trash. `true` = quit afterwards.
@@ -143,7 +145,7 @@ impl App {
         let mut picker = Picker::default();
         picker.load_inputs();
         let perm_setup = (crate::permissions::PermissionsSetup::needed() || std::env::var_os("SF_SHOW_PERMISSIONS").is_some()).then(crate::permissions::PermissionsSetup::start);
-        let app = App { gpu, screen: Screen::Picker(picker), error: None, prefs, window_mode: WindowMode::Picker, picker_height: crate::picker::BAR_WINDOW_H, placed_once: false, tray: None, tray_tried: false, area_select: None, window_select: None, titlebar_fix: 0, perm_setup, confirm_close: None, quitting: false, fresh_open: None, last_size: None, last_pointer: None, #[cfg(target_os = "linux")] input_region: crate::os::InputRegion::new(cc), #[cfg(target_os = "windows")] window_shape: crate::os::WindowShape::new(cc), appending: false, started_new: false, pending_open: std::env::args().nth(1).map(PathBuf::from).filter(|p| p.is_dir() || sf_recording::import::is_video(p) || p.extension().is_some_and(|e| e == sf_project::PACKAGE_EXTENSION || e == sf_project::SCREEN_STUDIO_EXTENSION)) };
+        let app = App { gpu, screen: Screen::Picker(picker), error: None, prefs, window_mode: WindowMode::Picker, picker_height: crate::picker::BAR_WINDOW_H, placed_once: false, tray: None, tray_tried: false, area_select: None, window_select: None, titlebar_fix: 0, perm_setup, confirm_close: None, quitting: false, fresh_open: None, last_size: None, last_pointer: None, #[cfg(target_os = "linux")] input_region: crate::os::InputRegion::new(cc), #[cfg(target_os = "windows")] window_shape: crate::os::WindowShape::new(cc), appending: false, started_new: false, picking: None, pending_open: std::env::args().nth(1).map(PathBuf::from).filter(|p| p.is_dir() || sf_recording::import::is_video(p) || p.extension().is_some_and(|e| e == sf_project::PACKAGE_EXTENSION || e == sf_project::SCREEN_STUDIO_EXTENSION)) };
         crate::open_docs::set_context(&cc.egui_ctx);
         // a project on the command line opens on the first frame (`pending_open`)
         app
@@ -273,6 +275,50 @@ impl App {
         ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize([width, height].into()));
     }
 
+    /// Show `dialog` and hand its pick to `open_request`. On Linux the dialog belongs to the
+    /// desktop portal (another process) and the call only waits on D-Bus, so it runs on a thread
+    /// of its own: waiting here would stop the event loop, freeze the window and have the desktop
+    /// offer to force-quit the app. macOS and Windows run the native panel's own modal loop,
+    /// which keeps the window alive while it is up.
+    fn ask(&mut self, ctx: &egui::Context, dialog: fn() -> Option<PathBuf>, open_request: &mut Option<PathBuf>) {
+        if cfg!(target_os = "linux") {
+            if self.picking.is_some() {
+                return;
+            }
+            let (tx, rx) = std::sync::mpsc::channel();
+            let repaint = ctx.clone();
+            std::thread::Builder::new()
+                .name("file-dialog".into())
+                .spawn(move || {
+                    let _ = tx.send(dialog());
+                    repaint.request_repaint();
+                })
+                .expect("spawn file dialog");
+            self.picking = Some(rx);
+        } else if let Some(p) = dialog() {
+            *open_request = Some(p);
+        }
+    }
+
+    /// The answer from a dialog started by `ask`, once it is in (it waits while a recording runs,
+    /// like a project opened from the file manager).
+    fn poll_dialog(&mut self, open_request: &mut Option<PathBuf>) {
+        if matches!(self.screen, Screen::Recording(_)) {
+            return;
+        }
+        let Some(rx) = &self.picking else { return };
+        match rx.try_recv() {
+            Ok(pick) => {
+                self.picking = None;
+                if let Some(p) = pick {
+                    *open_request = Some(p);
+                }
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => {}
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => self.picking = None,
+        }
+    }
+
     fn tray_tick(&mut self, ctx: &egui::Context, open_request: &mut Option<PathBuf>) {
         // The status item is created on the first frame, after the app has finished launching:
         // creating it inside the launch callback crashed inside ImageIO on some systems.
@@ -303,11 +349,7 @@ impl App {
                         }
                         ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
                     }
-                    crate::tray::TrayAction::OpenProject => {
-                        if let Some(p) = pick_project() {
-                            *open_request = Some(p);
-                        }
-                    }
+                    crate::tray::TrayAction::OpenProject => self.ask(ctx, pick_project, open_request),
                     crate::tray::TrayAction::Quit => {
                         self.quitting = true;
                         ctx.send_viewport_cmd(egui::ViewportCommand::Close);
@@ -463,6 +505,11 @@ fn project_dialog() -> rfd::FileDialog {
 fn pick_project() -> Option<PathBuf> {
     let picked = if cfg!(target_os = "macos") { project_dialog().pick_file() } else { project_dialog().pick_folder() };
     picked.map(project_root)
+}
+
+/// Ask for a video to start a new project from.
+fn pick_video() -> Option<PathBuf> {
+    rfd::FileDialog::new().add_filter("Video", &sf_recording::import::VIDEO_EXTENSIONS).pick_file()
 }
 
 /// `path` or its nearest ancestor that is a ScreenForge or Screen Studio project; `path` itself
@@ -744,6 +791,7 @@ impl eframe::App for App {
         if open_request.is_none() && !matches!(self.screen, Screen::Recording(_)) {
             open_request = crate::open_docs::take();
         }
+        self.poll_dialog(&mut open_request);
         crate::theme::sync(ctx);
         if let Some(setup) = self.perm_setup.as_mut() {
             if setup.show(ctx) {
@@ -830,11 +878,7 @@ impl eframe::App for App {
                 }
             }
             Screen::Blank => match blank_ui(ui) {
-                Some(BlankAction::Choose) => {
-                    if let Some(p) = rfd::FileDialog::new().add_filter("Video", &sf_recording::import::VIDEO_EXTENSIONS).pick_file() {
-                        open_request = Some(p);
-                    }
-                }
+                Some(BlankAction::Choose) => self.ask(ctx, pick_video, &mut open_request),
                 Some(BlankAction::Home) => go_home = true,
                 None => {}
             },
@@ -961,11 +1005,7 @@ impl eframe::App for App {
                 self.set_window_mode(ctx, WindowMode::Editor);
                 ctx.send_viewport_cmd(egui::ViewportCommand::Title("New project".into()));
             }
-            Some(PickerAction::OpenProjectDialog) => {
-                if let Some(p) = pick_project() {
-                    open_request = Some(p);
-                }
-            }
+            Some(PickerAction::OpenProjectDialog) => self.ask(ctx, pick_project, &mut open_request),
             Some(PickerAction::StartRecording(mut req)) => {
                 if let Some(msg) = crate::recorder::check_permissions(&mut req) {
                     self.error = Some(msg);
