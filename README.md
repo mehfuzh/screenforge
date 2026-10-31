@@ -8,7 +8,7 @@
 [![macOS 14+](https://img.shields.io/badge/macOS-14%2B%20Apple%20silicon-000?logo=apple&logoColor=white)](https://github.com/mehfuzh/screenforge/releases/latest)
 [![Linux](https://img.shields.io/badge/Linux-x86__64%20X11%20%7C%20Wayland-fcc624?logo=linux&logoColor=black)](https://github.com/mehfuzh/screenforge/releases/latest)
 [![Windows](https://img.shields.io/badge/Windows-10%2B%20x86__64-0078d4?logo=windows&logoColor=white)](https://github.com/mehfuzh/screenforge/releases/latest/download/ScreenForge-windows-x86_64-setup.exe)
-[![Status](https://img.shields.io/badge/Status-early%20alpha-ffe16b)](docs/STATUS.md)
+[![Status](https://img.shields.io/badge/Status-beta-ffe16b)](docs/STATUS.md)
 
 **Your AI screen editor. Just ask. It edits.**
 
@@ -92,7 +92,7 @@ license pays for the maintained, signed and notarized download, the CI that buil
 ongoing maintenance. The hosted agent needs Pro; debug builds can call Claude directly with
 your own `ANTHROPIC_API_KEY`. See `backend/README.md` for how keys and credits are issued.
 
-> Status: early alpha. Records the screen (plus an optional webcam or a cabled iPhone/iPad),
+> Status: beta. Records the screen (plus an optional webcam or a cabled iPhone/iPad),
 > edits on a GPU-rendered timeline (cuts, speed, zooms that follow the cursor, smoothed cursor,
 > backgrounds, masks, crop, device frames, camera layouts with face tracking and colour
 > grading, captions, voice-overs and AI narration), edits for you with the agent, and exports
