@@ -25,8 +25,9 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;700;900&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
 <style>
-  /* Follows the system appearance by default (the boot script sets data-theme from
-     prefers-color-scheme); a toggle choice stored in localStorage overrides it. */
+  /* Light by default (the boot script sets data-theme="light" unless a toggle choice
+     is stored in localStorage); the tokens below are the dark palette, overridden by
+     the :root[data-theme="light"] block. */
   :root {
     --ground: #15161e;
     --ink: #1e1f29;
@@ -386,7 +387,7 @@
   (function () {
     var t = null;
     try { t = localStorage.getItem('theme'); } catch (e) {}
-    if (t !== 'light' && t !== 'dark') t = matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+    if (t !== 'light' && t !== 'dark') t = 'light';
     document.documentElement.dataset.theme = t;
   })();
 </script>
@@ -409,7 +410,7 @@ gtag('config', 'G-ZYRJDJ736V');
       <a href="index.html#roadmap">Roadmap</a>
       <a href="pricing.html">Pricing</a>
       <a class="nav-cta" href="download.html">Download</a>
-      <button type="button" class="mode-toggle" role="switch" aria-checked="true" aria-label="Dark theme" title="Switch to light">
+      <button type="button" class="mode-toggle" role="switch" aria-checked="false" aria-label="Light theme" title="Switch to dark">
         <svg class="sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg>
         <svg class="moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>
         <span class="knob"></span>
@@ -448,7 +449,7 @@ gtag('config', 'G-ZYRJDJ736V');
     var sw = document.querySelector('.mode-toggle');
     function current() {
       if (root.dataset.theme) return root.dataset.theme;
-      return 'dark';
+      return 'light';
     }
     function paint() {
       if (!sw) return;
@@ -464,14 +465,6 @@ gtag('config', 'G-ZYRJDJ736V');
       paint();
     });
     paint();
-    // No saved choice: keep following the system when it switches.
-    try {
-      matchMedia('(prefers-color-scheme: light)').addEventListener('change', function (e) {
-        try { if (localStorage.getItem('theme')) return; } catch (err) {}
-        root.dataset.theme = e.matches ? 'light' : 'dark';
-        paint();
-      });
-    } catch (e) {}
   })();
 </script>
 <script>
