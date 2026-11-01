@@ -234,9 +234,10 @@
   /* a clapperboard before "demos" and sparkles after "It edits.", both in gold */
   h1 .clap {
     display: inline-block; width: .86em; height: .86em; margin-right: .18em; vertical-align: -.08em;
-    fill: none; stroke: var(--gold); stroke-width: 2.1; stroke-linecap: round; stroke-linejoin: round;
+    fill: none; stroke: var(--gold); stroke-width: 1.9; stroke-linecap: round; stroke-linejoin: round;
   }
   h1 .clap .board { fill: color-mix(in srgb, var(--gold) 16%, transparent); }
+  h1 .clap .slate { fill: color-mix(in srgb, var(--gold) 55%, transparent); }
   h1 .sparkle { display: inline-block; width: 1em; height: 1em; margin-left: .08em; vertical-align: -.1em; fill: var(--gold); }
   /* example asks, one lit at a time, in the agent's own voice */
   .asks { list-style: none; margin: 30px auto 0; padding: 0; display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; max-width: 760px; }
@@ -480,7 +481,7 @@ gtag('config', 'G-ZYRJDJ736V');
 <header class="hero">
   <div class="wrap hero-in">
     <div class="app-icon"><img src="icon.png?v=9" alt="" width="104" height="104"></div>
-    <h1><svg class="clap" viewBox="0 0 32 32" aria-hidden="true"><path class="board" d="M4 13h24v13.5a2.5 2.5 0 0 1-2.5 2.5h-19A2.5 2.5 0 0 1 4 26.5V13z"/><path d="M4.6 12.6 3 7.4l22.4-4.2 1.4 5.3M9 11.8 12.2 5.9M16.2 10.4l3.2-5.9M23.4 9l3-5.6"/></svg>Pro demos in minutes.<br><em>Just ask. It edits.<svg class="sparkle" viewBox="0 0 32 32" aria-hidden="true"><path d="M13 4c.9 5.6 3.4 8.1 9 9-5.6.9-8.1 3.4-9 9-.9-5.6-3.4-8.1-9-9 5.6-.9 8.1-3.4 9-9z"/><path d="M24.5 18c.5 2.9 1.6 4 4.5 4.5-2.9.5-4 1.6-4.5 4.5-.5-2.9-1.6-4-4.5-4.5 2.9-.5 4-1.6 4.5-4.5z"/></svg></em></h1>
+    <h1><svg class="clap" viewBox="0 0 24 24" aria-hidden="true"><path class="board" d="M3 11h18v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path class="slate" d="M20.2 6 3 11l-.9-2.4c-.3-1.1.3-2.2 1.3-2.5l13.5-4c1.1-.3 2.2.3 2.5 1.3z"/><path d="m6.2 5.3 3.1 3.9M12.4 3.4l3.1 4"/><path d="M3 15h18"/></svg>Pro demos in minutes.<br><em>Just ask. It edits.<svg class="sparkle" viewBox="0 0 32 32" aria-hidden="true"><path d="M13 4c.9 5.6 3.4 8.1 9 9-5.6.9-8.1 3.4-9 9-.9-5.6-3.4-8.1-9-9 5.6-.9 8.1-3.4 9-9z"/><path d="M24.5 18c.5 2.9 1.6 4 4.5 4.5-2.9.5-4 1.6-4.5 4.5-.5-2.9-1.6-4-4.5-4.5 2.9-.5 4-1.6 4.5-4.5z"/></svg></em></h1>
     <ul class="asks" aria-label="Things you can ask the agent">
       <li>cut the ums and the long pauses</li>
       <li>zoom on my clicks</li>
