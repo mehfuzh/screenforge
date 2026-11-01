@@ -6,9 +6,14 @@
 <title>Pricing — ScreenForge: free, Pro with the AI agent, or a one-time license</title>
 <meta name="description" content="ScreenForge is free to record and edit. Pro is US$20/month with the AI editing agent, 1,000 credits a month and unlimited export; the Creator license is US$49 once. 24-hour refund on unused purchases.">
 <link rel="canonical" href="https://screenforge.studio/pricing">
+<link rel="alternate" hreflang="en" href="https://screenforge.studio/pricing">
+<link rel="alternate" hreflang="es" href="https://screenforge.studio/es/pricing">
+<link rel="alternate" hreflang="x-default" href="https://screenforge.studio/pricing">
 <meta name="color-scheme" content="light dark">
 <meta property="og:type" content="website">
 <meta property="og:url" content="https://screenforge.studio/pricing">
+<meta property="og:locale" content="en_US">
+<meta property="og:locale:alternate" content="es_ES">
 <meta property="og:title" content="Pricing — ScreenForge: free, Pro with the AI agent, or a one-time license">
 <meta property="og:description" content="ScreenForge is free to record and edit. Pro is US$20/month with the AI editing agent, 1,000 credits a month and unlimited export; the Creator license is US$49 once. 24-hour refund on unused purchases.">
 <meta property="og:image" content="https://screenforge.studio/og.png?v=6">
@@ -117,6 +122,16 @@
   .mode-toggle[aria-checked="true"] .moon, .mode-toggle[aria-checked="false"] .sun { color: var(--on-accent); }
   .mode-toggle:focus-visible { outline: 2px solid var(--jade); outline-offset: 2px; }
   @media (prefers-reduced-motion: reduce) { .mode-toggle .knob, .mode-toggle svg { transition: none; } }
+  /* language: two flags, the current one lit with a hairline, both kept on phones */
+  .lang { display: inline-flex; align-items: center; gap: 6px; }
+  .lang-opt {
+    display: inline-flex; width: 24px; height: 17px; border-radius: 4px; overflow: hidden;
+    opacity: .45; border: 1px solid var(--line-2); transition: opacity .15s, box-shadow .15s;
+  }
+  .lang-opt svg { display: block; width: 100%; height: 100%; }
+  .lang-opt:hover { opacity: .85; }
+  .lang-opt.is-on { opacity: 1; border-color: var(--jade); }
+  .lang-opt:focus-visible { outline: 2px solid var(--jade); outline-offset: 2px; }
   /* buttons, chips and the platform picker share the switch's corner radius */
   .go, .alt, .buy, .seg, .asks li { border-radius: 6px; }
   /* rounded surfaces on every page, as on the landing page */
@@ -132,7 +147,7 @@
   .cmp-wrap { border-radius: 14px; }
   .cmp-img { border-radius: 12px; }
   @media (max-width: 720px) {
-    .nav-links a:not(.nav-cta) { display: none; }
+    .nav-links a:not(.nav-cta):not(.lang-opt) { display: none; }
   }
 
   /* ── hero ──────────────────────────────────────────── */
@@ -430,6 +445,15 @@
     try { t = localStorage.getItem('theme'); } catch (e) {}
     if (t !== 'light' && t !== 'dark') t = 'light';
     document.documentElement.dataset.theme = t;
+    // Language: a flag click is remembered on every page; a Spanish browser's first visit to the
+    // home page lands on the Spanish page. 'here' is '' for the home page, else 'pricing' etc.
+    try {
+      var lang = localStorage.getItem('lang');
+      var pref = (navigator.languages && navigator.languages[0]) || navigator.language || '';
+      var here = location.pathname.replace(/^.*\//, '').replace(/\.html$/, '').replace(/^index$/, '');
+      if (!/^#thanks/.test(location.hash) && (lang === 'es' || (!lang && !here && /^es\b/i.test(pref))))
+        location.replace('es/' + (here ? here + '.html' : '') + location.hash);
+    } catch (e) {}
   })();
 </script>
 <!-- Google tag (gtag.js) -->
@@ -451,6 +475,10 @@ gtag('config', 'G-ZYRJDJ736V');
       <a href="index.html#platforms">Platforms</a>
       <a href="pricing.html">Pricing</a>
       <a class="nav-cta" href="download.html">Download</a>
+      <div class="lang" role="group" aria-label="Language">
+        <a class="lang-opt is-on" aria-current="page" href="pricing.html" hreflang="en" lang="en" title="English" aria-label="English"><svg viewBox="0 0 60 40" aria-hidden="true"><rect width="60" height="40" fill="#fff"/><rect y="0.00" width="60" height="3.13" fill="#B22234"/><rect y="6.15" width="60" height="3.13" fill="#B22234"/><rect y="12.31" width="60" height="3.13" fill="#B22234"/><rect y="18.46" width="60" height="3.13" fill="#B22234"/><rect y="24.62" width="60" height="3.13" fill="#B22234"/><rect y="30.77" width="60" height="3.13" fill="#B22234"/><rect y="36.92" width="60" height="3.13" fill="#B22234"/><rect width="24" height="21.54" fill="#3C3B6E"/><circle cx="2.4" cy="2.15" r="1" fill="#fff"/><circle cx="7.2" cy="2.15" r="1" fill="#fff"/><circle cx="12.0" cy="2.15" r="1" fill="#fff"/><circle cx="16.8" cy="2.15" r="1" fill="#fff"/><circle cx="21.6" cy="2.15" r="1" fill="#fff"/><circle cx="2.4" cy="6.45" r="1" fill="#fff"/><circle cx="7.2" cy="6.45" r="1" fill="#fff"/><circle cx="12.0" cy="6.45" r="1" fill="#fff"/><circle cx="16.8" cy="6.45" r="1" fill="#fff"/><circle cx="21.6" cy="6.45" r="1" fill="#fff"/><circle cx="2.4" cy="10.75" r="1" fill="#fff"/><circle cx="7.2" cy="10.75" r="1" fill="#fff"/><circle cx="12.0" cy="10.75" r="1" fill="#fff"/><circle cx="16.8" cy="10.75" r="1" fill="#fff"/><circle cx="21.6" cy="10.75" r="1" fill="#fff"/><circle cx="2.4" cy="15.05" r="1" fill="#fff"/><circle cx="7.2" cy="15.05" r="1" fill="#fff"/><circle cx="12.0" cy="15.05" r="1" fill="#fff"/><circle cx="16.8" cy="15.05" r="1" fill="#fff"/><circle cx="21.6" cy="15.05" r="1" fill="#fff"/><circle cx="2.4" cy="19.35" r="1" fill="#fff"/><circle cx="7.2" cy="19.35" r="1" fill="#fff"/><circle cx="12.0" cy="19.35" r="1" fill="#fff"/><circle cx="16.8" cy="19.35" r="1" fill="#fff"/><circle cx="21.6" cy="19.35" r="1" fill="#fff"/></svg></a>
+        <a class="lang-opt" href="es/pricing.html" hreflang="es" lang="es" title="Español" aria-label="Español"><svg viewBox="0 0 60 40" aria-hidden="true"><rect width="60" height="40" fill="#AA151B"/><rect y="10" width="60" height="20" fill="#F1BF00"/></svg></a>
+      </div>
       <button type="button" class="mode-toggle" role="switch" aria-checked="false" aria-label="Light theme" title="Switch to dark">
         <svg class="sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg>
         <svg class="moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>
@@ -633,6 +661,10 @@ gtag('config', 'G-ZYRJDJ736V');
       paint();
     });
     paint();
+    // A flag click is a language choice; the home page stops auto-detecting after it.
+    document.querySelectorAll('.lang-opt').forEach(function (a) {
+      a.addEventListener('click', function () { try { localStorage.setItem('lang', a.getAttribute('hreflang')); } catch (e) {} });
+    });
   })();
 </script>
 <script>
