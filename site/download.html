@@ -132,6 +132,18 @@
   @media (prefers-reduced-motion: reduce) { .mode-toggle .knob, .mode-toggle svg { transition: none; } }
   /* buttons, chips and the platform picker share the switch's corner radius */
   .go, .alt, .buy, .seg, .asks li { border-radius: 6px; }
+  /* rounded surfaces on every page, as on the landing page */
+  .plan { border-radius: 16px; }
+  .plan.pro { box-shadow: 0 0 0 1px var(--jade), 0 24px 60px color-mix(in srgb, var(--white) 7%, transparent); }
+  .tldr { border-radius: 12px; }
+  .badge { border-radius: 6px; overflow: hidden; }
+  .tag { border-radius: 5px; }
+  .doc code { border-radius: 4px; }
+  pre { border-radius: 12px; }
+  .form input { border-radius: 6px; }
+  .studio, .faq, .doc .steps, .picks { border-radius: 14px; overflow: hidden; }
+  .cmp-wrap { border-radius: 14px; }
+  .cmp-img { border-radius: 12px; }
   @media (max-width: 720px) {
     .nav-links a:not(.nav-cta) { display: none; }
   }
