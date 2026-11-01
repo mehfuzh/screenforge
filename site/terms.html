@@ -96,21 +96,27 @@
   }
   .nav-links a { transition: color .15s; }
   .nav-links a:hover { color: var(--white); }
+  /* light / dark as a sliding switch: sun left, moon right, the knob covers the active side */
   .mode-toggle {
-    display: inline-flex; align-items: stretch; height: 30px;
-    border: 1px solid var(--line-2); overflow: hidden;
+    position: relative; display: inline-block; width: 56px; height: 28px; padding: 0;
+    border: 1px solid var(--line-2); background: var(--panel); border-radius: 6px; cursor: pointer;
   }
-  .mode-toggle button {
-    display: inline-flex; align-items: center; justify-content: center;
-    padding: 0 10px; color: var(--dim); cursor: pointer;
-    background: none; border: none; font-size: 11.5px; font-weight: 600;
-    font-family: var(--mono); letter-spacing: .03em; text-transform: lowercase;
-    transition: background .12s, color .12s;
+  .mode-toggle svg {
+    position: absolute; top: 50%; width: 14px; height: 14px; transform: translateY(-50%);
+    color: var(--dim); z-index: 1; transition: color .18s;
   }
-  .mode-toggle button[data-set] { padding: 0 9px; }
-  .mode-toggle button svg { display: block; }
-  .mode-toggle button + button { border-left: 1px solid var(--line-2); }
-  .mode-toggle button[aria-pressed="true"] { background: var(--jade); color: var(--on-accent); }
+  .mode-toggle .sun { left: 6px; }
+  .mode-toggle .moon { right: 6px; }
+  .mode-toggle .knob {
+    position: absolute; top: 2px; left: 2px; width: 22px; height: 22px;
+    background: var(--jade); border-radius: 4px; transition: transform .18s ease;
+  }
+  .mode-toggle[aria-checked="true"] .knob { transform: translateX(28px); }
+  .mode-toggle[aria-checked="true"] .moon, .mode-toggle[aria-checked="false"] .sun { color: var(--on-accent); }
+  .mode-toggle:focus-visible { outline: 2px solid var(--jade); outline-offset: 2px; }
+  @media (prefers-reduced-motion: reduce) { .mode-toggle .knob, .mode-toggle svg { transition: none; } }
+  /* buttons, chips and the platform picker share the switch's corner radius */
+  .go, .alt, .buy, .seg, .asks li { border-radius: 6px; }
   @media (max-width: 720px) {
     .nav-links a:not(.nav-cta) { display: none; }
   }
@@ -403,10 +409,11 @@ gtag('config', 'G-ZYRJDJ736V');
       <a href="index.html#roadmap">Roadmap</a>
       <a href="pricing.html">Pricing</a>
       <a class="nav-cta" href="download.html">Download</a>
-      <div class="mode-toggle" role="group" aria-label="Color scheme">
-        <button type="button" data-set="light" aria-pressed="false" aria-label="Light theme" title="Light"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg></button>
-        <button type="button" data-set="dark" aria-pressed="true" aria-label="Dark theme" title="Dark"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg></button>
-      </div>
+      <button type="button" class="mode-toggle" role="switch" aria-checked="true" aria-label="Dark theme" title="Switch to light">
+        <svg class="sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg>
+        <svg class="moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>
+        <span class="knob"></span>
+      </button>
     </div>
   </div>
 </nav>
@@ -477,21 +484,23 @@ gtag('config', 'G-ZYRJDJ736V');
 <script>
   (function () {
     var root = document.documentElement;
-    var btns = document.querySelectorAll('.mode-toggle button');
+    var sw = document.querySelector('.mode-toggle');
     function current() {
       if (root.dataset.theme) return root.dataset.theme;
       return 'dark';
     }
     function paint() {
-      var c = current();
-      btns.forEach(function (b) { b.setAttribute('aria-pressed', String(b.dataset.set === c)); });
+      if (!sw) return;
+      var dark = current() === 'dark';
+      sw.setAttribute('aria-checked', String(dark));
+      sw.setAttribute('aria-label', dark ? 'Dark theme' : 'Light theme');
+      sw.title = dark ? 'Switch to light' : 'Switch to dark';
     }
-    btns.forEach(function (b) {
-      b.addEventListener('click', function () {
-        root.dataset.theme = b.dataset.set;
-        try { localStorage.setItem('theme', b.dataset.set); } catch (e) {}
-        paint();
-      });
+    if (sw) sw.addEventListener('click', function () {
+      var next = current() === 'dark' ? 'light' : 'dark';
+      root.dataset.theme = next;
+      try { localStorage.setItem('theme', next); } catch (e) {}
+      paint();
     });
     paint();
     // No saved choice: keep following the system when it switches.
