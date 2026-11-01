@@ -224,6 +224,13 @@
     letter-spacing: -.025em; color: var(--white); max-width: 18ch; margin: 0 auto; text-wrap: balance;
   }
   h1 em { font-style: normal; color: var(--jade); white-space: nowrap; }
+  /* accent words carry a warm gradient (falls back to the flat accent) */
+  @supports (background-clip: text) or (-webkit-background-clip: text) {
+    h1 em, h2 em {
+      background: linear-gradient(92deg, var(--jade) 10%, var(--gold) 95%);
+      -webkit-background-clip: text; background-clip: text; color: transparent;
+    }
+  }
   /* sparkles after the tagline (AI), in the TV's gold */
   h1 .sparkle { display: inline-block; width: 1em; height: 1em; margin-left: .08em; vertical-align: -.1em; fill: var(--gold); }
   /* example asks, one lit at a time, in the agent's own voice */
@@ -292,36 +299,67 @@
   h2 em { font-style: normal; color: var(--jade); }
   .sec-sub { margin-top: 16px; max-width: 56ch; font-size: 15.5px; color: var(--dim); }
 
-  /* feature grid: six cards, square corners, one rule apart */
-  .grid {
-    display: grid; grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap: 1px; margin-top: 44px; background: var(--line); border: 1px solid var(--line);
+  .sec-head { text-align: center; }
+  .sec-head h2, .sec-head .sec-sub { margin-left: auto; margin-right: auto; }
+
+  /* feature bento: rounded cards on the band, the agent card twice as wide */
+  .grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; margin-top: 48px; }
+  .card {
+    position: relative; background: var(--panel); border: 1px solid var(--line); border-radius: 14px;
+    padding: 24px 24px 26px; min-width: 0;
+    transition: transform .2s ease, box-shadow .2s ease, border-color .2s ease;
   }
-  .card { background: var(--ground); padding: 26px 24px 28px; }
-  .band .card { background: var(--ink); }
+  .card:hover { transform: translateY(-2px); border-color: var(--line-2); box-shadow: 0 18px 44px color-mix(in srgb, var(--white) 7%, transparent); }
+  .card.wide { grid-column: span 2; }
+  .card .ic {
+    width: 38px; height: 38px; border-radius: 10px; display: grid; place-items: center; margin-bottom: 18px;
+    color: var(--jade); background: color-mix(in srgb, var(--jade) 11%, transparent);
+  }
+  .card .ic svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
   .card .k {
     font-family: var(--mono); font-size: 11px; letter-spacing: .14em;
-    text-transform: uppercase; color: var(--jade); margin-bottom: 16px;
+    text-transform: uppercase; color: var(--jade); margin-bottom: 10px;
     display: flex; align-items: center; gap: 10px;
   }
-  .card .k::before { content: ''; width: 7px; height: 7px; background: var(--jade); flex: none; }
   .card h3 {
     font-family: var(--display); font-weight: 700; font-size: 18px;
     letter-spacing: -.02em; color: var(--white); line-height: 1.25; margin-bottom: 10px;
   }
   .card p { font-size: 14px; color: var(--dim); }
   .card code { font-family: var(--mono); font-size: 12.5px; color: var(--fg); }
-  /* three columns: a lone card on the last row spans the row */
-  @media (min-width: 921px) { .grid .card:last-child:nth-child(3n + 1) { grid-column: 1 / -1; } }
+  /* the agent card shows a prompt and what came back */
+  .ask-demo { margin-top: 22px; border: 1px solid var(--line-2); border-radius: 10px; background: var(--ink); padding: 14px 16px; font-family: var(--mono); font-size: 12.5px; }
+  .ask-demo .q { display: flex; gap: 10px; color: var(--white); line-height: 1.5; }
+  .ask-demo .q::before { content: '›'; color: var(--jade); font-weight: 700; }
+  .ask-demo .r { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
+  .ask-demo .r span { font-size: 11.5px; color: var(--dim); border: 1px solid var(--line-2); border-radius: 6px; padding: 4px 8px; background: var(--panel); }
+  .ask-demo .r span.ok { color: var(--jade); border-color: color-mix(in srgb, var(--jade) 45%, transparent); }
   @media (max-width: 920px) { .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
-  @media (max-width: 560px) { .grid { grid-template-columns: minmax(0, 1fr); } }
+  @media (max-width: 560px) { .grid { grid-template-columns: minmax(0, 1fr); } .card.wide { grid-column: auto; } }
+
+  /* platforms: one card per OS, then the trust line */
+  .plats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; margin-top: 44px; }
+  .plat-card { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 24px 24px 22px; min-width: 0; display: flex; flex-direction: column; }
+  .plat-card .os { font-family: var(--display); font-weight: 700; font-size: 22px; letter-spacing: -.02em; color: var(--white); }
+  .plat-card .req { font-family: var(--mono); font-size: 11.5px; color: var(--dim); margin: 6px 0 14px; letter-spacing: .02em; }
+  .plat-card p { font-size: 14px; color: var(--dim); flex: 1; margin-bottom: 18px; }
+  .plat-card .alt { align-self: flex-start; padding: 11px 14px; font-size: 12.5px; }
+  .trust { display: flex; flex-wrap: wrap; justify-content: center; gap: 10px; margin-top: 32px; }
+  .trust span { font-family: var(--mono); font-size: 12px; color: var(--dim); border: 1px solid var(--line-2); border-radius: 6px; padding: 7px 11px; display: inline-flex; align-items: center; gap: 8px; }
+  .trust span::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: var(--jade); }
+  @media (max-width: 860px) { .plats { grid-template-columns: minmax(0, 1fr); } }
 
   /* pricing: one card */
   .plans { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr); gap: 64px; align-items: start; }
   .plans-copy .sec-sub { margin-bottom: 36px; }
   .plans .plan { position: sticky; top: 24px; }
   @media (max-width: 860px) { .plans { grid-template-columns: minmax(0, 1fr); gap: 36px; } }
-  .plan { border: 1px solid var(--jade-deep); background: var(--panel); padding: 28px 28px 30px; }
+  .plan {
+    position: relative; overflow: hidden; border: 1px solid var(--line-2); border-radius: 16px;
+    background: var(--panel); padding: 30px 28px 30px;
+    box-shadow: 0 24px 60px color-mix(in srgb, var(--white) 7%, transparent);
+  }
+  .plan::before { content: ''; position: absolute; inset: 0 0 auto; height: 3px; background: linear-gradient(90deg, var(--jade), var(--gold)); }
   .plan .name {
     font-family: var(--mono); font-size: 11.5px; letter-spacing: .14em;
     text-transform: uppercase; color: var(--jade); margin-bottom: 16px;
@@ -346,6 +384,8 @@
     border-color: color-mix(in srgb, var(--jade) 45%, transparent);
     transition: background .15s, border-color .15s;
   }
+  .plan .buy { background: var(--jade); color: var(--on-accent); border-color: var(--jade); }
+  .plan .buy:hover { filter: brightness(1.08); }
   .buy:hover { background: color-mix(in srgb, var(--jade) 13%, transparent); border-color: var(--jade); }
   .free { display: flex; flex-direction: column; gap: 14px; }
   .free .row { display: flex; gap: 12px; align-items: baseline; font-size: 15px; }
@@ -355,11 +395,16 @@
   .tag {
     display: inline-block; font-family: var(--mono); font-size: 10px; letter-spacing: .12em;
     text-transform: uppercase; color: var(--jade); padding: 3px 7px; white-space: nowrap;
-    border: 1px solid color-mix(in srgb, var(--jade) 32%, transparent);
+    border: 1px solid color-mix(in srgb, var(--jade) 32%, transparent); border-radius: 5px;
   }
 
   /* close */
-  .close { text-align: center; padding: 110px 0; border-top: 1px solid var(--line); }
+  .close { text-align: center; padding: 110px 0; border-top: 1px solid var(--line); position: relative; overflow: hidden; }
+  .close::before {
+    content: ''; position: absolute; inset: auto -10% -40%; height: 90%; pointer-events: none;
+    background: radial-gradient(50% 60% at 50% 100%, color-mix(in srgb, var(--jade) 14%, transparent), transparent 70%);
+  }
+  .close .wrap { position: relative; }
   .close h2 { margin: 0 auto; max-width: 18ch; }
   .close .cta { justify-content: center; }
 
@@ -387,15 +432,6 @@
     .foot-in .r { margin-left: 0; }
   }
 
-  .roadmap { list-style: none; padding: 0; margin: 28px 0 0; display: grid; grid-template-columns: repeat(2, 1fr); gap: 1px; background: var(--line); border: 1px solid var(--line); }
-  .roadmap li { background: var(--ink); padding: 16px 18px; display: flex; flex-direction: column; gap: 4px; }
-  .roadmap strong { font-family: var(--mono); font-size: 12.5px; letter-spacing: .04em; text-transform: uppercase; color: var(--white); }
-  .roadmap span { font-size: 14px; color: var(--dim); }
-  .roadmap .box { font-style: normal; margin-right: 8px; color: var(--dim); }
-  .roadmap li.done .box { color: var(--jade); }
-  /* an odd last item spans both columns instead of leaving an empty cell */
-  .roadmap li:last-child:nth-child(odd) { grid-column: 1 / -1; }
-  @media (max-width: 720px) { .roadmap { grid-template-columns: 1fr; } }
 </style>
 <script>
   (function () {
@@ -424,7 +460,7 @@ gtag('config', 'G-ZYRJDJ736V');
     <a class="brand" href="#">ScreenForge</a>
     <div class="nav-links">
       <a href="#features">Features</a>
-      <a href="#roadmap">Roadmap</a>
+      <a href="#platforms">Platforms</a>
       <a href="pricing.html">Pricing</a>
       <a class="nav-cta" href="download.html">Download</a>
       <button type="button" class="mode-toggle" role="switch" aria-checked="false" aria-label="Light theme" title="Switch to dark">
@@ -473,100 +509,111 @@ gtag('config', 'G-ZYRJDJ736V');
 
 <section id="features" class="band">
   <div class="wrap">
-    <div class="sec-label">What it does</div>
-    <h2>Record, edit, export.<br><em>One native app.</em></h2>
-    <p class="sec-sub">A recorder and a timeline editor in a single window. No Electron, no web view; the compositor runs on the GPU and the UI is drawn natively.</p>
+    <div class="sec-head">
+      <div class="sec-label">What it does</div>
+      <h2>Record, edit, export.<br><em>One native app.</em></h2>
+      <p class="sec-sub">A recorder and a timeline editor in one window. No Electron, no web view; the compositor runs on the GPU and the UI is drawn natively.</p>
+    </div>
 
     <div class="grid">
-      <div class="card">
+      <div class="card wide">
+        <div class="ic"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3c.6 4.2 2.4 6 6.6 6.6C14.4 10.2 12.6 12 12 16.2 11.4 12 9.6 10.2 5.4 9.6 9.6 9 11.4 7.2 12 3z"/><path d="M18.5 15c.3 1.8 1.2 2.7 3 3-1.8.3-2.7 1.2-3 3-.3-1.8-1.2-2.7-3-3 1.8-.3 2.7-1.2 3-3z"/></svg></div>
         <div class="k">AI editing agent <span class="tag">new</span></div>
         <h3>Edit by asking</h3>
-        <p>Tell the agent what you want, like <code>cut the ums</code> or <code>zoom where I click</code>, and watch the timeline change as it works. Auto edit tightens the whole video; one <code>⌘Z</code> undoes a whole answer.</p>
+        <p>Say what you want and watch the timeline change as the agent works. It reads the transcript, your clicks and the video itself, then cuts, zooms, speeds up, adds music or narration. Auto edit tightens the whole video; one <code>⌘Z</code> undoes a whole answer.</p>
+        <div class="ask-demo" aria-hidden="true">
+          <div class="q">cut the ums and the long pauses, zoom on my clicks, add calm music</div>
+          <div class="r"><span class="ok">14 cuts</span><span class="ok">6 zooms</span><span class="ok">music: Calm Focus</span><span>0:58 from 1:41</span><span>one undo</span></div>
+        </div>
       </div>
       <div class="card">
-        <div class="k">Any video</div>
-        <h3>Edit any MP4 or MOV</h3>
-        <p>Drop a video (<code>.mp4</code>, <code>.mov</code>, <code>.m4v</code>) on ScreenForge to start a project, or on an open project to add it to the timeline, then edit by hand or ask the agent. Screen Studio projects open too.</p>
-      </div>
-      <div class="card">
+        <div class="ic"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5M11 8.5v5M8.5 11h5"/></svg></div>
         <div class="k">Zoom</div>
         <h3>Automatic zooms</h3>
         <p>Zooms open on your clicks and follow the cursor as you work, easing in and out. Adjust or remove any of them on the timeline.</p>
       </div>
       <div class="card">
-        <div class="k">Audio</div>
-        <h3>Split your voice from the video</h3>
-        <p>Your voice lives on its own track. Split, trim, move and mute it separately from the video.</p>
-      </div>
-      <div class="card">
-        <div class="k">Capture</div>
-        <h3>Native capture</h3>
-        <p>ScreenCaptureKit under the hood. Record a display, a window or an area, with your webcam alongside; click a window to pick it.</p>
-      </div>
-      <div class="card">
+        <div class="ic"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="6" width="18" height="13" rx="2.5"/><circle cx="12" cy="12.5" r="3.5"/><path d="M8 6l1.2-2h5.6L16 6"/></svg></div>
         <div class="k">Camera</div>
         <h3>You on camera</h3>
-        <p>Put your webcam over the screen, side by side with it, or full screen for a talking-head video, and switch layouts along the timeline. The camera follows your face, and Resolve-style color grading makes it look right.</p>
+        <p>Overlay, split or full screen, switched along the timeline. The camera follows your face, and Resolve-style colour grading with LUTs makes it look right.</p>
       </div>
       <div class="card">
-        <div class="k">iPhone and iPad</div>
-        <h3>Record your apps</h3>
-        <p>Plug in an iPhone or iPad and record its screen, then show it in a phone or tablet frame. On macOS.</p>
-      </div>
-      <div class="card">
-        <div class="k">Render</div>
-        <h3>GPU rendering and export</h3>
-        <p>A wgpu compositor renders the timeline. Export MP4 (H.264 / HEVC), ProRes, GIF or WebM, with mixed audio.</p>
-      </div>
-      <div class="card">
+        <div class="ic"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2.5"/><path d="M7 12h6M7 15.5h10M15.5 12h1.5"/></svg></div>
         <div class="k">Captions</div>
         <h3>Captions from your voice</h3>
-        <p>Transcribed on your computer with Whisper, nothing uploaded. Line by line or word by word, burned into the export or saved as SRT.</p>
+        <p>Transcribed on your computer with Whisper, nothing uploaded. Line by line or word by word, burned into the export or saved as SRT and WebVTT.</p>
       </div>
       <div class="card">
-        <div class="k">Privacy</div>
-        <h3>Blur and highlight masks</h3>
-        <p>Blur passwords, emails and other private details, or dim everything except the part that matters. Draw the areas on the preview and time them on the timeline.</p>
-      </div>
-      <div class="card">
-        <div class="k">Framing</div>
-        <h3>Crop</h3>
-        <p>Trim the recording to the part of the screen you need. Drag the frame over the whole recording; zooms, cursor and masks follow the crop.</p>
-      </div>
-      <div class="card">
-        <div class="k">Keyboard</div>
-        <h3>Shortcuts on screen</h3>
-        <p>The shortcuts you press while recording show up as key caps, like <code>⇧ ⌘ S</code>, so viewers can follow along. Plain key presses too, if you want them.</p>
-      </div>
-      <div class="card">
+        <div class="ic"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11.5a6.5 6.5 0 0 0 13 0M12 18v3M9 21h6"/></svg></div>
         <div class="k">Voice-over</div>
         <h3>Narrate after you record</h3>
-        <p>Press <code>R</code> and talk over the video as it plays from the playhead. Each take lands on its own lane: move it, trim its edges, split out the ums, set its volume. It stays with its frame when you cut or speed up the clips before it. No mic? Type a script and an AI voice reads it, made on your computer, with captions from the script.</p>
+        <p>Press <code>R</code> and talk over the video, or type a script and an AI voice reads it: six voices on your computer, eight studio voices online. Each take sits on its own lane.</p>
+      </div>
+      <div class="card">
+        <div class="ic"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2.5"/><path d="M3 9h18M3 15h18M8 5v14M16 5v14"/></svg></div>
+        <div class="k">Any video</div>
+        <h3>Edit any MP4 or MOV</h3>
+        <p>Drop a video on ScreenForge to start a project, or on an open project to add it to the timeline. Screen Studio projects open too.</p>
+      </div>
+      <div class="card">
+        <div class="ic"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12s3.5-6 9-6 9 6 9 6-3.5 6-9 6-9-6-9-6z"/><circle cx="12" cy="12" r="2.5"/><path d="M4 4l16 16"/></svg></div>
+        <div class="k">Privacy and framing</div>
+        <h3>Blur, highlight, crop</h3>
+        <p>Blur passwords and private details or dim everything but the part that matters, timed on the timeline. Crop to the part of the screen you need; zooms and cursor follow.</p>
+      </div>
+      <div class="card">
+        <div class="ic"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2"/><rect x="9.5" y="9.5" width="5" height="5" rx="1"/><path d="M9 2v4M15 2v4M9 18v4M15 18v4M2 9h4M2 15h4M18 9h4M18 15h4"/></svg></div>
+        <div class="k">Native and fast</div>
+        <h3>GPU rendering, native capture</h3>
+        <p>ScreenCaptureKit, Desktop Duplication or PipeWire capture; a wgpu compositor renders the timeline. Export MP4, HEVC, ProRes, GIF or WebM with mixed audio.</p>
+      </div>
+      <div class="card">
+        <div class="ic"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="7" y="2.5" width="10" height="19" rx="2.5"/><path d="M10.5 18.5h3"/></svg></div>
+        <div class="k">Devices and keys</div>
+        <h3>iPhone frames, shortcuts on screen</h3>
+        <p>Record an iPhone or iPad over a cable and show it in a device frame. Shortcuts you press appear as key caps, like <code>⇧ ⌘ S</code>, so viewers can follow along.</p>
+      </div>
+      <div class="card wide">
+        <div class="ic"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="M3 15l5-4.5 4 3.5 3-2.5 6 4.5"/><circle cx="16" cy="9" r="1.6"/></svg></div>
+        <div class="k">Looks and sound</div>
+        <h3>Backgrounds, frames and music</h3>
+        <p>Set the recording on a wallpaper, your desktop's own, a gradient or an Unsplash photo, with shadow and inset. Put a phone video in a device frame. Pick a track from the built-in music library, lo-fi to cinematic, or drop in your own.</p>
       </div>
     </div>
   </div>
 </section>
 
-<section class="section" id="roadmap">
+<section class="section" id="platforms">
   <div class="wrap">
-    <div class="eyebrow">Product roadmap</div>
-    <h2>Honest about what's missing.</h2>
-    <p class="lead">Anything not built yet is greyed out in the app instead of half-working. Shipped items are ticked; the rest in order of likely arrival:</p>
-    <ul class="roadmap">
-        <li class="done"><strong><i class="box">[x]</i>Camera recording</strong><span>webcam capture with a live preview; overlay, split-screen and fullscreen camera layouts</span></li>
-        <li class="done"><strong><i class="box">[x]</i>Masks and highlights</strong><span>blur private details or dim everything but an area, drawn on the preview and timed on the timeline</span></li>
-        <li class="done"><strong><i class="box">[x]</i>Crop editing</strong><span>the Crop tool in the preview toolbar: drag a frame over the whole recording</span></li>
-        <li class="done"><strong><i class="box">[x]</i>Captions</strong><span>on-device Whisper transcription, captions in the preview and export, SRT export</span></li>
-        <li class="done"><strong><i class="box">[x]</i>Keyboard shortcut overlay</strong><span>key caps for the shortcuts pressed while recording, in the preview and export</span></li>
-        <li class="done"><strong><i class="box">[x]</i>Face tracking and color grading</strong><span>the camera follows your face on device; DaVinci Resolve style primaries (lift, gamma, gain, offset wheels, contrast, saturation, hue…), bundled looks and .cube LUTs</span></li>
-        <li class="done"><strong><i class="box">[x]</i>Voice-over</strong><span>record narration over the video after the fact, or have an AI voice read a script, free on your computer or with studio-quality ElevenLabs voices on Pro; split, trim, move and set the volume of each take</span></li>
-        <li class="done"><strong><i class="box">[x]</i>Auto timeline</strong><span>an AI agent edits for you: ask in plain words, or Auto edit for a first cut with zooms where the action is and pauses and retakes trimmed; runs on Claude</span></li>
-        <li class="done"><strong><i class="box">[x]</i>Device frames</strong><span>phone and tablet mockup frames, and iPhone/iPad recording over a cable</span></li>
-        <li class="done"><strong><i class="box">[x]</i>Unsplash backgrounds</strong><span>search Unsplash photos for the background</span></li>
-        <li class="done"><strong><i class="box">[x]</i>Remove project</strong><span>move a project to the Trash from the editor or the recent projects list</span></li>
-        <li class="done"><strong><i class="box">[x]</i>Licensing backend</strong><span>hosted key issuing (Supabase + Stripe); a license unlocks Export</span></li>
-        <li class="done"><strong><i class="box">[x]</i>Update notifications</strong><span>"Update available" when a newer release is out; can be turned off</span></li>
-    </ul>
+    <div class="sec-head">
+      <div class="sec-label">Platforms</div>
+      <h2>One app. <em>Every desktop.</em></h2>
+      <p class="sec-sub">The same recorder and editor on all three, with projects that open anywhere. Recording and editing are free on each.</p>
+    </div>
+    <div class="plats">
+      <div class="plat-card">
+        <div class="os">macOS</div>
+        <div class="req">Apple silicon · macOS 14 or later · signed and notarized</div>
+        <p>Screen, window or area with ScreenCaptureKit, webcam, system audio, and iPhone or iPad over a cable. Also on Homebrew.</p>
+        <a class="alt" href="download.html#mac">Download for macOS</a>
+      </div>
+      <div class="plat-card">
+        <div class="os">Windows</div>
+        <div class="req">x86_64 · Windows 10 or later · installer or portable zip</div>
+        <p>Desktop Duplication capture with cursor, clicks, keystrokes and system audio, just like the Mac build. Signed by Smartloop Inc.</p>
+        <a class="alt" href="download.html#windows">Download for Windows</a>
+      </div>
+      <div class="plat-card">
+        <div class="os">Linux</div>
+        <div class="req">x86_64 · X11 and Wayland · .deb or .tar.gz</div>
+        <p>Native PipeWire capture on Wayland, full input capture on X11, ffmpeg included. Also on Homebrew.</p>
+        <a class="alt" href="download.html#linux">Download for Linux</a>
+      </div>
+    </div>
+    <div class="trust" aria-label="Good to know">
+      <span>Open source, Apache-2.0</span><span>Recordings never leave your computer</span><span>No analytics in the app</span><span>Captions and voices run on device</span>
+    </div>
   </div>
 </section>
 
