@@ -3,23 +3,22 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>ScreenForge — your AI screen editor for screen and camera videos</title>
-<meta name="description" content="Record your screen and camera, or drop in any video, and let an AI agent edit it: cuts, zooms, captions and AI voice-over. A free, open-source Screen Studio alternative.">
-<meta name="keywords" content="AI screen editor, AI video editor, AI screen recorder, video editor, webcam recorder, camera recorder, talking head video, iPhone screen recording, MP4 video editor, MOV editor, screen recorder, screencast software, screen recording editor, Screen Studio alternative, CapCut alternative, AI voice-over, text to speech narration, automatic captions, auto zoom, product demo video, tutorial video maker, open source screen recorder, Mac screen recorder, Windows screen recorder, Linux screen recorder">
+<title>ScreenForge — AI screen recorder: pro screencasts in minutes</title>
+<meta name="description" content="Record your screen and camera, or drop in any video, then ask an AI agent to edit it: cuts, zooms, captions, music and voice-over. Free and open source for Mac, Windows and Linux.">
 <link rel="canonical" href="https://screenforge.studio/">
 <meta name="color-scheme" content="light dark">
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="ScreenForge">
 <meta property="og:url" content="https://screenforge.studio/">
-<meta property="og:title" content="ScreenForge — your AI screen editor for screen and camera videos">
-<meta property="og:description" content="Record your screen and camera, or drop in any video, and let an AI agent edit it: cuts, zooms, captions and AI voice-over. A free, open-source Screen Studio alternative. For Mac, Windows and Linux.">
+<meta property="og:title" content="ScreenForge — AI screen recorder: pro screencasts in minutes">
+<meta property="og:description" content="Record your screen and camera, or drop in any video, then ask an AI agent to edit it: cuts, zooms, captions, music and voice-over. Free and open source for Mac, Windows and Linux.">
 <meta property="og:image" content="https://screenforge.studio/og.png?v=6">
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:site" content="@ScreenForgeHQ">
-<meta name="twitter:title" content="ScreenForge — your AI screen editor for screen and camera videos">
-<meta name="twitter:description" content="Record your screen and camera, or drop in any video, and let an AI agent edit it: cuts, zooms, captions and AI voice-over. A free, open-source Screen Studio alternative.">
+<meta name="twitter:title" content="ScreenForge — AI screen recorder: pro screencasts in minutes">
+<meta name="twitter:description" content="Record your screen and camera, or drop in any video, then ask an AI agent to edit it: cuts, zooms, captions, music and voice-over. Free and open source for Mac, Windows and Linux.">
 <meta name="twitter:image" content="https://screenforge.studio/og.png?v=6">
 <script type="application/ld+json">
 {
@@ -31,7 +30,8 @@
       "url": "https://screenforge.studio/",
       "image": "https://screenforge.studio/og.png?v=6",
       "alternateName": "ScreenForge AI screen editor",
-      "description": "AI screen editor: an AI video editor and screen and camera recorder for tutorials, product demos, talking-head videos and screencasts. Records your screen, your webcam and, on a Mac, an iPhone or iPad. An AI agent edits from plain-language requests: cuts, zooms, speed, music and backgrounds. AI voice-over narration and captions run on your computer. Edits your own MP4 and MOV videos as well as its recordings. An open-source alternative to Screen Studio and CapCut.",
+      "applicationSubCategory": "Screen recorder and video editor",
+      "description": "AI screen recorder and video editor for tutorials, product demos, talking-head videos and screencasts. Records your screen, your webcam and, on a Mac, an iPhone or iPad. An AI agent edits from plain-language requests: cuts, zooms, speed, music and backgrounds. AI voice-over narration and captions run on your computer. Edits your own MP4 and MOV videos as well as its recordings. An open-source alternative to Screen Studio and CapCut.",
       "keywords": "AI video editor, AI screen recorder, screencast software, Screen Studio alternative, CapCut alternative, AI voice-over, automatic captions",
       "featureList": ["AI editing agent", "AI voice-over narration, on-device or studio-quality ElevenLabs voices", "Automatic captions with on-device Whisper", "Automatic zooms", "Camera recording with face tracking", "Color grading", "iPhone and iPad recording (macOS)", "Phone and tablet device frames", "Voice-over recording", "Smooth cursor", "Backgrounds", "Separate voice track", "Blur and highlight masks", "Crop", "Keyboard shortcut overlay", "Edit any MP4, MOV or M4V video"],
       "applicationCategory": "MultimediaApplication",
@@ -42,7 +42,7 @@
         {"@type": "Offer", "name": "Pro, with the AI agent", "price": "20", "priceCurrency": "USD", "priceSpecification": {"@type": "UnitPriceSpecification", "price": "20", "priceCurrency": "USD", "billingDuration": "P1M"}},
         {"@type": "Offer", "name": "Creator license", "price": "49", "priceCurrency": "USD"}
       ],
-      "publisher": {"@type": "Organization", "name": "Smartloop Inc."},
+      "publisher": {"@type": "Organization", "name": "Smartloop Inc.", "url": "https://screenforge.studio/", "logo": "https://screenforge.studio/icon.png"},
       "sameAs": ["https://x.com/ScreenForgeHQ"]
     },
     {
@@ -64,7 +64,7 @@
 <link rel="apple-touch-icon" href="apple-touch-icon.png?v=9">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700;900&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700;900&family=Sora:wght@600;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
 <style>
   /* Light by default (the boot script sets data-theme="light" unless a toggle choice
      is stored in localStorage); the tokens below are the dark palette, overridden by
@@ -125,8 +125,8 @@
   nav { position: relative; z-index: 1; }
   .nav-in { display: flex; align-items: center; gap: 32px; height: 60px; }
   .brand {
-    font-family: var(--display); font-weight: 900;
-    font-size: 19px; letter-spacing: -.03em; color: var(--white);
+    font-family: 'Sora', var(--display); font-weight: 700;
+    font-size: 18px; letter-spacing: -.035em; color: var(--white);
     display: inline-flex; align-items: center; gap: 9px;
   }
   .brand img { width: 24px; height: 24px; }
@@ -475,7 +475,7 @@ gtag('config', 'G-ZYRJDJ736V');
 <header class="hero">
   <div class="wrap hero-in">
     <div class="app-icon"><img src="icon.png?v=9" alt="" width="104" height="104"></div>
-    <h1>Your AI screen editor.<br><em>Just ask. It edits.<svg class="sparkle" viewBox="0 0 32 32" aria-hidden="true"><path d="M13 4c.9 5.6 3.4 8.1 9 9-5.6.9-8.1 3.4-9 9-.9-5.6-3.4-8.1-9-9 5.6-.9 8.1-3.4 9-9z"/><path d="M24.5 18c.5 2.9 1.6 4 4.5 4.5-2.9.5-4 1.6-4.5 4.5-.5-2.9-1.6-4-4.5-4.5 2.9-.5 4-1.6 4.5-4.5z"/></svg></em></h1>
+    <h1>Pro screencasts in minutes.<br><em>Just ask. It edits.<svg class="sparkle" viewBox="0 0 32 32" aria-hidden="true"><path d="M13 4c.9 5.6 3.4 8.1 9 9-5.6.9-8.1 3.4-9 9-.9-5.6-3.4-8.1-9-9 5.6-.9 8.1-3.4 9-9z"/><path d="M24.5 18c.5 2.9 1.6 4 4.5 4.5-2.9.5-4 1.6-4.5 4.5-.5-2.9-1.6-4-4.5-4.5 2.9-.5 4-1.6 4.5-4.5z"/></svg></em></h1>
     <ul class="asks" aria-label="Things you can ask the agent">
       <li>cut the ums and the long pauses</li>
       <li>zoom on my clicks</li>
@@ -483,8 +483,8 @@ gtag('config', 'G-ZYRJDJ736V');
       <li>add calm music and a mountain photo</li>
     </ul>
     <p class="lede">
-      Record your <span class="os-name">Mac</span> screen and camera, or drop in any video, then ask for the edit.
-      Zooms, a smooth cursor, backgrounds, captions, music and voice-over, on a timeline you can still edit by hand.
+      A screen recorder and AI video editor in one. Record your <span class="os-name">Mac</span> screen and camera, or drop in any video, then ask for the edit:
+      zooms, a smooth cursor, backgrounds, captions, music and voice-over, on a timeline you can still edit by hand.
     </p>
     <div class="cta">
       <a class="go os-dl" href="download.html#mac">
@@ -663,6 +663,7 @@ gtag('config', 'G-ZYRJDJ736V');
     <span>© 2026 Smartloop Inc. All rights reserved.</span>
     <span>Made in San Francisco, CA</span>
     <div class="r">
+      <a href="comparison.html">compare</a>
       <a href="privacy.html">privacy</a>
       <a href="terms.html">terms</a>
       <a class="x" href="https://x.com/ScreenForgeHQ" rel="me noopener" aria-label="ScreenForge on X" title="@ScreenForgeHQ on X"><svg viewBox="0 0 24 24" width="13" height="13" fill="currentColor" aria-hidden="true"><path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z"/></svg></a>
