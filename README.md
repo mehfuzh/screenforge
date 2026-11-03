@@ -34,6 +34,12 @@ hand. Projects are saved as `.screenforge` packages.
   computer (six voices, adjustable speed), or pick one of eight studio-quality ElevenLabs voices,
   read online and paid from the Pro credits. The agent can write and place narration too, and
   uses ElevenLabs (Eric) when asked for a more realistic voice.
+- **Enhance a recorded voice-over** with ElevenLabs (Pro credits): *Clean up* takes out
+  background noise, echo and hum, or *Re-voice* says it in a studio voice. Your timing,
+  delivery and accent stay, captions stay in place, and the recording is kept to go back to.
+- **My voice**: ElevenLabs clones your own voice from about a minute of voice-over you
+  recorded (Pro, with your consent), so narration, the agent and Re-voice speak in your voice
+  and accent. Delete it any time.
 - **Automatic captions**: on-device Whisper transcription of the microphone and recorded
   voice-overs; narrated takes carry their exact words. Styled captions in preview and export,
   SRT and WebVTT export.

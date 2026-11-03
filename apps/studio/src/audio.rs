@@ -223,6 +223,12 @@ impl AudioPlayer {
     }
 
     /// Decode the voice-overs not decoded yet (a new take) on a background thread.
+    /// Length of voice-over file `file_name` (ms), once it is decoded.
+    pub fn voice_over_ms(&self, file_name: &str) -> Option<f64> {
+        let s = self.shared.lock();
+        s.voice_clips.iter().find(|(k, _)| k.as_str() == file_name || k.strip_prefix(file_name).is_some_and(|r| r.starts_with('@'))).map(|(_, c)| c.duration_ms())
+    }
+
     pub fn load_voice_overs(&self, session: &sf_session::Session) {
         use std::sync::atomic::Ordering;
         let preset = session.pkg.project.config.audio.microphone_audio_preset.clone();

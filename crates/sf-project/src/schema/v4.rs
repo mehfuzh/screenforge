@@ -978,6 +978,38 @@ impl VoiceOver {
         (self.source.get("type").and_then(|t| t.as_str()) == Some("kokoro")).then(|| self.source.get("voiceId").and_then(|v| v.as_str())).flatten()
     }
 
+    /// How ElevenLabs enhanced this recorded take (`"clean"`, or the voice it was re-voiced in,
+    /// `"el_eric"` …); `None` when it plays as recorded. ScreenForge extension of `source`.
+    pub fn enhanced(&self) -> Option<&str> {
+        self.source.get("sfEnhanced").and_then(|e| e.as_str())
+    }
+
+    /// The file as recorded: an enhanced take keeps it so it can go back, or be enhanced
+    /// again from the recording rather than from an earlier enhancement.
+    pub fn recorded_file(&self) -> &str {
+        self.source.get("sfOriginal").and_then(|o| o.as_str()).unwrap_or(&self.file_name)
+    }
+
+    /// Play `file_name`, enhanced as `how` (see [`Self::enhanced`]), keeping the recording.
+    pub fn set_enhanced(&mut self, file_name: &str, how: &str) {
+        let original = self.recorded_file().to_string();
+        self.file_name = file_name.to_string();
+        if !self.source.is_object() {
+            self.source = serde_json::json!({ "type": "microphone" });
+        }
+        self.source["sfEnhanced"] = how.into();
+        self.source["sfOriginal"] = original.into();
+    }
+
+    /// Play the recording again (undo of [`Self::set_enhanced`]).
+    pub fn use_recorded(&mut self) {
+        self.file_name = self.recorded_file().to_string();
+        if let Some(s) = self.source.as_object_mut() {
+            s.remove("sfEnhanced");
+            s.remove("sfOriginal");
+        }
+    }
+
     /// The boost in dB, clamped to what the editor offers.
     pub fn boost(&self) -> f64 {
         if self.boost_db.is_finite() {
@@ -1201,6 +1233,21 @@ impl Zoom {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn an_enhanced_take_keeps_its_recording_and_goes_back_to_it() {
+        let mut v = super::VoiceOver::microphone(0.0, 1_000.0, "voiceover-1.wav");
+        assert_eq!((v.enhanced(), v.recorded_file()), (None, "voiceover-1.wav"));
+        v.set_enhanced("voiceover-1-clean.wav", "clean");
+        assert_eq!((v.file_name.as_str(), v.enhanced(), v.recorded_file()), ("voiceover-1-clean.wav", Some("clean"), "voiceover-1.wav"));
+        // enhancing again starts from the recording, not the clean copy
+        v.set_enhanced("voiceover-1-el_eric.wav", "el_eric");
+        assert_eq!((v.enhanced(), v.recorded_file()), (Some("el_eric"), "voiceover-1.wav"));
+        assert_eq!(v.source["type"], "microphone", "Screen Studio still reads it as a recording");
+        v.use_recorded();
+        assert_eq!((v.file_name.as_str(), v.enhanced()), ("voiceover-1.wav", None));
+        assert_eq!(v.source, serde_json::json!({ "type": "microphone" }));
+    }
+
     #[test]
     fn microphone_boost_round_trips_and_stays_off_by_default() {
         let a = super::AudioConfig::default();

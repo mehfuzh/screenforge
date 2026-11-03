@@ -155,6 +155,8 @@ pub struct Editor {
     pub transcribe: crate::captions::TranscribeJob,
     /// Narration panel: the AI voice's downloads, previews and readings.
     pub narration: crate::narration::NarrationJob,
+    pub enhance: crate::enhance::EnhanceJob,
+    pub my_voice: crate::my_voice::MyVoiceJob,
     /// Crop tool open: the preview shows the whole recording with the crop frame over it.
     pub crop: Option<crate::crop::CropEditor>,
     /// "Save preset as…", "Rename preset" or "Delete preset" dialog.
@@ -253,6 +255,9 @@ impl Editor {
             preview_stale: false,
             transcribe: Default::default(),
             narration: Default::default(),
+            enhance: Default::default(),
+            // SF_MY_VOICE_FORM: open Narration → My voice → Make my voice (with SF_START_SECTION=narration)
+            my_voice: crate::my_voice::MyVoiceJob::with_form(std::env::var_os("SF_MY_VOICE_FORM").is_some()),
             // SF_START_CROP opens the crop tool straight away (for screenshots)
             crop: std::env::var_os("SF_START_CROP").map(|_| crop::CropEditor::new(session_crop)),
             preset_dialog: None,
@@ -661,6 +666,45 @@ impl Editor {
             (1, true) => "Read the take again".to_string(),
             (n, _) => format!("Read {n} narration takes again"),
         });
+    }
+
+    /// Enhance the recording of voice-over `id` with ElevenLabs (see [`crate::enhance`]).
+    pub fn enhance_voice_over(&mut self, id: &str, mode: crate::enhance::Mode) {
+        let Some(v) = self.session.pkg.project.scenes[0].voice_overs.iter().find(|v| v.id == id) else { return };
+        let (recorded, playing) = (v.recorded_file().to_string(), v.file_name.clone());
+        self.enhance.start(self.session.pkg.path.clone(), id, recorded, playing, mode);
+    }
+
+    /// Switch the takes an enhancement was made for (every take of that recording) to the
+    /// enhanced file, in one edit.
+    fn place_enhanced(&mut self, done: crate::enhance::Enhanced) {
+        if !self.session.pkg.project.scenes[0].voice_overs.iter().any(|v| v.file_name == done.from) {
+            self.set_status("The voice-over was deleted while ElevenLabs was working on it");
+            return;
+        }
+        let (from, file, how) = (done.from, done.file_name, done.how.clone());
+        self.edit(move |p| {
+            for v in p.scenes[0].voice_overs.iter_mut().filter(|v| v.file_name == from) {
+                v.set_enhanced(&file, &how);
+            }
+        });
+        self.captions_changed();
+        self.set_status(match sf_tts::cloud::cloud_voice(&done.how) {
+            Some(c) => format!("Re-voiced the voice-over as {}", c.name),
+            None => "Cleaned up the voice-over".to_string(),
+        });
+    }
+
+    /// Play voice-over `id`'s recording again instead of its enhancement (every take of it).
+    pub fn use_recorded_voice_over(&mut self, id: &str) {
+        let Some(file) = self.session.pkg.project.scenes[0].voice_overs.iter().find(|v| v.id == id).map(|v| v.file_name.clone()) else { return };
+        self.edit(move |p| {
+            for v in p.scenes[0].voice_overs.iter_mut().filter(|v| v.file_name == file) {
+                v.use_recorded();
+            }
+        });
+        self.captions_changed();
+        self.set_status("Back to the voice-over as recorded");
     }
 
     /// Cut voice-over `id` at output time `t`; the right-hand part is selected.
@@ -1163,6 +1207,18 @@ impl Editor {
             self.place_narration(made);
         }
         if self.narration.working().is_some() || self.narration.is_playing() {
+            ctx.request_repaint_after(std::time::Duration::from_millis(150));
+        }
+        if let Some(done) = self.enhance.poll() {
+            self.place_enhanced(done);
+        }
+        if self.enhance.is_running() {
+            ctx.request_repaint_after(std::time::Duration::from_millis(150));
+        }
+        self.my_voice.poll();
+        if self.my_voice.listening() {
+            ctx.request_repaint_after(std::time::Duration::from_millis(50));
+        } else if self.my_voice.working().is_some() {
             ctx.request_repaint_after(std::time::Duration::from_millis(150));
         }
 

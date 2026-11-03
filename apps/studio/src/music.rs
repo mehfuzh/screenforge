@@ -46,6 +46,81 @@ pub struct Track {
     pub license_url: Option<String>,
     #[serde(default)]
     pub share_url: Option<String>,
+    /// Where it comes from (a favourite can be any of them; search results are Jamendo's).
+    #[serde(default, skip_serializing_if = "TrackKind::is_jamendo")]
+    pub kind: TrackKind,
+}
+
+/// Where a [`Track`] comes from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum TrackKind {
+    /// Jamendo: `download` is the MP3 on its storage.
+    #[default]
+    Jamendo,
+    /// The bundled music: `download` is its library name (`<category>/<file>`), `id`
+    /// `library:<key>`.
+    Library,
+    /// A track of the user's (added from a file, imported from a link, or a Jamendo download
+    /// kept without its search result): `download` is its copy in [`Library::own_dir`], `id`
+    /// `file:<its file name in a project>`.
+    Own,
+}
+
+impl TrackKind {
+    fn is_jamendo(&self) -> bool {
+        *self == TrackKind::Jamendo
+    }
+}
+
+impl Track {
+    /// Bundled track `name` (`<category>/<file>`) as a favourite.
+    pub fn library(name: &str) -> Track {
+        let category = name.split('/').next().filter(|c| *c != name).unwrap_or("Library");
+        let mut c = category.chars();
+        let artist = c.next().map(|f| f.to_uppercase().collect::<String>() + c.as_str()).unwrap_or_default();
+        Track {
+            id: library_id(name),
+            name: sf_session::assets::background_audio_label(name),
+            artist,
+            duration: 0,
+            download: name.to_string(),
+            image: None,
+            license_url: None,
+            share_url: None,
+            kind: TrackKind::Library,
+        }
+    }
+
+    /// The file it plays as in a project's `assets/` (Jamendo, own) or its library name.
+    pub fn plays_as(&self) -> String {
+        match self.kind {
+            TrackKind::Jamendo => track_file_name(self),
+            TrackKind::Library => self.download.clone(),
+            TrackKind::Own => self.id.trim_start_matches("file:").to_string(),
+        }
+    }
+
+    /// `current` (a project's music: a library name or a file in `assets/`) is this track.
+    pub fn is_playing(&self, current: &str) -> bool {
+        match self.kind {
+            TrackKind::Library => sf_session::assets::background_audio_key(current) == sf_session::assets::background_audio_key(&self.download),
+            _ => current.rsplit('/').next() == Some(self.plays_as().as_str()),
+        }
+    }
+}
+
+/// Favourite id of bundled track `name` (its key, so a renamed library file stays hearted).
+pub fn library_id(name: &str) -> String {
+    format!("library:{}", sf_session::assets::background_audio_key(name))
+}
+
+/// Favourite id of file `file_name` in a project's `assets/`: the Jamendo track's own id for
+/// one of its downloads, else the file kept as the user's own.
+fn file_ids(file_name: &str) -> [String; 2] {
+    let base = file_name.rsplit('/').next().unwrap_or(file_name);
+    let jamendo = base.strip_prefix("jamendo_").and_then(|r| r.strip_suffix(".mp3")).unwrap_or_default().to_string();
+    [jamendo, format!("file:{base}")]
 }
 
 #[derive(Deserialize)]
@@ -164,6 +239,10 @@ impl Library {
         directories::ProjectDirs::from("dev", "screenforge", "ScreenForge").map(|d| d.data_dir().join("music-library.json"))
     }
 
+    fn modified() -> Option<std::time::SystemTime> {
+        Self::path().and_then(|p| std::fs::metadata(p).ok()).and_then(|m| m.modified().ok())
+    }
+
     pub fn load() -> Self {
         Self::path().and_then(|p| std::fs::read(p).ok()).and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default()
     }
@@ -179,17 +258,81 @@ impl Library {
     }
 
     pub fn is_favorite(&self, id: &str) -> bool {
-        self.favorites.iter().any(|t| t.id == id)
+        !id.is_empty() && self.favorites.iter().any(|t| t.id == id)
     }
 
-    /// Heart or un-heart `track` (newest favourites first).
+    /// Heart or un-heart `track` (newest favourites first). Un-hearting a track of the user's
+    /// deletes its kept copy.
     pub fn toggle_favorite(&mut self, track: &Track) {
-        if self.is_favorite(&track.id) {
-            self.favorites.retain(|t| t.id != track.id);
-        } else {
-            self.favorites.insert(0, track.clone());
+        let on = !self.is_favorite(&track.id);
+        self.set_favorite(track, on);
+    }
+
+    /// Make `track` a favourite (`on`) or not; nothing changes when it already is so.
+    pub fn set_favorite(&mut self, track: &Track, on: bool) {
+        match (self.is_favorite(&track.id), on) {
+            (true, false) => self.unfavorite(&track.id),
+            (false, true) => {
+                self.favorites.insert(0, track.clone());
+                self.save();
+            }
+            _ => {}
+        }
+    }
+
+    fn unfavorite(&mut self, id: &str) {
+        let (gone, kept): (Vec<Track>, Vec<Track>) = std::mem::take(&mut self.favorites).into_iter().partition(|t| t.id == id);
+        self.favorites = kept;
+        if let Some(dir) = Self::own_dir() {
+            for t in gone.iter().filter(|t| t.kind == TrackKind::Own) {
+                let _ = std::fs::remove_file(dir.join(&t.download));
+                let _ = std::fs::remove_file(dir.join(credit_name(&t.download)));
+            }
         }
         self.save();
+    }
+
+    /// Where the user's own favourite tracks are kept, for every project.
+    pub fn own_dir() -> Option<PathBuf> {
+        directories::ProjectDirs::from("dev", "screenforge", "ScreenForge").map(|d| d.data_dir().join("music-favorites"))
+    }
+
+    /// The favourite that file `file_name` of a project's `assets/` is, if it is one.
+    pub fn file_favorite(&self, file_name: &str) -> Option<&Track> {
+        let ids = file_ids(file_name);
+        self.favorites.iter().find(|t| ids.contains(&t.id))
+    }
+
+    /// Heart or un-heart the project's track `file_name` (in `assets_dir`). A Jamendo download
+    /// whose track is in `known` (search results, Recent) is kept as that track; anything else
+    /// is copied, with its credit, into [`Self::own_dir`] so it works in every project.
+    pub fn toggle_file(&mut self, assets_dir: &Path, file_name: &str, known: &[Track]) -> Result<(), String> {
+        let on = self.file_favorite(file_name).is_none();
+        self.set_file(assets_dir, file_name, known, on).map(|_| ())
+    }
+
+    /// [`Self::toggle_file`], made a favourite (`on`) or not; returns the favourite's name.
+    pub fn set_file(&mut self, assets_dir: &Path, file_name: &str, known: &[Track], on: bool) -> Result<String, String> {
+        if let Some(t) = self.file_favorite(file_name).cloned() {
+            if !on {
+                self.unfavorite(&t.id);
+            }
+            return Ok(t.name);
+        }
+        if !on {
+            return Ok(sf_session::assets::background_audio_label(file_name));
+        }
+        let [jamendo, own] = file_ids(file_name);
+        if let Some(t) = known.iter().find(|t| !jamendo.is_empty() && t.id == jamendo && t.kind == TrackKind::Jamendo) {
+            self.set_favorite(&t.clone(), true);
+            return Ok(t.name.clone());
+        }
+        let dir = Self::own_dir().ok_or("ScreenForge has no folder to keep favourites in")?;
+        let track = keep_own(assets_dir, file_name, &dir, own)?;
+        let name = track.name.clone();
+        self.favorites.insert(0, track);
+        self.save();
+        Ok(name)
     }
 
     /// `track` was added to a video: move it to the front of "Recent".
@@ -214,9 +357,10 @@ pub struct Browser {
     started: bool,
     search: Option<(u32, Receiver<Result<SearchReply, String>>)>,
     pub source: Source,
-    /// Loaded when the section is first shown.
+    /// Loaded when the section is first shown, and again when the agent changed it.
     pub library: Library,
-    library_loaded: bool,
+    /// When the saved file was last changed as of the last load (`Some(None)`: no file yet).
+    library_stamp: Option<Option<std::time::SystemTime>>,
     /// The Jamendo track downloading, to note in "Recent" once it is added.
     pending: Option<Track>,
     thumbs: HashMap<String, PathBuf>,
@@ -244,7 +388,7 @@ impl Default for Browser {
             search: None,
             source: Source::Library,
             library: Library::default(),
-            library_loaded: false,
+            library_stamp: None,
             pending: None,
             thumbs: HashMap::new(),
             thumb_rx: vec![],
@@ -281,10 +425,12 @@ impl Browser {
         }
     }
 
-    /// Read the saved favourites and recent tracks once.
+    /// Read the saved favourites and recent tracks, again whenever the file changed (the agent
+    /// adds favourites too; a stale copy saved by the next heart would drop them).
     pub fn ensure_library(&mut self) {
-        if !self.library_loaded {
-            self.library_loaded = true;
+        let stamp = Library::modified();
+        if self.library_stamp != Some(stamp) {
+            self.library_stamp = Some(stamp);
             self.library = Library::load();
         }
     }
@@ -516,10 +662,71 @@ pub fn download_link(link: &str, assets_dir: &Path, progress: &AtomicU32, ctx: &
 
 /// The credit of `file_name` in `assets_dir`, when it came from Jamendo.
 pub fn credit(assets_dir: &Path, file_name: &str) -> Option<Credit> {
+    let bytes = std::fs::read(assets_dir.join(credit_name(file_name))).ok()?;
+    serde_json::from_slice(&bytes).ok()
+}
+
+/// The credit file beside audio file `file_name`.
+fn credit_name(file_name: &str) -> String {
     let base = file_name.rsplit('/').next().unwrap_or(file_name);
     let stem = base.rsplit_once('.').map(|(s, _)| s).unwrap_or(base);
-    let bytes = std::fs::read(assets_dir.join(format!("{stem}.credit.json"))).ok()?;
-    serde_json::from_slice(&bytes).ok()
+    format!("{stem}.credit.json")
+}
+
+/// Copy the project's track `file_name` (and its credit) from `assets_dir` into `dir` as
+/// favourite `id`.
+fn keep_own(assets_dir: &Path, file_name: &str, dir: &Path, id: String) -> Result<Track, String> {
+    let base = file_name.rsplit('/').next().unwrap_or(file_name);
+    let src = assets_dir.join(base);
+    if !src.is_file() {
+        return Err(format!("\"{base}\" is not in this project any more"));
+    }
+    std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    let (stem, ext) = base.rsplit_once('.').unwrap_or((base, "mp3"));
+    let kept = free_name(dir, stem, ext);
+    std::fs::copy(&src, dir.join(&kept)).map_err(|e| format!("Could not keep the track: {e}"))?;
+    let credit = credit(assets_dir, base);
+    if let Some(c) = &credit {
+        let _ = std::fs::write(dir.join(credit_name(&kept)), serde_json::to_vec_pretty(c).unwrap_or_default());
+    }
+    Ok(Track {
+        id,
+        name: credit.as_ref().map_or_else(|| sf_session::assets::background_audio_label(base), |c| c.title.clone()),
+        artist: credit.as_ref().map_or_else(|| "Your track".to_string(), |c| c.artist.clone()),
+        duration: 0,
+        download: kept,
+        image: None,
+        license_url: credit.as_ref().and_then(|c| c.license_url.clone()),
+        share_url: credit.and_then(|c| c.url),
+        kind: TrackKind::Own,
+    })
+}
+
+/// Put favourite `track` of the user's own into `assets_dir` (once; a different file of the
+/// same name is kept beside it); returns its file name there.
+pub fn place_own(track: &Track, assets_dir: &Path) -> Result<String, String> {
+    let dir = Library::own_dir().ok_or("ScreenForge has no folder of favourites")?;
+    place_own_from(track, &dir, assets_dir)
+}
+
+fn place_own_from(track: &Track, dir: &Path, assets_dir: &Path) -> Result<String, String> {
+    let src = dir.join(&track.download);
+    let len = std::fs::metadata(&src).map_err(|_| format!("The favourite \"{}\" is missing; heart it again from a project that has it", track.name))?.len();
+    std::fs::create_dir_all(assets_dir).map_err(|e| e.to_string())?;
+    let want = track.plays_as();
+    let name = match std::fs::metadata(assets_dir.join(&want)) {
+        Ok(m) if m.len() == len => return Ok(want),
+        Ok(_) => {
+            let (stem, ext) = want.rsplit_once('.').unwrap_or((want.as_str(), "mp3"));
+            free_name(assets_dir, stem, ext)
+        }
+        Err(_) => want,
+    };
+    std::fs::copy(&src, assets_dir.join(&name)).map_err(|e| format!("Could not add the track: {e}"))?;
+    if let Ok(c) = std::fs::read(dir.join(credit_name(&track.download))) {
+        let _ = std::fs::write(assets_dir.join(credit_name(&name)), c);
+    }
+    Ok(name)
 }
 
 fn is_jamendo(url: &str) -> bool {
@@ -722,14 +929,14 @@ mod tests {
         assert!(!usable(Some("https://example.com/licenses/by/3.0/"), true));
         let by = Credit { title: "T".into(), artist: "A".into(), url: None, license_url: cc("by") };
         assert!(!by.is_noncommercial());
-        let nd = Track { id: "1".into(), name: "T".into(), artist: "A".into(), duration: 1, download: "https://prod-1.storage.jamendo.com/download/track/1/mp32/".into(), image: None, license_url: cc("by-nd"), share_url: None };
+        let nd = Track { id: "1".into(), name: "T".into(), artist: "A".into(), duration: 1, download: "https://prod-1.storage.jamendo.com/download/track/1/mp32/".into(), image: None, license_url: cc("by-nd"), share_url: None, kind: TrackKind::Jamendo };
         let dir = tempfile::tempdir().unwrap();
         assert!(download_track(&nd, dir.path(), &AtomicU32::new(0), &egui::Context::default()).err().unwrap().contains("licence"));
     }
 
     #[test]
     fn favorites_and_recent() {
-        let t = |id: &str| Track { id: id.into(), name: id.into(), artist: "A".into(), duration: 1, download: String::new(), image: None, license_url: None, share_url: None };
+        let t = |id: &str| Track { id: id.into(), name: id.into(), artist: "A".into(), duration: 1, download: String::new(), image: None, license_url: None, share_url: None, kind: TrackKind::Jamendo };
         let mut lib = Library::default();
         lib.favorites.insert(0, t("1"));
         assert!(lib.is_favorite("1") && !lib.is_favorite("2"));
@@ -741,6 +948,40 @@ mod tests {
         assert_eq!((lib.recent[0].id.as_str(), lib.recent.len()), ("5", RECENT));
         let back: Library = serde_json::from_slice(&serde_json::to_vec(&lib).unwrap()).unwrap();
         assert_eq!(back.favorites[0].id, "1");
+    }
+
+    #[test]
+    fn library_and_own_tracks_can_be_favourites_too() {
+        let t = Track::library("upbeat/Sunny Day-AbC123.mp3");
+        assert_eq!((t.id.as_str(), t.name.as_str(), t.artist.as_str(), t.kind), ("library:sunny day", "Sunny Day", "Upbeat", TrackKind::Library));
+        assert!(t.is_playing("upbeat/Sunny Day-XyZ789.mp3"), "the same track in a newer library");
+        assert!(!t.is_playing("my-song.mp3"));
+        // a Jamendo favourite saved before kinds existed reads as Jamendo, and is written the same
+        let old: Track = serde_json::from_value(serde_json::json!({ "id": "7", "name": "L", "artist": "A", "download": "https://x.jamendo.com/7" })).unwrap();
+        assert_eq!(old.kind, TrackKind::Jamendo);
+        assert!(!serde_json::to_string(&old).unwrap().contains("kind"));
+        assert_eq!(file_ids("assets/jamendo_7.mp3"), ["7".to_string(), "file:jamendo_7.mp3".to_string()]);
+        assert_eq!(file_ids("song.m4a")[0], "", "not a Jamendo download");
+    }
+
+    #[test]
+    fn an_own_favourite_is_kept_with_its_credit_and_placed_in_another_project() {
+        let (a, kept, b) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        std::fs::write(a.path().join("jamendo_9.mp3"), b"ID3 song").unwrap();
+        let c = Credit { title: "Lights".into(), artist: "Ann".into(), url: Some("https://www.jamendo.com/track/9".into()), license_url: Some("http://creativecommons.org/licenses/by/3.0/".into()) };
+        std::fs::write(a.path().join("jamendo_9.credit.json"), serde_json::to_vec(&c).unwrap()).unwrap();
+        let t = keep_own(a.path(), "jamendo_9.mp3", kept.path(), "file:jamendo_9.mp3".into()).unwrap();
+        assert_eq!((t.name.as_str(), t.artist.as_str(), t.kind), ("Lights", "Ann", TrackKind::Own));
+        assert!(t.is_playing("jamendo_9.mp3"));
+        // into a project without it: the file and its credit
+        assert_eq!(place_own_from(&t, kept.path(), b.path()).unwrap(), "jamendo_9.mp3");
+        assert_eq!(credit(b.path(), "jamendo_9.mp3"), Some(c));
+        // again: the same file is used, not copied twice
+        assert_eq!(place_own_from(&t, kept.path(), b.path()).unwrap(), "jamendo_9.mp3");
+        // a different file of that name stays; the favourite goes beside it
+        std::fs::write(b.path().join("jamendo_9.mp3"), b"something else entirely").unwrap();
+        assert_eq!(place_own_from(&t, kept.path(), b.path()).unwrap(), "jamendo_9 2.mp3");
+        assert!(keep_own(a.path(), "gone.mp3", kept.path(), "file:gone.mp3".into()).is_err());
     }
 
     #[test]

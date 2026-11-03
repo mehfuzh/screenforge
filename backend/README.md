@@ -187,7 +187,7 @@ offers **Switch account**, **Sign out** and, for Pro, **Manage subscription**:
 
 Narration (and the agent's `add_narration`) offers ElevenLabs voices beside the on-device Kokoro
 ones. They are read through the `voice` function so the key stays on the server
-(`ELEVENLABS_API_KEY`; elevenlabs.io → Developers → API keys, with Text to Speech access only).
+(`ELEVENLABS_API_KEY`; elevenlabs.io → Developers → API keys, restricted to Text to Speech, Speech to Speech and Audio Isolation (for `voice-enhance`) and Voices: Write (for `my-voice`)).
 
 ```
 supabase secrets set ELEVENLABS_API_KEY=<key>
@@ -209,6 +209,45 @@ credits cover roughly two hours of narration if nothing else is spent. Packs kee
 change model (v4 Turbo: `eleven_v4_turbo`, 0.04). Its cost also counts toward the agent's
 daily caps (`AGENT_DEVICE_DAILY_USD`, `AGENT_TOTAL_DAILY_USD`). The app keeps each voice's
 preview in its cache folder, so a preview is charged once.
+
+### Enhancing a recorded voice-over
+
+`voice-enhance` cleans up or re-voices a voice-over the user recorded, keeping their timing,
+delivery and accent: `{ device, mode, voice?, audio }`, where `mode` is `clean` (ElevenLabs'
+Voice Isolator: noise, echo and hum taken out, still their voice) or `revoice` (Voice Changer,
+`eleven_multilingual_sts_v2`, into one of the same `VOICES`), and `audio` is a base64 WAV
+(16-bit PCM mono) of at most 120 s. It returns `{ audio: base64 MP3, credits, sf_credits }`.
+The app sends a take in pieces of about 40 s cut where it is quiet, and fits each answer to
+the length it sent, so the new file lines up with the recording. Same key, gate and caps as
+`voice` (both use `_shared/elevenlabs.ts`).
+
+```
+supabase functions deploy voice-enhance
+```
+
+ElevenLabs bills both by length, 1,000 characters a minute, so a minute costs US$0.08 here,
+8 credits (`ELEVENLABS_USD_PER_AUDIO_MINUTE`, measured from the WAV itself;
+`ELEVENLABS_STS_MODEL` picks the Voice Changer model).
+
+### My voice (the user's own voice)
+
+`my-voice` makes an ElevenLabs Instant Voice Clone of a Pro user's own voice from voice-overs
+they recorded, one per license email (`voice_clones`, migration `20261102000000`), after they
+tick a consent box ("this is my own voice…", stored with the row). `{ device, action }`:
+`status` → `{ voice }`, `create` with `consent: true`, `samples` (base64 16-bit mono WAVs, 10 s to
+3 min in all) and `clean` (Voice Isolator first) → `{ voice }`, replacing an earlier clone;
+`delete` removes the clone at ElevenLabs and the row. The clone is named by a hash of the email,
+never the email. Making one is free (it takes one of the account's voice slots); speaking in it
+is paid like the other voices: `voice` and `voice-enhance` take `voice: "my_voice"` and look up
+the asker's clone.
+
+```
+supabase db push
+supabase functions deploy my-voice voice voice-enhance
+```
+
+The API key also needs **Voices: Write** (to add and delete clones). Clones of users who stop
+paying stay until they delete them; the plan's voice-slot limit is the thing to watch.
 
 Licence. ElevenLabs' Free plan has no commercial licence; the workspace needs a paid plan
 (Starter or above) before the voices are offered to customers, and enough characters or
