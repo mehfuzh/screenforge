@@ -93,8 +93,7 @@ license.
   top it up and never expire.
 - **Creator**, US$49 once: unlimited export for life, verified offline, no agent.
 
-It is Apache-2.0 code, so you can always build it yourself and remove the export gate; the
-license pays for the maintained, signed and notarized download, the CI that builds it, and
+The license pays for the maintained, signed and notarized download, the CI that builds it, and
 ongoing maintenance. The hosted agent needs Pro; debug builds can call Claude directly with
 your own `ANTHROPIC_API_KEY`. See `backend/README.md` for how keys and credits are issued.
 
