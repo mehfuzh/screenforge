@@ -4618,6 +4618,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sf-engine",
+ "sf-license",
  "sf-project",
  "ureq 2.12.1",
 ]

@@ -1,5 +1,5 @@
-//! A real turn against the Claude API (costs a few cents). Needs `ANTHROPIC_API_KEY` in the
-//! environment or the repository's `.env`:
+//! A real turn through ScreenForge's `agent` function (costs a few cents of credits). Run it on a
+//! computer that may use the agent (Pro, or an `AGENT_STAFF_EMAILS` account):
 //! `cargo test -p sf-agent --test live -- --ignored --nocapture`
 //! (`SF_AGENT_MODEL` picks another model; Claude Haiku 5.5 by default.)
 
@@ -10,12 +10,13 @@ use sf_project::v4::Slice;
 use sf_project::Project;
 
 #[test]
-#[ignore = "calls the Claude API"]
+#[ignore = "calls the ScreenForge agent function"]
 fn cuts_and_zooms_from_plain_words() {
     let mut p = Project::new("Live");
     p.scenes[0].slices = vec![Slice::new(0.0, 30_000.0)];
     let mut ws = Workspace::new(p);
-    let route = Route::Direct { api_key: sf_agent::client::local_key().expect("ANTHROPIC_API_KEY in the environment or .env") };
+    let device = sf_license::device_id().expect("a device id for this computer");
+    let route = Route { url: format!("{}/functions/v1/agent", sf_license::SUPABASE_URL), anon_key: sf_license::SUPABASE_ANON_KEY.into(), device };
     let settings = Settings { model: std::env::var("SF_AGENT_MODEL").unwrap_or_else(|_| "claude-haiku-5-5".into()) };
     let mut errors = vec![];
     let conv = sf_agent::run_turn(&route, &settings, Conversation::default(), &mut ws, "Cut the first 5 seconds, then add a 2x zoom from 0:10 to 0:15 of the result.", "Playhead at 0:00.0. Selected: nothing.", &AtomicBool::new(false), |e| {

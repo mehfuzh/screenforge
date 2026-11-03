@@ -5,8 +5,7 @@
 //! timeline updates while the agent works; when the turn ends the whole of it becomes one undo
 //! step. Editing by hand during a turn stops the agent and keeps the hand edit.
 //!
-//! Requests go through ScreenForge's backend, which holds the Claude key; a local build with
-//! `ANTHROPIC_API_KEY` in its environment or `.env` calls Claude directly instead.
+//! Requests go through ScreenForge's backend, which holds the Claude key.
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
@@ -27,23 +26,10 @@ fn settings_path() -> Option<std::path::PathBuf> {
     sf_license::key_file().map(|p| p.with_file_name("agent.json"))
 }
 
-/// A developer's local key (`.env` or the environment), in debug builds only: released builds
-/// always go through the ScreenForge backend, where the agent is part of Pro.
-fn local_key() -> Option<String> {
-    if cfg!(debug_assertions) {
-        sf_agent::client::local_key()
-    } else {
-        None
-    }
-}
-
-/// A local key when there is one (debug builds), else the ScreenForge backend.
+/// The ScreenForge backend's `agent` function, where the agent is part of Pro.
 fn route() -> Result<Route, String> {
-    if let Some(api_key) = local_key() {
-        return Ok(Route::Direct { api_key });
-    }
     let device = sf_license::device_id().ok_or("ScreenForge cannot identify this computer, so the agent is not available.")?;
-    Ok(Route::Hosted { url: format!("{}/functions/v1/agent", sf_license::SUPABASE_URL), anon_key: sf_license::SUPABASE_ANON_KEY.into(), device })
+    Ok(Route { url: format!("{}/functions/v1/agent", sf_license::SUPABASE_URL), anon_key: sf_license::SUPABASE_ANON_KEY.into(), device })
 }
 
 /// The editor's side of the agent: catalogs gathered on the UI thread when a turn starts, and
@@ -309,8 +295,6 @@ struct Job {
 pub struct AgentPanel {
     /// `None` until the panel is first used (read from disk then).
     settings: Option<Settings>,
-    /// Calls Claude with a local key instead of the backend (worked out on first use).
-    local: Option<bool>,
     conversation: Conversation,
     /// The project before each answer in this chat that changed it, oldest first: what the
     /// agent's `undo_answers` goes back to.
@@ -436,9 +420,9 @@ fn credits_label(n: f64) -> String {
 }
 
 impl AgentPanel {
-    /// Ask the backend for this computer's balance (hosted only).
+    /// Ask the backend for this computer's balance.
     fn fetch_credits(&mut self) {
-        if self.local == Some(true) || self.credits_rx.is_some() {
+        if self.credits_rx.is_some() {
             return;
         }
         let Some(device) = sf_license::device_id() else { return };
@@ -895,8 +879,7 @@ impl AgentPanel {
         // the plan is checked even while another section is open: the Narration panel offers
         // the ElevenLabs voices by it
         self.poll_billing();
-        let local = *self.local.get_or_insert_with(|| local_key().is_some());
-        if !local && self.credits.is_none() && self.credits_error.is_none() {
+        if self.credits.is_none() && self.credits_error.is_none() {
             self.fetch_credits();
         }
         crate::narration::set_cloud_allowed(self.credits.as_ref().map(|c| c["allowed"].as_bool() == Some(true)));
@@ -970,7 +953,7 @@ impl AgentPanel {
         if std::mem::take(&mut self.license_changed) {
             ed.export.license = sf_license::load_saved().map(|k| sf_license::verify(&k)).unwrap_or_else(|| sf_license::Status::Invalid("no key".into()));
         }
-        if self.credits.is_none() && self.credits_error.is_none() && self.local == Some(false) {
+        if self.credits.is_none() && self.credits_error.is_none() {
             self.fetch_credits();
         }
         if self.credits_rx.is_some() || self.restore_rx.is_some() || self.checkout_rx.is_some() || self.account_rx.is_some() || self.sign_in.as_ref().is_some_and(|s| s.rx.is_some()) {
@@ -981,10 +964,6 @@ impl AgentPanel {
             let (mark, _) = ui.allocate_exact_size(vec2(20.0, 20.0), egui::Sense::hover());
             widgets::paint_icon(ui.painter(), mark, widgets::Icon::Agent, pal.text);
             ui.label(RichText::new("Agent").size(16.0).color(pal.text));
-            let local = *self.local.get_or_insert_with(|| local_key().is_some());
-            if local {
-                ui.label(RichText::new("local key").size(11.0).color(pal.text_faint)).on_hover_text("ANTHROPIC_API_KEY from the environment or .env: requests go straight to Claude, not through the ScreenForge server.");
-            }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 let can_reset = !self.log.is_empty() && self.job.is_none();
                 if ui.add_enabled_ui(can_reset, |ui| widgets::icon_button(ui, widgets::Icon::Restart, 16.0, "Clear chat")).inner.clicked() {
@@ -993,7 +972,7 @@ impl AgentPanel {
                     self.log.clear();
                     self.usage = Usage::default();
                 }
-                if let Some(n) = self.credits.as_ref().filter(|c| c["allowed"].as_bool() == Some(true)).and_then(|c| c["credits"].as_f64()).filter(|_| !local) {
+                if let Some(n) = self.credits.as_ref().filter(|c| c["allowed"].as_bool() == Some(true)).and_then(|c| c["credits"].as_f64()) {
                     let colour = if n <= 0.0 { pal.danger } else { pal.text_dim };
                     let chip = ui.add(egui::Button::new(RichText::new(credits_label(n)).size(12.0).color(colour)).fill(pal.card_2).corner_radius(CornerRadius::same(widgets::BUTTON_RADIUS))).on_hover_text("Agent credits: plan, Pro and top-ups");
                     let frame = egui::Frame::menu(ui.style()).fill(pal.card).corner_radius(CornerRadius::same(6)).inner_margin(egui::Margin::same(8));
@@ -1002,31 +981,29 @@ impl AgentPanel {
             });
         });
 
-        // hosted: the chat only once the plan allows it; the upgrade card without Pro
-        if self.local == Some(false) {
-            match &self.credits {
-                Some(c) if c["allowed"].as_bool() == Some(false) => {
-                    self.locked_ui(ui);
-                    return;
-                }
-                Some(_) => {}
-                None => {
-                    ui.add_space(24.0);
-                    if let Some(e) = self.credits_error.clone() {
-                        widgets::hint(ui, &format!("Could not check your plan: {e}"));
-                        ui.add_space(8.0);
-                        if widgets::secondary_button(ui, "Try again").clicked() {
-                            self.credits_error = None;
-                            self.fetch_credits();
-                        }
-                    } else {
-                        ui.horizontal(|ui| {
-                            ui.spinner();
-                            ui.label(RichText::new("Checking your plan…").size(13.0).color(pal.text_dim));
-                        });
+        // the chat only once the plan allows it; the upgrade card without Pro
+        match &self.credits {
+            Some(c) if c["allowed"].as_bool() == Some(false) => {
+                self.locked_ui(ui);
+                return;
+            }
+            Some(_) => {}
+            None => {
+                ui.add_space(24.0);
+                if let Some(e) = self.credits_error.clone() {
+                    widgets::hint(ui, &format!("Could not check your plan: {e}"));
+                    ui.add_space(8.0);
+                    if widgets::secondary_button(ui, "Try again").clicked() {
+                        self.credits_error = None;
+                        self.fetch_credits();
                     }
-                    return;
+                } else {
+                    ui.horizontal(|ui| {
+                        ui.spinner();
+                        ui.label(RichText::new("Checking your plan…").size(13.0).color(pal.text_dim));
+                    });
                 }
+                return;
             }
         }
 
@@ -1077,7 +1054,7 @@ impl AgentPanel {
                 }
             }
             let out = self.job.is_none() && self.credits.as_ref().and_then(|c| c["credits"].as_f64()).is_some_and(|n| n <= 0.0);
-            if out && self.local != Some(true) {
+            if out {
                 let licensed = self.credits.as_ref().is_some_and(|c| c["account"].is_string() && c["allowed"].as_bool() == Some(true));
                 let pro = self.credits.as_ref().is_some_and(|c| c["pro"].as_bool() == Some(true));
                 ui.horizontal_wrapped(|ui| {

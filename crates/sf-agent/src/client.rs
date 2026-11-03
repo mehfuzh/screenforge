@@ -1,19 +1,15 @@
 //! Claude Messages API over HTTP (there is no Rust SDK): how requests reach Claude, the model
 //! list with prices, and one request with retries.
 //!
-//! Released builds go through ScreenForge's `agent` function on Supabase, which holds the
-//! Anthropic key as a secret ([`Route::Hosted`]). A local build with `ANTHROPIC_API_KEY` in the
-//! environment or in a `.env` file calls the API directly ([`Route::Direct`], see [`local_key`]).
+//! Every build goes through ScreenForge's `agent` function on Supabase, which holds the
+//! Anthropic key as a secret ([`Route`]); the app never sees the key.
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-pub const API_URL: &str = "https://api.anthropic.com/v1/messages";
-pub const API_VERSION: &str = "2026-10-21";
 /// Room for a long answer plus several tool calls in one reply (non-streaming stays well
 /// under the HTTP timeout at this size).
 pub const MAX_TOKENS: u32 = 16_000;
-const FALLBACK_BETA: &str = "server-side-fallback-2026-07-01";
 
 /// A model the agent offers, with list prices in US$ per million tokens.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -59,42 +55,13 @@ pub fn credit_rate(id: &str) -> f64 {
     model(id).map_or(1.0, |m| m.output / SONNET.output)
 }
 
-/// How requests reach Claude.
+/// How requests reach Claude: the ScreenForge backend's `agent` function (`url`), which adds
+/// the Anthropic key and checks the computer (`device`) is allowed to use the agent.
 #[derive(Debug, Clone, PartialEq)]
-pub enum Route {
-    /// Straight to the API with a developer's own key (local builds).
-    Direct { api_key: String },
-    /// Through the ScreenForge backend (`url` is the `agent` function), which adds the key.
-    Hosted { url: String, anon_key: String, device: String },
-}
-
-/// `ANTHROPIC_API_KEY` from the environment, or from the first `.env` found in the current
-/// folder, the executable's folder, or one of their parents (a checkout running
-/// `target/debug/screenforge` finds the repository's `.env`).
-pub fn local_key() -> Option<String> {
-    if let Some(k) = std::env::var("ANTHROPIC_API_KEY").ok().filter(|k| !k.trim().is_empty()) {
-        return Some(k.trim().to_string());
-    }
-    let starts = [std::env::current_dir().ok(), std::env::current_exe().ok().and_then(|p| p.parent().map(|d| d.to_path_buf()))];
-    starts.into_iter().flatten().flat_map(|d| d.ancestors().map(|a| a.join(".env")).collect::<Vec<_>>()).find_map(|p| dotenv_value(&std::fs::read_to_string(p).ok()?, "ANTHROPIC_API_KEY"))
-}
-
-/// `key`'s value in `.env` text: `KEY=value`, optionally `export`ed or quoted; `#` comments.
-fn dotenv_value(text: &str, key: &str) -> Option<String> {
-    text.lines().find_map(|line| {
-        let line = line.trim();
-        let line = line.strip_prefix("export ").unwrap_or(line);
-        let (k, v) = line.split_once('=')?;
-        if k.trim() != key {
-            return None;
-        }
-        let v = v.trim();
-        let v = match v.chars().next() {
-            Some(q @ ('"' | '\'')) => v[1..].split(q).next().unwrap_or(""),
-            _ => v.split(" #").next().unwrap_or(v).trim(),
-        };
-        (!v.is_empty()).then(|| v.to_string())
-    })
+pub struct Route {
+    pub url: String,
+    pub anon_key: String,
+    pub device: String,
 }
 
 /// The agent's preferences, saved as JSON next to the license key.
@@ -180,23 +147,12 @@ pub fn send(route: &Route, model_id: &str, mut body: Value) -> Result<Value, Str
     let mut attempt = 0;
     loop {
         attempt += 1;
-        let resp = match route {
-            Route::Direct { api_key } => {
-                let mut req = ureq::post(API_URL).set("x-api-key", api_key).set("anthropic-version", API_VERSION).set("content-type", "application/json");
-                let mut b = body.clone();
-                if model(model_id).is_some_and(|m| m.fallbacks) {
-                    req = req.set("anthropic-beta", FALLBACK_BETA);
-                    b["fallbacks"] = Value::from("default");
-                }
-                req.timeout(std::time::Duration::from_secs(600)).send_json(b)
-            }
-            // the function adds the key and the fallback option itself
-            Route::Hosted { url, anon_key, device } => ureq::post(url)
-                .set("apikey", anon_key)
-                .set("Authorization", &format!("Bearer {anon_key}"))
-                .timeout(std::time::Duration::from_secs(600))
-                .send_json(json!({ "device": device, "request": body })),
-        };
+        // the function adds the key and the fallback option itself
+        let resp = ureq::post(&route.url)
+            .set("apikey", &route.anon_key)
+            .set("Authorization", &format!("Bearer {}", route.anon_key))
+            .timeout(std::time::Duration::from_secs(600))
+            .send_json(json!({ "device": route.device, "request": body }));
         match resp {
             Ok(r) => return r.into_json::<Value>().map_err(|e| format!("Claude sent a reply that could not be read: {e}")),
             Err(ureq::Error::Status(code, r)) => {
@@ -208,12 +164,10 @@ pub fn send(route: &Route, model_id: &str, mut body: Value) -> Result<Value, Str
                     std::thread::sleep(std::time::Duration::from_secs(retry_after.unwrap_or(2 * attempt as u64).min(30)));
                     continue;
                 }
-                let hosted = matches!(route, Route::Hosted { .. });
                 return Err(match code {
                     // the backend's own refusals (allowance used up, unknown device) are worded for the user
-                    _ if hosted && (400..500).contains(&code) && code != 429 && !message.is_empty() => message,
-                    404 if hosted => "The agent is not available on the ScreenForge server yet.".into(),
-                    401 => "Claude did not accept the API key in ANTHROPIC_API_KEY.".into(),
+                    _ if (400..500).contains(&code) && code != 429 && !message.is_empty() => message,
+                    404 => "The agent is not available on the ScreenForge server yet.".into(),
                     429 => "Too many requests right now. Wait a moment and try again.".into(),
                     529 => "Claude is overloaded right now. Try again in a moment.".into(),
                     _ if message.is_empty() => format!("Claude returned an error ({code})."),
@@ -225,8 +179,7 @@ pub fn send(route: &Route, model_id: &str, mut body: Value) -> Result<Value, Str
                     std::thread::sleep(std::time::Duration::from_secs(2 * attempt as u64));
                     continue;
                 }
-                let to = if matches!(route, Route::Hosted { .. }) { "the ScreenForge server" } else { "the Claude API" };
-                return Err(format!("Could not reach {to} ({}). Check your connection.", t.kind()));
+                return Err(format!("Could not reach the ScreenForge server ({}). Check your connection.", t.kind()));
             }
         }
     }
@@ -276,15 +229,5 @@ mod tests {
         let usage = |m: &str| Usage::from_response(&json!({ "model": m, "usage": { "input_tokens": 10_000, "output_tokens": 2_000 } })).cost_usd;
         assert!((usage("claude-opus-5-5") - 2.0 * usage("claude-sonnet-5-5")).abs() < 1e-12);
         assert_eq!(label("claude-opus-5-5"), "Claude Opus 5.5");
-    }
-
-    #[test]
-    fn dotenv_values() {
-        let text = "# keys\nOTHER=1\nexport ANTHROPIC_API_KEY=\"sk-ant-quoted\" # comment\n";
-        assert_eq!(dotenv_value(text, "ANTHROPIC_API_KEY").as_deref(), Some("sk-ant-quoted"));
-        assert_eq!(dotenv_value("ANTHROPIC_API_KEY = sk-ant-plain # note", "ANTHROPIC_API_KEY").as_deref(), Some("sk-ant-plain"));
-        assert_eq!(dotenv_value("ANTHROPIC_API_KEY='single'", "ANTHROPIC_API_KEY").as_deref(), Some("single"));
-        assert_eq!(dotenv_value("ANTHROPIC_API_KEY=", "ANTHROPIC_API_KEY"), None);
-        assert_eq!(dotenv_value("NOT_ANTHROPIC_API_KEY=x", "ANTHROPIC_API_KEY"), None);
     }
 }

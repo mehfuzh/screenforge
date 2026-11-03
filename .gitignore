@@ -5,7 +5,7 @@
 *.screenstudio/recording
 *.screenforge/recording
 
-# local secrets (ANTHROPIC_API_KEY for the agent in local builds)
+# local secrets (never committed)
 .env
 
 # Supabase CLI state

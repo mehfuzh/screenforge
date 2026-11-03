@@ -3,8 +3,7 @@
 //!
 //! * [`tools`]: what Claude can do to a [`tools::Workspace`] (a project and its transcript):
 //!   read the timeline, cut, change speed, zoom, and patch any field of `project.json`.
-//! * [`client`]: the Claude Messages API (through the ScreenForge backend, or directly with a
-//!   local key) and model prices.
+//! * [`client`]: the Claude Messages API (through the ScreenForge backend) and model prices.
 //! * [`agent`]: one user turn: call Claude, run the tools it asks for, repeat until it answers.
 //!
 //! Nothing here touches the UI or the disk: the editor runs [`agent::run_turn`] on a thread with

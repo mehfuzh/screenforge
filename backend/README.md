@@ -163,9 +163,8 @@ supabase functions deploy agent
 - The agent is part of Pro: the `agent` function refuses other computers (`pro_required`), and
   packs are sold only to Pro emails. `AGENT_STAFF_EMAILS` (comma separated) lets the team use it
   without Pro.
-- Debug builds skip the backend: with `ANTHROPIC_API_KEY` in the environment or in a `.env`
-  file (the repository's, which is git-ignored), the app calls the Claude API directly and the
-  panel says "local key". Release builds always go through the backend.
+- Every build, debug or release, goes through this function: the Anthropic key lives only in
+  the `ANTHROPIC_API_KEY` secret here, never in the app.
 
 ## Signing in and out, and billing
 
