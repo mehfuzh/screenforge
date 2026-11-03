@@ -28,6 +28,13 @@ pub trait Host: Send + Sync {
         let _ = id;
         Err("music search is not available here".into())
     }
+    /// Make music `track` one of the user's favourites (`favorite`), or take it out of them.
+    /// `track` is a name from the options' `music`, a Jamendo id (`favoriteMusic` or a music
+    /// search), or a file in the project's assets. Returns `{ name, favorite }`.
+    fn favorite_music(&self, track: &str, favorite: bool) -> Result<Value, String> {
+        let _ = (track, favorite);
+        Err("favourites are not available here".into())
+    }
     /// Download the audio file at `url` into the project's assets: its file name there.
     fn import_url(&self, url: &str) -> Result<String, String> {
         let _ = url;
@@ -62,7 +69,7 @@ pub struct Spoken {
 
 /// The AI voices `add_narration` offers: (id, description). The first is the default. The
 /// `el_` ones are ElevenLabs' (read online, paid in credits; see sf_tts::cloud).
-pub const VOICES: [(&str, &str); 14] = [
+pub const VOICES: [(&str, &str); 15] = [
     ("am_fenrir", "male, warm and clear (default)"),
     ("am_michael", "male, calm"),
     ("am_puck", "male, lively"),
@@ -77,6 +84,7 @@ pub const VOICES: [(&str, &str); 14] = [
     ("el_matilda", "female, knowledgeable, professional (ElevenLabs)"),
     ("el_alice", "female, clear British educator (ElevenLabs)"),
     ("el_jessica", "female, playful, bright (ElevenLabs)"),
+    ("my_voice", "the user's own voice, cloned by ElevenLabs (only once they made it under Narration → My voice)"),
 ];
 
 /// Something only the editor can do, asked for by a tool and run when the round's edits are

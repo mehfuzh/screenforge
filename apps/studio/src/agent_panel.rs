@@ -72,10 +72,12 @@ impl StudioHost {
         }
         // the Jamendo tracks the user hearted, CC BY only: the agent cannot know whether the video
         // earns money, so a non-commercial favourite is left out
-        let favorites: Vec<crate::music::Track> = crate::music::Library::load().favorites.into_iter().filter(|t| crate::music::usable(t.license_url.as_deref(), false)).collect();
+        let library = crate::music::Library::load();
+        let favorites: Vec<crate::music::Track> = library.favorites.iter().filter(|t| t.kind == crate::music::TrackKind::Jamendo && crate::music::usable(t.license_url.as_deref(), false)).cloned().collect();
         let options = json!({
             "wallpapers": assets.list_backgrounds(),
-            "music": assets.list_background_audio().iter().map(|n| json!({ "track": n, "label": sf_session::assets::background_audio_label(n) })).collect::<Vec<_>>(),
+            // bundled tracks the user hearted are marked, so the agent can prefer them
+            "music": assets.list_background_audio().iter().map(|n| json!({ "track": n, "label": sf_session::assets::background_audio_label(n), "favorite": library.is_favorite(&crate::music::library_id(n)) })).collect::<Vec<_>>(),
             "favoriteMusic": favorites.iter().map(track_value).collect::<Vec<_>>(),
             "cursorSets": sf_session::cursor_sets::SETS.iter().map(|(id, label)| json!({ "id": id, "label": label })).collect::<Vec<_>>(),
             "cameraLooks": looks,
@@ -203,6 +205,30 @@ impl Host for StudioHost {
         let applied = crate::music::download_track(&track, &assets, &AtomicU32::new(0), &self.ctx)?;
         let credit = crate::music::credit(&assets, &applied.file_name).map(|c| c.text());
         Ok(json!({ "fileName": applied.file_name, "name": track.name, "artist": track.artist, "credit": credit }))
+    }
+
+    fn favorite_music(&self, track: &str, favorite: bool) -> Result<Value, String> {
+        use crate::music::{Library, Track};
+        // the file on disk, not a copy loaded earlier: the panel may have changed it since
+        let mut library = Library::load();
+        let name = track.trim();
+        let bundled: Vec<String> = self.options["music"].as_array().into_iter().flatten().filter_map(|m| m["track"].as_str().map(str::to_string)).collect();
+        let assets = self.project_dir.join("assets");
+        let base = name.rsplit('/').next().unwrap_or(name);
+        let known: Vec<Track> = self.tracks.lock().map_err(|_| "busy")?.iter().chain(&library.recent).cloned().collect();
+        let title = if let Some(n) = bundled.iter().find(|n| n.as_str() == name || sf_session::assets::background_audio_key(n) == sf_session::assets::background_audio_key(name)) {
+            let t = Track::library(n);
+            library.set_favorite(&t, favorite);
+            t.name
+        } else if let Some(t) = known.iter().find(|t| t.id == name) {
+            library.set_favorite(t, favorite);
+            t.name.clone()
+        } else if !base.is_empty() && assets.join(base).is_file() {
+            library.set_file(&assets, base, &known, favorite)?
+        } else {
+            return Err(format!("no track \"{name}\": use a name from get_options music, a Jamendo id from favoriteMusic or search_music, or a music file in the project"));
+        };
+        Ok(json!({ "name": title, "favorite": favorite }))
     }
 
     fn import_url(&self, url: &str) -> Result<String, String> {

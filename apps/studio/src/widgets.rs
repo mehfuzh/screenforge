@@ -30,6 +30,30 @@ pub fn hint(ui: &mut Ui, text: &str) {
     ui.add(egui::Label::new(RichText::new(text).size(13.0).color(theme::p().text_dim)).wrap());
 }
 
+/// An option that is on or off, drawn as a circle instead of a tick box: filled with the accent
+/// colour when on, an empty ring when off. Clicking the circle or its label flips `on`.
+pub fn check_circle(ui: &mut Ui, on: &mut bool, text: impl Into<egui::WidgetText>) -> Response {
+    let pal = theme::p();
+    let d = 16.0;
+    let galley = text.into().into_galley(ui, Some(egui::TextWrapMode::Wrap), (ui.available_width() - d - 8.0).max(1.0), egui::TextStyle::Body);
+    let size = vec2(d + 8.0 + galley.size().x, galley.size().y.max(d) + 4.0);
+    let (rect, mut resp) = ui.allocate_exact_size(size, Sense::click());
+    let resp_hover = ui.is_enabled() && resp.hovered();
+    if resp.clicked() {
+        *on = !*on;
+        resp.mark_changed();
+    }
+    let c = pos2(rect.left() + d / 2.0, rect.top() + 2.0 + galley.size().y.min(20.0) / 2.0);
+    let p = ui.painter();
+    if *on {
+        p.circle_filled(c, d / 2.0, if resp_hover { pal.accent_hover } else { pal.accent });
+    } else {
+        p.circle_stroke(c, d / 2.0 - 0.75, Stroke::new(1.5, if resp_hover { pal.text_dim } else { pal.text_faint }));
+    }
+    p.galley(pos2(rect.left() + d + 8.0, rect.top() + 2.0), galley, pal.text);
+    resp.on_hover_cursor(egui::CursorIcon::PointingHand)
+}
+
 /// A row of mutually exclusive buttons. Returns the newly selected index if it changed.
 pub fn segmented(ui: &mut Ui, selected: usize, labels: &[&str]) -> Option<usize> {
     segmented_with_disabled(ui, selected, labels, &[])

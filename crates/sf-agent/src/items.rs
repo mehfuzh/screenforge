@@ -119,7 +119,7 @@ pub fn definitions() -> Vec<Value> {
         }),
         json!({
             "name": "add_narration",
-            "description": "Read text aloud with an AI voice (made on this computer) and add it as a voice-over take starting at start_ms; its words become captions. Write it as spoken sentences, and use one call per passage you place (one per section of the video); the result gives the take's end, so the next starts after it. Keep each passage within the part of the video it describes. On this computer, free: am_fenrir male, am_michael male, am_puck male, af_heart female, af_bella female, af_nicole female. ElevenLabs (studio quality, read online, about 8 credits per 1,000 characters from the user's credits; only when the user chose one in the Narration panel or asks for ElevenLabs, studio quality or a more realistic voice): el_eric male (use this one when asked for studio quality or a more realistic voice without naming a voice), el_brian male, el_george male British, el_daniel male British, el_sarah female, el_matilda female, el_alice female British, el_jessica female. Leave voice and speed out to use the ones the user chose in the Narration panel, and keep one voice for the whole video unless asked. speed 0.7–1.3 (1 = normal; ElevenLabs reads 0.7–1.2). The first on-device narration downloads the voice model (about 330 MB) and can take a minute. Lower the music (set_music volume 0.2–0.3) so the voice is heard.",
+            "description": "Read text aloud with an AI voice (made on this computer) and add it as a voice-over take starting at start_ms; its words become captions. Write it as spoken sentences, and use one call per passage you place (one per section of the video); the result gives the take's end, so the next starts after it. Keep each passage within the part of the video it describes. On this computer, free: am_fenrir male, am_michael male, am_puck male, af_heart female, af_bella female, af_nicole female. ElevenLabs (studio quality, read online, about 8 credits per 1,000 characters from the user's credits; only when the user chose one in the Narration panel or asks for ElevenLabs, studio quality or a more realistic voice): el_eric male (use this one when asked for studio quality or a more realistic voice without naming a voice), el_brian male, el_george male British, el_daniel male British, el_sarah female, el_matilda female, el_alice female British, el_jessica female; my_voice is the user's own voice cloned by ElevenLabs (use it when they ask for their own voice; it fails if they have not made it under Narration → My voice, so tell them to). Leave voice and speed out to use the ones the user chose in the Narration panel, and keep one voice for the whole video unless asked. speed 0.7–1.3 (1 = normal; ElevenLabs reads 0.7–1.2). The first on-device narration downloads the voice model (about 330 MB) and can take a minute. Lower the music (set_music volume 0.2–0.3) so the voice is heard.",
             "input_schema": {
                 "type": "object",
                 "properties": {
@@ -759,6 +759,9 @@ mod tests {
         fn import_url(&self, url: &str) -> Result<String, String> {
             Ok(url.rsplit('/').next().unwrap().to_string())
         }
+        fn favorite_music(&self, track: &str, favorite: bool) -> Result<Value, String> {
+            Ok(json!({ "name": format!("{track}!"), "favorite": favorite }))
+        }
         fn screen_motion(&self) -> Result<Vec<(f64, f64, crate::motion::Motion)>, String> {
             use crate::motion::Motion;
             Ok(vec![(0.0, 2000.0, Motion::Still), (2000.0, 6000.0, Motion::Small), (6000.0, 10_000.0, Motion::Large)])
@@ -791,6 +794,13 @@ mod tests {
         assert!(o.result.contains("by Ann"), "the credit goes back to the agent");
         assert_eq!(w.project.config.audio.background_audio_file_name.as_deref(), Some("jamendo_7.mp3"));
         assert_eq!(w.project.config.audio.background_audio_volume, 0.25);
+        // "I like this music": the track playing, by default
+        let before = w.project.clone();
+        let o = w.run("favorite_music", &json!({})).unwrap();
+        assert!(o.result.contains("jamendo_7.mp3!"), "{}", o.result);
+        assert_eq!(w.project, before, "a favourite does not change the video");
+        let o = w.run("favorite_music", &json!({ "track": "calm/a.mp3", "favorite": false })).unwrap();
+        assert!(o.result.contains("calm/a.mp3!") && o.result.contains("false"), "{}", o.result);
         w.run("import_file", &json!({ "path": "https://cdn.example.com/beat.mp3", "use_as": "music" })).unwrap();
         assert_eq!(w.project.config.audio.background_audio_file_name.as_deref(), Some("beat.mp3"));
         assert!(w.run("import_file", &json!({ "path": "https://example.com/a.jpg", "use_as": "background" })).is_err());

@@ -233,7 +233,7 @@ fn timeline_definitions() -> Value {
         },
         {
             "name": "get_options",
-            "description": "What the pickers offer and where every setting lives: wallpapers, gradients, music tracks, the user's favourite Jamendo tracks (favoriteMusic), cursor sets, camera looks (LUTs), saved presets, recorded audio tracks, and a map of the sidebar's settings to project paths with their ranges. Read it before changing a setting you have not changed before.",
+            "description": "What the pickers offer and where every setting lives: wallpapers, gradients, music tracks (those the user hearted have favorite: true), the user's favourite Jamendo tracks (favoriteMusic), cursor sets, camera looks (LUTs), saved presets, recorded audio tracks, and a map of the sidebar's settings to project paths with their ranges. Read it before changing a setting you have not changed before.",
             "input_schema": { "type": "object", "properties": {} }
         },
         {
@@ -253,13 +253,18 @@ fn timeline_definitions() -> Value {
         },
         {
             "name": "search_music",
-            "description": "Search Jamendo for free Creative Commons background music. First look at get_options favoriteMusic, the Jamendo tracks the user marked as favourites: when one fits what they ask for, call use_music with its id and do not search. Search only when no favourite fits and the bundled tracks (get_options music) do not either. Only CC BY tracks come back (usable under any video, commercial ones too, as long as the artist is credited). Returns tracks with an id, name, artist, length in seconds and licence; then call use_music with the best match. Search with a few mood or genre words (\"calm piano\", \"upbeat corporate\"). An empty query lists this month's popular tracks. instrumental (default true) leaves out songs with vocals, which compete with a voice.",
+            "description": "Search Jamendo for free Creative Commons background music. First look at the user's favourites: get_options favoriteMusic (Jamendo tracks: call use_music with its id) and the bundled tracks with favorite: true in get_options music (set_music). When one fits what they ask for, use it and do not search. Search only when no favourite fits and the bundled tracks (get_options music) do not either. Only CC BY tracks come back (usable under any video, commercial ones too, as long as the artist is credited). Returns tracks with an id, name, artist, length in seconds and licence; then call use_music with the best match. Search with a few mood or genre words (\"calm piano\", \"upbeat corporate\"). An empty query lists this month's popular tracks. instrumental (default true) leaves out songs with vocals, which compete with a voice.",
             "input_schema": { "type": "object", "properties": { "query": { "type": "string" }, "instrumental": { "type": "boolean" } }, "required": ["query"] }
         },
         {
             "name": "use_music",
             "description": "Download a Jamendo track (a get_options favoriteMusic id or a search_music result) into the project and make it the background music for the whole video (like set_music; never a voice-over). The result has the credit line the licence requires: always give it to the user and tell them to put it in the video's description wherever they publish it.",
             "input_schema": { "type": "object", "properties": { "id": { "type": "string" }, "volume": { "type": "number" } }, "required": ["id"] }
+        },
+        {
+            "name": "favorite_music",
+            "description": "Add a music track to the user's favourites (Audio → Favorites, kept for every project), or take it out with favorite: false. Use it when the user says they like the music, or asks to keep, save or favourite it. Leave out track for the background music playing now; otherwise track is a name from get_options music, a Jamendo id (favoriteMusic or a search_music result), or a music file in the project (as set_music shows it). It does not change the video.",
+            "input_schema": { "type": "object", "properties": { "track": { "type": "string" }, "favorite": { "type": "boolean" } } }
         },
         {
             "name": "import_file",
@@ -557,6 +562,16 @@ impl Workspace {
                     _ => file.clone(),
                 };
                 Ok(Outcome::edit(json!({ "ok": true, "track": file, "credit": got.get("credit") }), format!("Music: {title}")))
+            }
+            "favorite_music" => {
+                let favorite = input.get("favorite").and_then(Value::as_bool).unwrap_or(true);
+                let track = match input.get("track").and_then(Value::as_str).map(str::trim).filter(|t| !t.is_empty()) {
+                    Some(t) => t.to_string(),
+                    None => self.project.config.audio.background_audio_file_name.clone().ok_or("no background music is playing: name the track")?,
+                };
+                let got = self.host()?.favorite_music(&track, favorite)?;
+                let name = got.get("name").and_then(Value::as_str).unwrap_or(&track).to_string();
+                Ok(Outcome::read(json!({ "ok": true, "name": name, "favorite": favorite }), if favorite { format!("Added \"{name}\" to favorites") } else { format!("Removed \"{name}\" from favorites") }))
             }
             "import_file" => {
                 let path = input.get("path").and_then(Value::as_str).ok_or("`path` is required")?;

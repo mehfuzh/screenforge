@@ -29,7 +29,15 @@ pub const CLOUD_VOICES: [CloudVoice; 8] = [
     CloudVoice { id: "el_jessica", name: "Jessica", female: true, style: "playful, bright" },
 ];
 
+/// The user's own voice, cloned by ElevenLabs from their recordings (Narration → My voice); the
+/// backend reads with the clone of whoever asks. Not in [`CLOUD_VOICES`]: only offered to a user
+/// who has made one.
+pub const MY_VOICE: CloudVoice = CloudVoice { id: "my_voice", name: "My voice", female: false, style: "your own voice, cloned by ElevenLabs" };
+
 pub fn cloud_voice(id: &str) -> Option<&'static CloudVoice> {
+    if id == MY_VOICE.id {
+        return Some(&MY_VOICE);
+    }
     CLOUD_VOICES.iter().find(|v| v.id == id)
 }
 

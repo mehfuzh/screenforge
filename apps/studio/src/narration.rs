@@ -23,6 +23,15 @@ pub fn take_credits() -> Option<serde_json::Value> {
     CREDITS.lock().ok()?.take()
 }
 
+/// Keep the balance an ElevenLabs reply (`sf_credits`) left, for the credits chip.
+pub fn note_credits(reply: &serde_json::Value) {
+    if let Some(c) = reply.get("sf_credits").filter(|c| c.is_object()) {
+        if let Ok(mut slot) = CREDITS.lock() {
+            *slot = Some(c.clone());
+        }
+    }
+}
+
 /// May this computer use the ElevenLabs voices (Pro, staff or trial credits, as the backend
 /// decides)? `None` until the agent panel has checked the plan; the backend refuses anyway.
 static CLOUD_ALLOWED: Mutex<Option<bool>> = Mutex::new(None);
@@ -309,20 +318,30 @@ fn cloud_speak(text: &str, voice: &str, speed: f64) -> Result<sf_tts::Speech, St
     let device = sf_license::device_id().ok_or("ElevenLabs voices need this computer's id, which could not be read")?;
     let body = serde_json::json!({ "device": device, "voice": voice, "text": text, "speed": speed });
     let reply = sf_license::call_backend_within("voice", body, 180)?;
-    if let Some(c) = reply.get("sf_credits").filter(|c| c.is_object()) {
-        if let Ok(mut slot) = CREDITS.lock() {
-            *slot = Some(c.clone());
-        }
-    }
+    note_credits(&reply);
     use base64::Engine;
     let pcm = base64::engine::general_purpose::STANDARD.decode(reply["audio"].as_str().ok_or("ElevenLabs returned no audio")?).map_err(|e| e.to_string())?;
     let alignment = sf_tts::cloud::Alignment::from_json(&reply["alignment"]);
     sf_tts::cloud::speech_from_pcm(&pcm, &alignment).map_err(|e| format!("{e:#}"))
 }
 
+fn previews_dir() -> Option<PathBuf> {
+    directories::ProjectDirs::from("dev", "screenforge", "ScreenForge").map(|d| d.cache_dir().join("voice-previews"))
+}
+
+/// Drop the kept previews of `voice` (My voice was made again or deleted).
+pub fn forget_previews(voice: &str) {
+    let Some(dir) = previews_dir() else { return };
+    for f in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+        if f.file_name().to_string_lossy().starts_with(&format!("{voice}-")) {
+            let _ = std::fs::remove_file(f.path());
+        }
+    }
+}
+
 /// The preview of ElevenLabs voice `voice` at `speed`, read once and kept in the cache folder.
 fn cloud_preview(voice: &str, speed: f64) -> Result<sf_tts::Speech, String> {
-    let file = directories::ProjectDirs::from("dev", "screenforge", "ScreenForge").map(|d| d.cache_dir().join("voice-previews").join(format!("{voice}-{:.0}.pcm", speed * 100.0)));
+    let file = previews_dir().map(|d| d.join(format!("{voice}-{:.0}.pcm", speed * 100.0)));
     if let Some(pcm) = file.as_ref().and_then(|f| std::fs::read(f).ok()) {
         return sf_tts::cloud::speech_from_pcm(&pcm, &Default::default()).map_err(|e| format!("{e:#}"));
     }

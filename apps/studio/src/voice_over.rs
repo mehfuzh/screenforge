@@ -201,7 +201,12 @@ impl VoiceRecorder {
 }
 
 /// 16-bit PCM mono WAV.
-fn write_wav(path: &Path, rate: u32, samples: &[f32]) -> Result<()> {
+pub fn write_wav(path: &Path, rate: u32, samples: &[f32]) -> Result<()> {
+    std::fs::write(path, wav_bytes(rate, samples)).with_context(|| format!("could not write {}", path.display()))
+}
+
+/// 16-bit PCM mono WAV in memory.
+pub fn wav_bytes(rate: u32, samples: &[f32]) -> Vec<u8> {
     let data_len = (samples.len() * 2) as u32;
     let mut out = Vec::with_capacity(44 + data_len as usize);
     out.extend_from_slice(b"RIFF");
@@ -219,7 +224,7 @@ fn write_wav(path: &Path, rate: u32, samples: &[f32]) -> Result<()> {
     for s in samples {
         out.extend_from_slice(&((s.clamp(-1.0, 1.0) * 32767.0) as i16).to_le_bytes());
     }
-    std::fs::write(path, out).with_context(|| format!("could not write {}", path.display()))
+    out
 }
 
 #[cfg(test)]
