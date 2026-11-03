@@ -94,8 +94,8 @@ license.
 - **Creator**, US$49 once: unlimited export for life, verified offline, no agent.
 
 The license pays for the maintained, signed and notarized download, the CI that builds it, and
-ongoing maintenance. The hosted agent needs Pro; debug builds can call Claude directly with
-your own `ANTHROPIC_API_KEY`. See `backend/README.md` for how keys and credits are issued.
+ongoing maintenance. The hosted agent needs Pro. See `backend/README.md` for how keys and credits
+are issued.
 
 > Status: beta. Records the screen (plus an optional webcam or a cabled iPhone/iPad),
 > edits on a GPU-rendered timeline (cuts, speed, zooms that follow the cursor, smoothed cursor,
@@ -150,7 +150,6 @@ cargo run -p sf-cli -- frame   "…/My Recording.screenforge" --at-ms 12000 -o f
 cargo run -p sf-cli -- export  "…/My Recording.screenforge" -o out.mp4 --fps 60 --height 1080
 cargo run -p studio -- "…/My Recording.screenforge"   # editor
 cargo run -p studio                                      # recording picker
-ANTHROPIC_API_KEY=sk-ant-… cargo run -p studio -- "…/My Recording.screenforge"   # agent without the backend (debug builds)
 ```
 
 The app needs Screen Recording and Input Monitoring permissions (System Settings →
