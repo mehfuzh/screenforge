@@ -108,8 +108,8 @@ COMMON = [
 ]
 
 # ── index ───────────────────────────────────────────────────────────────────
-INDEX_TITLE = 'ScreenForge — Screencasts pro en minutos. Pídelo y la IA lo edita.'
-INDEX_DESC = 'Graba tu pantalla y tu cámara, o abre cualquier vídeo, y pide a un agente de IA que lo edite: cortes, zooms, subtítulos, música y voz en off. Gratis y de código abierto para Mac, Windows y Linux.'
+INDEX_TITLE = 'ScreenForge — Grabador de pantalla y editor de vídeo con IA'
+INDEX_DESC = 'Graba screencasts y demos, y pide a la IA que los edite: cortes, zooms, subtítulos, música y voz en off. Pruébalo gratis; código abierto, en Mac, Windows y Linux.'
 INDEX_JSONLD = '''<script type="application/ld+json">
 {
   "@context": "https://schema.org",
@@ -129,7 +129,7 @@ INDEX_JSONLD = '''<script type="application/ld+json">
       "operatingSystem": "macOS 14 o posterior, Windows 10 o posterior, Linux",
       "license": "https://www.apache.org/licenses/LICENSE-2.0",
       "offers": [
-        {"@type": "Offer", "name": "Gratis", "price": "0", "priceCurrency": "USD"},
+        {"@type": "Offer", "name": "Prueba gratis: graba y edita; exportar requiere Pro o Creator", "price": "0", "priceCurrency": "USD"},
         {"@type": "Offer", "name": "Pro, con el agente de IA", "price": "20", "priceCurrency": "USD", "priceSpecification": {"@type": "UnitPriceSpecification", "price": "20", "priceCurrency": "USD", "billingDuration": "P1M"}},
         {"@type": "Offer", "name": "Licencia Creator", "price": "49", "priceCurrency": "USD"}
       ],
@@ -151,19 +151,20 @@ INDEX_JSONLD = '''<script type="application/ld+json">
 </script>'''
 
 INDEX = [
-    ('Pro demos in minutes.<br><em>Just ask. It edits.', 'Demos pro en minutos.<br><em>Pídelo. La IA lo edita.'),
+    ('<h1 aria-label="Pro demos, guides, lessons and promos, made easy. Just ask. It edits.">Pro <span class="nw"><span class="rot" aria-hidden="true"><span class="w on"><i class="ic"><svg viewBox="0 0 24 24"><path class="f" d="M8.5 6.5v11l9-5.5z"/></svg></i>demos</span><span class="w"><i class="ic"><svg viewBox="0 0 24 24"><path d="M3.5 5.5c2.8-1 5.8-.8 8.5 1 2.7-1.8 5.7-2 8.5-1v13c-2.8-1-5.8-.8-8.5 1-2.7-1.8-5.7-2-8.5-1zM12 6.5v13"/></svg></i>guides</span><span class="w"><i class="ic"><svg viewBox="0 0 24 24"><path d="M2.5 9.5 12 5l9.5 4.5L12 14zM6.5 11.5v4c1.5 1.4 3.5 2 5.5 2s4-.6 5.5-2v-4"/></svg></i>lessons</span><span class="w"><i class="ic"><svg viewBox="0 0 24 24"><path d="M4 10v4h3l7 4.5v-13L7 10zM17.5 9.5a3.5 3.5 0 0 1 0 5"/></svg></i>promos</span></span>,</span> <span class="nw">made easy.</span><br>Just ask. It edits.</h1>',
+     '<h1 aria-label="Demos, guías, clases y promos pro, sin esfuerzo. Pídelo. La IA lo edita."><span class="rot" aria-hidden="true"><span class="w on"><i class="ic"><svg viewBox="0 0 24 24"><path class="f" d="M8.5 6.5v11l9-5.5z"/></svg></i>Demos</span><span class="w"><i class="ic"><svg viewBox="0 0 24 24"><path d="M3.5 5.5c2.8-1 5.8-.8 8.5 1 2.7-1.8 5.7-2 8.5-1v13c-2.8-1-5.8-.8-8.5 1-2.7-1.8-5.7-2-8.5-1zM12 6.5v13"/></svg></i>Guías</span><span class="w"><i class="ic"><svg viewBox="0 0 24 24"><path d="M2.5 9.5 12 5l9.5 4.5L12 14zM6.5 11.5v4c1.5 1.4 3.5 2 5.5 2s4-.6 5.5-2v-4"/></svg></i>Clases</span><span class="w"><i class="ic"><svg viewBox="0 0 24 24"><path d="M4 10v4h3l7 4.5v-13L7 10zM17.5 9.5a3.5 3.5 0 0 1 0 5"/></svg></i>Promos</span></span> pro, sin esfuerzo.<br>Pídelo. La IA lo edita.</h1>'),
     ('aria-label="Things you can ask the agent"', 'aria-label="Cosas que puedes pedir al agente"'),
     ('<li>cut the ums and the long pauses</li>', '<li>quita los “eh” y las pausas largas</li>'),
     ('<li>zoom on my clicks</li>', '<li>haz zoom en mis clics</li>'),
     ('<li>get this under a minute</li>', '<li>déjalo en menos de un minuto</li>'),
     ('<li>add calm music and a mountain photo</li>', '<li>añade música tranquila y una foto de montañas</li>'),
-    ('''      A screen recorder and AI video editor in one. Record your <span class="os-name">Mac</span> screen and camera, or drop in any video, then ask for the edit:
-      zooms, a smooth cursor, backgrounds, captions, music and voice-over, on a timeline you can still edit by hand.''',
-     '''      Grabador de pantalla y editor de vídeo con IA en una sola app. Graba la pantalla y la cámara de tu <span class="os-name">Mac</span>, o abre cualquier vídeo, y pide la edición:
-      zooms, cursor suave, fondos, subtítulos, música y voz en off, en una línea de tiempo que también puedes editar a mano.'''),
+    ('''      A screen recorder and AI video editor in one. Record your <span class="os-name">Mac</span> screen or drop in any video,
+      then ask for the edit or fine-tune it by hand.''',
+     '''      Grabador de pantalla y editor de vídeo con IA en una app. Graba la pantalla de tu <span class="os-name">Mac</span> o abre un vídeo,
+      y pide la edición o afínala a mano.'''),
     ('<span class="os-label">Download for macOS</span>', '<span class="os-label">Descargar para macOS</span>', 2),
-    ('<span class="note os-note">Free to record and edit · <a href="pricing.html">Pro US$20/month</a> adds the AI agent · open source · Apple silicon, macOS 14 or later · also on <a href="download.html#windows">Windows</a> and <a href="download.html#linux">Linux</a></span>',
-     '<span class="note os-note">Grabar y editar es gratis · <a href="pricing.html">Pro, 20 US$/mes</a> añade el agente de IA · código abierto · Apple silicon, macOS 14 o posterior · también en <a href="download.html#windows">Windows</a> y <a href="download.html#linux">Linux</a></span>'),
+    ('<span class="note os-note">Free to try · <a href="pricing.html">Pro</a> adds the AI agent · also on <a href="download.html#windows">Windows</a> and <a href="download.html#linux">Linux</a></span>',
+     '<span class="note os-note">Pruébalo gratis · <a href="pricing.html">Pro</a> añade el agente de IA · también en <a href="download.html#windows">Windows</a> y <a href="download.html#linux">Linux</a></span>'),
     ('aria-label="The ScreenForge agent editing a recording from one prompt: it trims the video under a minute, speeds up the waits, adds background music, an Unsplash photo of mountains as the wallpaper, and AI narration with captions"',
      'aria-label="El agente de ScreenForge edita una grabación con una sola petición: recorta el vídeo a menos de un minuto, acelera las esperas, añade música de fondo, una foto de montañas de Unsplash como fondo y narración de IA con subtítulos"'),
     ('<li><div><b>Record</b><span>Your screen, your camera or an iPhone. Talk it through.</span></div></li>', '<li><div><b>Graba</b><span>Tu pantalla, tu cámara o un iPhone. Cuéntalo mientras grabas.</span></div></li>'),
@@ -238,8 +239,8 @@ INDEX = [
     ('<h2>Pricing that fits<br><em>how you work.</em></h2>', '<h2>Precios que se ajustan<br><em>a tu forma de trabajar.</em></h2>'),
     ('<p class="sec-sub">Recording and editing are free and open source under Apache-2.0. Exporting needs a license: Pro adds the agent with 1,000 credits a month and unlimited export; Creator is export alone, US$49 once. Export keys are verified offline.</p>',
      '<p class="sec-sub">Grabar y editar es gratis y de código abierto bajo Apache-2.0. Exportar requiere licencia: Pro añade el agente con 1.000 créditos al mes y exportación ilimitada; Creator es solo exportación, 49 US$ una vez. Las claves de exportación se verifican sin conexión.</p>'),
-    ('<div class="row"><b>Free</b><span>Record, open and edit projects. <i>Forever, no license needed.</i></span></div>', '<div class="row"><b>Gratis</b><span>Graba, abre y edita proyectos. <i>Para siempre, sin licencia.</i></span></div>'),
-    ('<div class="row"><b>Source</b><span>Apache-2.0 on GitHub. <i>The license funds the signed, ready-made build and its upkeep.</i></span></div>', '<div class="row"><b>Código</b><span>Apache-2.0 en GitHub. <i>La licencia financia la versión firmada y lista para usar, y su mantenimiento.</i></span></div>'),
+    ('<div class="row"><b>Try free</b><span>Record and edit the whole video first. <i>Pay only when you’re ready to export.</i></span></div>', '<div class="row"><b>Prueba gratis</b><span>Graba y edita el vídeo entero primero. <i>Paga solo cuando quieras exportar.</i></span></div>'),
+    ('<div class="row"><b>Voices</b><span>Six on-device voices for narration. <i>Studio ElevenLabs voices come with Pro.</i></span></div>', '<div class="row"><b>Voces</b><span>Seis voces en tu dispositivo para narrar. <i>Las voces de estudio de ElevenLabs vienen con Pro.</i></span></div>'),
     ('<div class="row"><b>Offline</b><span>Export keys are checked on your machine. <i>The AI agent runs on Claude, through our server.</i></span></div>', '<div class="row"><b>Sin conexión</b><span>Las claves de exportación se comprueban en tu equipo. <i>El agente de IA funciona con Claude, a través de nuestro servidor.</i></span></div>'),
     ('<div class="row"><b>Refunds</b><span>Within 24 hours. <i>Pro: before using credits.</i></span></div>', '<div class="row"><b>Reembolsos</b><span>En 24 horas. <i>Pro: antes de usar créditos.</i></span></div>'),
     ('<div class="fig">US$20<small>/month</small></div>', '<div class="fig">20 US$<small>/mes</small></div>'),
@@ -253,29 +254,30 @@ INDEX = [
     ('<div class="sec-label">Get started</div>', '<div class="sec-label">Empieza</div>'),
     ('<h2>Record your first clip in <em>a minute.</em></h2>', '<h2>Graba tu primer clip en <em>un minuto.</em></h2>'),
     ("l.textContent = 'Download for ' + name;", "l.textContent = 'Descargar para ' + name;"),
-    ('''        ? 'Free to record and edit · <a href="pricing.html">Pro US$20/month</a> adds the AI agent · open source · x86_64, .deb or .tar.gz · also on <a href="download.html#mac">macOS</a> and <a href="download.html#windows">Windows</a>'
-        : 'Free to record and edit · <a href="pricing.html">Pro US$20/month</a> adds the AI agent · open source · x86_64, Windows 10 or later · also on <a href="download.html#mac">macOS</a> and <a href="download.html#linux">Linux</a>';''',
-     '''        ? 'Grabar y editar es gratis · <a href="pricing.html">Pro, 20 US$/mes</a> añade el agente de IA · código abierto · x86_64, .deb o .tar.gz · también en <a href="download.html#mac">macOS</a> y <a href="download.html#windows">Windows</a>'
-        : 'Grabar y editar es gratis · <a href="pricing.html">Pro, 20 US$/mes</a> añade el agente de IA · código abierto · x86_64, Windows 10 o posterior · también en <a href="download.html#mac">macOS</a> y <a href="download.html#linux">Linux</a>';'''),
+    ('''        ? 'Free to try · <a href="pricing.html">Pro</a> adds the AI agent · also on <a href="download.html#mac">macOS</a> and <a href="download.html#windows">Windows</a>'
+        : 'Free to try · <a href="pricing.html">Pro</a> adds the AI agent · also on <a href="download.html#mac">macOS</a> and <a href="download.html#linux">Linux</a>';''',
+     '''        ? 'Pruébalo gratis · <a href="pricing.html">Pro</a> añade el agente de IA · también en <a href="download.html#mac">macOS</a> y <a href="download.html#windows">Windows</a>'
+        : 'Pruébalo gratis · <a href="pricing.html">Pro</a> añade el agente de IA · también en <a href="download.html#mac">macOS</a> y <a href="download.html#linux">Linux</a>';'''),
 ]
 
 # ── pricing ─────────────────────────────────────────────────────────────────
-PRICING_TITLE = 'Precios — ScreenForge: gratis, Pro con el agente de IA o una licencia de pago único'
-PRICING_DESC = 'ScreenForge es gratis para grabar y editar. Pro cuesta 20 US$/mes con el agente de edición con IA, 1.000 créditos al mes y exportación ilimitada; la licencia Creator cuesta 49 US$ una vez. Reembolso en 24 horas de compras sin usar.'
+PRICING_TITLE = 'Precios — ScreenForge: pruébalo gratis y luego Pro con el agente de IA o una licencia de pago único'
+PRICING_DESC = 'Prueba ScreenForge gratis: graba y edita antes de pagar. Pro cuesta 20 US$/mes con el agente de edición con IA, 1.000 créditos al mes y exportación ilimitada; la licencia Creator cuesta 49 US$ una vez. Reembolso en 24 horas de compras sin usar.'
 PRICING = [
     ('<div class="eyebrow">Pricing</div>', '<div class="eyebrow">Precios</div>'),
     ('<h1>Pricing that fits <em>how you work.</em></h1>', '<h1>Precios que se ajustan <em>a tu forma de trabajar.</em></h1>'),
-    ('<p class="stamp">free to record and edit · Pro US$20/month with the AI agent · Creator US$49 once · 24-hour refund (Pro: before using credits)</p>',
-     '<p class="stamp">grabar y editar es gratis · Pro 20 US$/mes con el agente de IA · Creator 49 US$ una vez · reembolso en 24 horas (Pro: antes de usar créditos)</p>'),
-    ('<div class="name">Free</div>', '<div class="name">Gratis</div>'),
-    ('<div class="fig">US$0<small>forever</small></div>', '<div class="fig">0 US$<small>para siempre</small></div>'),
+    ('<p class="stamp">try free: record and edit before you pay · Pro US$20/month with the AI agent · Creator US$49 once · 24-hour refund (Pro: before using credits)</p>',
+     '<p class="stamp">pruébalo gratis: graba y edita antes de pagar · Pro 20 US$/mes con el agente de IA · Creator 49 US$ una vez · reembolso en 24 horas (Pro: antes de usar créditos)</p>'),
+    ('<div class="name">Try it free</div>', '<div class="name">Pruébalo gratis</div>'),
+    ('<div class="fig">Free<small>no time limit</small></div>', '<div class="fig">Gratis<small>sin límite de tiempo</small></div>'),
     ('<div class="per">no account · no key · no card</div>', '<div class="per">sin cuenta · sin clave · sin tarjeta</div>'),
     ('<li>Record a display, a window or an area</li>', '<li>Graba una pantalla, una ventana o un área</li>'),
     ('<li>Automatic zooms, captions and the independent audio track</li>', '<li>Zooms automáticos, subtítulos y la pista de audio independiente</li>'),
-    ('<li>Apache-2.0 source on <a href="https://github.com/mehfuzh/screenforge">GitHub</a></li>', '<li>Código Apache-2.0 en <a href="https://github.com/mehfuzh/screenforge">GitHub</a></li>'),
+    ('<li>Cut, trim and add music on the timeline, with on-device voice-over</li>', '<li>Corta, recorta y añade música en la línea de tiempo, con voz en off en tu dispositivo</li>'),
+    ('<li>Export when you’re ready, with Pro or Creator</li>', '<li>Exporta cuando quieras, con Pro o Creator</li>'),
     ('<span class="os-label">Download for macOS</span>', '<span class="os-label">Descargar para macOS</span>'),
-    ('<p class="foot">Everything on the timeline works without paying. Exporting from the official build is where the key comes in.</p>',
-     '<p class="foot">Todo lo de la línea de tiempo funciona sin pagar. La clave entra en juego al exportar desde la versión oficial.</p>'),
+    ('<p class="foot">Make the whole video before you spend anything, and pick a plan only when it’s worth exporting.</p>',
+     '<p class="foot">Haz el vídeo entero antes de gastar nada y elige un plan solo cuando merezca la pena exportarlo.</p>'),
     ('<div class="name">Pro <span class="tag">AI agent</span></div>', '<div class="name">Pro <span class="tag">agente de IA</span></div>'),
     ('<div class="fig">US$20<small>/month</small></div>', '<div class="fig">20 US$<small>/mes</small></div>'),
     ('<div class="per">cancel anytime · credits refill every month</div>', '<div class="per">cancela cuando quieras · los créditos se renuevan cada mes</div>'),
