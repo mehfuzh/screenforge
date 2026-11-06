@@ -5077,6 +5077,7 @@ dependencies = [
  "sf-session",
  "sf-transcribe",
  "sf-tts",
+ "sha2",
  "tempfile",
  "tracing",
  "tracing-subscriber",

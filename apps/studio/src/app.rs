@@ -891,6 +891,11 @@ impl eframe::App for App {
                 }
             }
         }
+        // "Restart to update": the update helper waits for this process to exit
+        if crate::update::take_quit() {
+            self.quitting = true;
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+        }
         // Closing the editor window goes back to the recording toolbar (like its home button);
         // the app quits only from the toolbar or the menu bar icon.
         if !self.quitting && ctx.input(|i| i.viewport().close_requested()) {

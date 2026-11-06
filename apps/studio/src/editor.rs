@@ -1297,10 +1297,21 @@ impl Editor {
                     if undo.clicked() && can_undo {
                         self.undo();
                     }
-                    if let Some((version, url)) = crate::update::available() {
-                        if widgets::accent_badge(ui, &format!("Update v{version}")).on_hover_text(format!("ScreenForge v{version} is out: open the release page to download it")).clicked() {
-                            crate::os::open(url);
+                    match crate::update::current() {
+                        crate::update::State::Available { version, url } | crate::update::State::InstallFailed { version, url, .. } => {
+                            if widgets::accent_badge(ui, &format!("Update v{version}")).on_hover_text(format!("ScreenForge v{version} is out: open the release page to download it")).clicked() {
+                                crate::os::open(url);
+                            }
                         }
+                        // not while exporting: restarting would cut the export short
+                        crate::update::State::Ready { version } if !self.export.is_busy() => {
+                            let restart = widgets::accent_badge(ui, &format!("Restart for v{version}")).on_hover_text(format!("ScreenForge v{version} is downloaded: save, quit, install it and open it again"));
+                            if restart.clicked() {
+                                self.save_if_dirty();
+                                crate::update::restart();
+                            }
+                        }
+                        _ => {}
                     }
                     ui.add_space(6.0);
                     widgets::icon_button(ui, widgets::Icon::Command, 16.0, "Shortcuts: Space play · S split · R record voice-over · T title · I image or video · M mask · ⌥↑↓ audio layer · ⌫ delete · ⌘Z undo · ⌘S save · ⌘⇧E export · [ ] jump cuts · ⌘1…⌘0 sidebar · ⌘L agent · ⌘\\ toggle sidebar");
