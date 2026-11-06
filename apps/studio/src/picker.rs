@@ -482,7 +482,7 @@ impl Picker {
         // settings (a dot when a newer release is out)
         let update = crate::update::current();
         let gear = widgets::icon_text_button(ui, Some(widgets::Icon::Gear), "", true);
-        if matches!(update, crate::update::State::Available { .. }) {
+        if update.has_update() {
             ui.painter().circle_filled(pos2(gear.rect.left() + 20.0, gear.rect.top() + 7.0), 3.0, theme::p().accent_hover);
         }
         // fit the bar to what it holds (14 px inner margin each side)
@@ -523,6 +523,20 @@ impl Picker {
                         crate::os::open(url);
                     }
                 }
+                crate::update::State::Downloading { version, done, total } => {
+                    let pct = if *total > 0 { format!(" {}%", done * 100 / total) } else { String::new() };
+                    menu_note(ui, &format!("Downloading v{version}…{pct}"));
+                }
+                crate::update::State::Ready { version } => {
+                    if crate::widgets::menu_item(ui, false, format!("Restart to update to v{version}")).on_hover_text("Quit, install the new version and open it again").clicked() {
+                        crate::update::restart();
+                    }
+                }
+                crate::update::State::InstallFailed { version, url, error } => {
+                    if crate::widgets::menu_item(ui, false, format!("Update to v{version}…")).on_hover_text(format!("The update could not be installed ({error}). Open the release page to download it")).clicked() {
+                        crate::os::open(url);
+                    }
+                }
                 crate::update::State::Checking => menu_note(ui, "Checking…"),
                 crate::update::State::UpToDate => menu_note(ui, "ScreenForge is up to date"),
                 crate::update::State::Failed(_) => menu_note(ui, "Could not reach GitHub"),
@@ -531,7 +545,7 @@ impl Picker {
             if !matches!(update, crate::update::State::Checking) && crate::widgets::menu_item(ui, false, "Check for updates now").clicked() {
                 action = Some(PickerAction::CheckUpdates);
             }
-            if crate::widgets::menu_item(ui, prefs.check_updates, "Check automatically").on_hover_text("Once a day at launch: one request to GitHub's public releases API, nothing about you is sent").clicked() {
+            if crate::widgets::menu_item(ui, prefs.check_updates, "Check automatically").on_hover_text("Once a day at launch: one request to GitHub's public releases API, nothing about you is sent. A newer version downloads in the background and installs when you restart").clicked() {
                 action = Some(PickerAction::SetCheckUpdates(!prefs.check_updates));
             }
             menu_rule(ui);
