@@ -4637,6 +4637,7 @@ dependencies = [
  "sf-license",
  "sf-media",
  "sf-project",
+ "sf-recording",
  "sf-render",
  "sf-session",
  "sf-transcribe",
