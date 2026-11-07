@@ -31,6 +31,11 @@ pub struct Rect {
 
 impl Rect {
     pub const UNIT: Rect = Rect { x: 0.0, y: 0.0, width: 1.0, height: 1.0 };
+
+    /// `inner01` (fractions of this rect) in this rect's space: a crop of a crop.
+    pub fn inside(&self, inner01: &Rect) -> Rect {
+        Rect { x: self.x + inner01.x * self.width, y: self.y + inner01.y * self.height, width: inner01.width * self.width, height: inner01.height * self.height }
+    }
 }
 
 impl Default for Rect {

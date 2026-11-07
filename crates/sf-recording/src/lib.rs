@@ -49,6 +49,7 @@ pub mod ffmpeg;
 pub mod import;
 pub mod input;
 pub mod log;
+pub mod merge;
 pub mod metadata;
 pub mod permissions;
 pub mod window_frame;
@@ -93,6 +94,8 @@ pub enum Error {
     },
     #[error("JSON: {0}")]
     Json(#[from] serde_json::Error),
+    #[error(transparent)]
+    Project(#[from] sf_project::Error),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

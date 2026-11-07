@@ -25,9 +25,10 @@ pub struct RegionDrag {
 /// New mask regions: centred, this part of the screen.
 const NEW_REGION01: Rect01 = Rect01 { x: 0.35, y: 0.4, width: 0.3, height: 0.2 };
 
-/// Pixel size of the cropped recording (the space mask bounds live in).
+/// Pixel size of the cropped recording at the playhead (the space mask bounds live in; it
+/// changes at the parts of a recording joined from different shapes).
 pub fn content_px(ed: &Editor) -> (f64, f64) {
-    let (w, h) = ed.session.source.content_size_px(&ed.session.pkg.project.config.crop.rect01);
+    let (w, h) = ed.session.content_size_at(ed.playhead_ms);
     (w as f64, h as f64)
 }
 

@@ -181,14 +181,42 @@ pub fn import_video(src: &Path, dir: &Path, progress: impl Fn(f64), cancel: &Ato
     r
 }
 
+/// Run ffmpeg with `args` (which include `-progress pipe:1`) in `cwd`, reporting ms written
+/// (at most `total_ms`) to `progress`; setting `cancel` kills it. `what` completes "ffmpeg
+/// could not …" in the error.
+pub(crate) fn run_ffmpeg(args: &[String], cwd: &Path, total_ms: f64, progress: &impl Fn(f64), cancel: &AtomicBool, what: &str) -> Result<()> {
+    let mut cmd = std::process::Command::new(crate::ffmpeg::ffmpeg_path()?);
+    crate::ffmpeg::hide_console(&mut cmd);
+    let mut child = cmd.args(args).current_dir(cwd).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().map_err(|source| Error::Io { path: cwd.to_path_buf(), source })?;
+    if let Some(out) = child.stdout.take() {
+        for line in BufReader::new(out).lines().map_while(|l| l.ok()) {
+            if cancel.load(Ordering::Relaxed) {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(Error::Capture("cancelled".into()));
+            }
+            // out_time_us (and the misnamed out_time_ms) are microseconds
+            if let Some(us) = line.strip_prefix("out_time_us=").or_else(|| line.strip_prefix("out_time_ms=")).and_then(|v| v.trim().parse::<f64>().ok()) {
+                progress((us / 1000.0).min(total_ms));
+            }
+        }
+    }
+    let out = child.wait_with_output().map_err(|source| Error::Io { path: cwd.to_path_buf(), source })?;
+    if !out.status.success() {
+        return Err(Error::Capture(format!("ffmpeg could not {what}: {}", String::from_utf8_lossy(&out.stderr).trim())));
+    }
+    Ok(())
+}
+
 /// The tracks of a recording's first session, from its `metadata.json`.
 struct Tracks {
     display: String,
     microphone: Option<String>,
     system_audio: Option<String>,
+    camera: Option<String>,
 }
 
-fn recorders(doc: &Value) -> Vec<Value> {
+pub(crate) fn recorders(doc: &Value) -> Vec<Value> {
     doc["recorders"].as_array().cloned().unwrap_or_default()
 }
 
@@ -205,12 +233,13 @@ fn tracks(doc: &Value) -> Result<Tracks> {
         display: display["sessions"][0]["outputFilename"].as_str().ok_or_else(|| Error::InvalidConfig("the screen video has no file".into()))?.to_string(),
         microphone: first_output(doc, "microphone"),
         system_audio: first_output(doc, "systemAudio"),
+        camera: first_output(doc, "camera").or_else(|| first_output(doc, "webcam")),
     })
 }
 
 /// `metadata.json` after `added_ms` more of every track (and a microphone track when the
 /// recording had none and `new_mic` names its file).
-fn extend_metadata(doc: &mut Value, added_ms: f64, new_mic: Option<&str>) {
+pub(crate) fn extend_metadata(doc: &mut Value, added_ms: f64, new_mic: Option<&str>) {
     let grow = |s: &mut Value| {
         for k in ["durationMs", "processTimeEndMs", "unixEndMs"] {
             if let Some(v) = s[k].as_f64() {
@@ -220,7 +249,9 @@ fn extend_metadata(doc: &mut Value, added_ms: f64, new_mic: Option<&str>) {
     };
     if let Some(list) = doc["recorders"].as_array_mut() {
         for r in list.iter_mut() {
-            if let Some(s) = r["sessions"].get_mut(0) {
+            // `get_mut`, not indexing: indexing a missing key adds it as null, and the cursor
+            // recorder has no sessions (a null list does not load)
+            if let Some(s) = r.get_mut("sessions").and_then(|s| s.get_mut(0)) {
                 grow(s);
             }
         }
@@ -239,13 +270,13 @@ fn extend_metadata(doc: &mut Value, added_ms: f64, new_mic: Option<&str>) {
     *doc = crate::metadata::sort_keys(doc.take());
 }
 
-/// Replace the recording's files in `dir` with those written to `tmp`: the old screen video's
-/// playlist and segments go, every file in `tmp` moves in (audio tracks overwrite theirs).
-fn swap_in(dir: &Path, tmp: &Path, display: &str) -> Result<()> {
-    let base = display.trim_end_matches(".m3u8").to_string();
+/// Replace the recording's files in `dir` with those written to `tmp`: the old playlists in
+/// `videos` (screen, camera) and their segments go, every file in `tmp` moves in (audio
+/// tracks and logs overwrite theirs).
+pub(crate) fn swap_in(dir: &Path, tmp: &Path, videos: &[&str]) -> Result<()> {
     for f in std::fs::read_dir(dir).map_err(|source| Error::Io { path: dir.to_path_buf(), source })?.flatten() {
         let name = f.file_name().to_string_lossy().into_owned();
-        if name.starts_with(&format!("{base}-")) || name == display {
+        if videos.iter().any(|v| name == *v || name.starts_with(&format!("{}-", v.trim_end_matches(".m3u8")))) {
             let _ = std::fs::remove_file(f.path());
         }
     }
@@ -280,6 +311,13 @@ pub fn trim_recording(dir: &Path, keep_ms: f64) -> Result<()> {
     for a in [&t.microphone, &t.system_audio].into_iter().flatten() {
         jobs.push(["-i", &dir.join(a).to_string_lossy(), "-t", &keep, "-map", "0:a:0", "-c:a", "copy", a].map(String::from).to_vec());
     }
+    // a camera joined from a dropped project (HLS like the screen)
+    let camera = t.camera.as_ref().filter(|c| c.ends_with(".m3u8") && dir.join(c).is_file());
+    if let Some(c) = camera {
+        let mut job: Vec<String> = ["-i", &dir.join(c).to_string_lossy(), "-t", &keep, "-map", "0:v:0", "-c:v", "copy"].map(String::from).to_vec();
+        job.extend(display::hls_muxer_args(c.trim_end_matches(".m3u8")));
+        jobs.push(job);
+    }
     for job in jobs {
         let mut cmd = std::process::Command::new(crate::ffmpeg::ffmpeg_path()?);
         crate::ffmpeg::hide_console(&mut cmd);
@@ -293,8 +331,16 @@ pub fn trim_recording(dir: &Path, keep_ms: f64) -> Result<()> {
             }
         }
     }
-    swap_in(dir, &tmp, &t.display)?;
+    // the cursor, click and key events of the cut part go too
+    crate::merge::trim_input_logs(dir, &tmp, &doc, keep_ms)?;
+    let mut videos = vec![t.display.as_str()];
+    videos.extend(camera.map(String::as_str));
+    swap_in(dir, &tmp, &videos)?;
     if let Some(display) = doc["recorders"].as_array_mut().and_then(|l| l.iter_mut().find(|r| r["type"] == "display")) {
+        // parts of a join of different shapes that start past the cut go too
+        if let Some(parts) = display.get_mut("configuration").and_then(|c| c.get_mut(sf_project::recording::PARTS_KEY)).and_then(|p| p.as_array_mut()) {
+            parts.retain(|p| p["startMs"].as_f64().is_some_and(|s| s < keep_ms));
+        }
         let parts: Vec<Value> = display["configuration"]["sfAppended"].as_array().cloned().unwrap_or_default().into_iter().filter(|p| p[0].as_f64().is_some_and(|s| s < keep_ms)).collect();
         if parts.is_empty() {
             if let Some(c) = display["configuration"].as_object_mut() {
@@ -381,34 +427,12 @@ pub fn append_video(dir: &Path, src: &Path, progress: impl Fn(f64), cancel: &Ato
         args.push(s.clone());
     }
 
-    let run = (|| {
-        let mut cmd = std::process::Command::new(crate::ffmpeg::ffmpeg_path()?);
-        crate::ffmpeg::hide_console(&mut cmd);
-        let mut child = cmd.args(&args).current_dir(&tmp).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().map_err(|source| Error::Io { path: src.to_path_buf(), source })?;
-        if let Some(out) = child.stdout.take() {
-            for line in BufReader::new(out).lines().map_while(|l| l.ok()) {
-                if cancel.load(Ordering::Relaxed) {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    return Err(Error::Capture("cancelled".into()));
-                }
-                if let Some(us) = line.strip_prefix("out_time_us=").or_else(|| line.strip_prefix("out_time_ms=")).and_then(|v| v.trim().parse::<f64>().ok()) {
-                    progress((us / 1000.0).min(old.duration_ms + new.duration_ms));
-                }
-            }
-        }
-        let out = child.wait_with_output().map_err(|source| Error::Io { path: src.to_path_buf(), source })?;
-        if !out.status.success() {
-            return Err(Error::Capture(format!("ffmpeg could not add the video: {}", String::from_utf8_lossy(&out.stderr).trim())));
-        }
-        Ok(())
-    })();
-    if let Err(e) = run {
+    if let Err(e) = run_ffmpeg(&args, &tmp, old.duration_ms + new.duration_ms, &progress, cancel, "add the video") {
         let _ = std::fs::remove_dir_all(&tmp);
         return Err(e);
     }
 
-    swap_in(dir, &tmp, &t.display)?;
+    swap_in(dir, &tmp, &[t.display.as_str()])?;
     // where the added video sits, so it can be taken out again once no clip uses it
     if let Some(display) = doc["recorders"].as_array_mut().and_then(|l| l.iter_mut().find(|r| r["type"] == "display")) {
         let mut parts = display["configuration"]["sfAppended"].as_array().cloned().unwrap_or_default();
@@ -543,6 +567,17 @@ mod tests {
     fn probe_audio_ms(path: &Path) -> f64 {
         let out = std::process::Command::new(crate::ffmpeg::ffprobe_path().unwrap()).args(["-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0"]).arg(path).output().unwrap();
         String::from_utf8_lossy(&out.stdout).trim().parse::<f64>().unwrap() * 1000.0
+    }
+
+    #[test]
+    fn extending_keeps_a_screen_recording_loadable() {
+        // a screen recording has a cursor recorder without sessions
+        let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/recording/metadata.json");
+        let mut doc: Value = serde_json::from_str(&std::fs::read_to_string(fixture).unwrap()).unwrap();
+        extend_metadata(&mut doc, 1000.0, None);
+        assert!(doc["recorders"].as_array().unwrap().iter().all(|r| r.get("sessions").is_none_or(|s| s.is_array())));
+        let meta: sf_project::recording::RecordingMetadata = serde_json::from_value(doc).unwrap();
+        assert!((meta.duration_ms() - 164_219.35).abs() < 0.01);
     }
 
     #[test]

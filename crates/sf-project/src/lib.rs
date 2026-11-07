@@ -23,6 +23,7 @@
 
 pub mod audio_clips;
 pub mod ids;
+pub mod merge;
 pub mod music_clips;
 pub mod package;
 pub mod preset;

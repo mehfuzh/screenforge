@@ -116,6 +116,13 @@ impl Recorder {
         moves.sort_by(|a, b| a[0].total_cmp(&b[0]));
         moves
     }
+    /// Parts of a recording joined from recordings of different shapes (see [`Part`]), in
+    /// time order; empty for an ordinary recording (one picture filling the video).
+    pub fn parts(&self) -> Vec<Part> {
+        let mut parts: Vec<Part> = self.configuration.get(PARTS_KEY).and_then(|v| serde_json::from_value(v.clone()).ok()).unwrap_or_default();
+        parts.sort_by(|a, b| a.start_ms.total_cmp(&b.start_ms));
+        parts
+    }
     /// Videos appended to this recording: `[start ms, length ms]` in source time.
     pub fn appended(&self) -> Vec<[f64; 2]> {
         self.configuration.get("sfAppended").and_then(|v| serde_json::from_value(v.clone()).ok()).unwrap_or_default()
@@ -123,6 +130,20 @@ impl Recorder {
     pub fn display_id(&self) -> Option<u64> {
         self.configuration.get("displayId")?.as_u64()
     }
+}
+
+/// Key of [`Part`]s in the screen recorder's `configuration`.
+pub const PARTS_KEY: &str = "sfParts";
+
+/// ScreenForge extension: one part of a recording joined from recordings of different shapes
+/// (a project dropped on another). The video is a frame big enough for every part; each part's
+/// picture sits in its own `rect01` of it (fractions of the frame, its crop included) from
+/// `start_ms` of source time until the next part starts. The project's crop applies inside it.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Part {
+    pub start_ms: f64,
+    pub rect01: Rect,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
