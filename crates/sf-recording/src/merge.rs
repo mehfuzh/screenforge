@@ -2,8 +2,11 @@
 //! project). Unlike an appended video ([`crate::import::append_video`]) the other recording
 //! brings its cursor, clicks and keys, so its cursor effects and click zooms keep working.
 //!
-//! - Screen: the other picture after this one's, scaled to this recording's size and frame
-//!   rate. Both must have the same shape (aspect ratio); the screen is re-encoded once.
+//! - Screen: the other picture after this one's, at this recording's frame rate; the screen is
+//!   re-encoded once. A recording of the same shape (and crop) is scaled to this one's size.
+//!   Otherwise each keeps its own shape and size: the video becomes a frame big enough for
+//!   both, each picture in its own part of it ([`Part`], with its project's crop built in), and
+//!   the editor shows the part playing, so the screen frame changes shape at the join.
 //! - Microphone, system audio and camera: each track is joined so the other part's sound and
 //!   picture start where its screen starts (each track keeps its own offset from the screen),
 //!   with silence or black where one part has none. A track only the other part has is added.
@@ -21,6 +24,7 @@ use std::sync::atomic::AtomicBool;
 
 use serde_json::{json, Value};
 use sf_project::merge::Appended;
+use sf_project::recording::{Part, PARTS_KEY};
 use sf_project::schema::common::Rect;
 
 use crate::import::{extend_metadata, probe, recorders, run_ffmpeg, swap_in, Probe};
@@ -45,6 +49,49 @@ struct Side {
     /// Recorded area in points, and where it moved to while recording (`[time, x, y]`).
     area: Rect,
     moves: Vec<[f64; 3]>,
+    /// Parts of an earlier join of different shapes (empty: one picture fills the video).
+    parts: Vec<Part>,
+}
+
+/// Where the other recording's picture goes in the joined video.
+struct Placement {
+    /// Size of the joined video.
+    frame: (u32, u32),
+    /// The other picture's rect in it (px).
+    theirs: Rect,
+    /// This recording's points per pixel of the joined video (the cursor's space).
+    pt_per_px: (f64, f64),
+    /// The parts when the shapes (or crops) differ.
+    parts: Option<Vec<Part>>,
+}
+
+impl Placement {
+    /// `a` and `b` cropped to `crops`: the same shape and crop scales `b` to `a`'s size;
+    /// otherwise both keep theirs in a frame that holds either.
+    fn new(a: &Side, b: &Side, [a_crop, b_crop]: [Rect; 2]) -> Placement {
+        let (aw, ah, bw, bh) = (a.video.width as f64, a.video.height as f64, b.video.width as f64, b.video.height as f64);
+        let pt_per_px = (a.area.width / aw, a.area.height / ah);
+        let same_shape = ((aw / ah) / (bw / bh) - 1.0).abs() <= 0.01;
+        if a.parts.is_empty() && same_shape && a_crop == b_crop {
+            let frame = (a.video.width + a.video.width % 2, a.video.height + a.video.height % 2);
+            return Placement { frame, theirs: Rect { x: 0.0, y: 0.0, width: frame.0 as f64, height: frame.1 as f64 }, pt_per_px, parts: None };
+        }
+        let even = |v: u32| v + v % 2;
+        let frame = (even(a.video.width.max(b.video.width)), even(a.video.height.max(b.video.height)));
+        let (fw, fh) = (frame.0 as f64, frame.1 as f64);
+        // this recording's parts (or its one picture) with its crop, where it sits in the frame
+        let mine = if a.parts.is_empty() { vec![Part { start_ms: 0.0, rect01: Rect::UNIT }] } else { a.parts.clone() };
+        let mut parts: Vec<Part> = mine
+            .into_iter()
+            .map(|p| {
+                let r = p.rect01.inside(&a_crop);
+                Part { start_ms: p.start_ms, rect01: Rect { x: r.x * aw / fw, y: r.y * ah / fh, width: r.width * aw / fw, height: r.height * ah / fh } }
+            })
+            .collect();
+        let theirs = Rect { x: 0.0, y: 0.0, width: bw, height: bh };
+        parts.push(Part { start_ms: a.video.duration_ms, rect01: Rect { x: 0.0, y: 0.0, width: bw / fw, height: bh / fh }.inside(&b_crop) });
+        Placement { frame, theirs, pt_per_px, parts: Some(parts) }
+    }
 }
 
 impl Side {
@@ -63,7 +110,9 @@ impl Side {
         let area = rect(&display["bounds"]).or_else(|| rect(&rec["configuration"]["cropRect"])).unwrap_or(Rect { x: 0.0, y: 0.0, width: video.width as f64, height: video.height as f64 });
         let mut moves: Vec<[f64; 3]> = serde_json::from_value(rec["configuration"]["sfBoundsMoves"].clone()).unwrap_or_default();
         moves.sort_by(|a, b| a[0].total_cmp(&b[0]));
-        Ok(Side { dir: dir.to_path_buf(), start: display["processTimeStartMs"].as_f64().unwrap_or(0.0), doc, display, display_file, video, area, moves })
+        let mut parts: Vec<Part> = serde_json::from_value(rec["configuration"][PARTS_KEY].clone()).unwrap_or_default();
+        parts.sort_by(|a, b| a.start_ms.total_cmp(&b.start_ms));
+        Ok(Side { dir: dir.to_path_buf(), start: display["processTimeStartMs"].as_f64().unwrap_or(0.0), doc, display, display_file, video, area, moves, parts })
     }
 
     /// The first recorder of one of `kinds` that has a session.
@@ -112,23 +161,18 @@ fn new_session(display: &Value, file: &str) -> Value {
 }
 
 /// Join the recording in `other` onto the end of the one in `dir` (see the module docs).
-/// `progress` gets ms of the joined video written. Returns where the other part went.
-pub fn append_recording(dir: &Path, other: &Path, progress: impl Fn(f64), cancel: &AtomicBool) -> Result<Appended> {
+/// `crops` are the two projects' crops (`config.crop.rect01`). `progress` gets ms of the joined
+/// video written. Returns where the other part went.
+pub fn append_recording(dir: &Path, other: &Path, crops: [Rect; 2], progress: impl Fn(f64), cancel: &AtomicBool) -> Result<Appended> {
     let a = Side::load(dir)?;
     let b = Side::load(other)?;
-    let ratio = |p: &Probe| p.width as f64 / p.height as f64;
-    if (ratio(&a.video) / ratio(&b.video) - 1.0).abs() > 0.01 {
-        return Err(Error::InvalidConfig(format!(
-            "the projects have different shapes ({}×{} and {}×{}); only recordings of the same shape can be joined",
-            a.video.width, a.video.height, b.video.width, b.video.height
-        )));
-    }
+    let place = Placement::new(&a, &b, crops);
     let (od, nd) = (a.video.duration_ms, b.video.duration_ms);
     let ns = nd / 1000.0;
     let fps = a.video.fps.round().clamp(1.0, 120.0);
-    let (w, h) = (a.video.width + a.video.width % 2, a.video.height + a.video.height % 2);
+    let (w, h) = place.frame;
     let mut doc = a.doc.clone();
-    let mut at = Appended { start_ms: od, len_ms: nd, unix_shift_ms: a.unix_start() + od - b.unix_start(), ..Default::default() };
+    let mut at = Appended { start_ms: od, len_ms: nd, unix_shift_ms: a.unix_start() + od - b.unix_start(), crops_in_parts: place.parts.is_some(), ..Default::default() };
 
     let tmp = dir.join(".join");
     let _ = std::fs::remove_dir_all(&tmp);
@@ -139,11 +183,15 @@ pub fn append_recording(dir: &Path, other: &Path, progress: impl Fn(f64), cancel
         inputs.len() - 1
     };
     let screen = channel_of(&a.display_file).unwrap_or(display::DISPLAY_CHANNEL).to_string();
-    let mut graph = vec![
-        format!("[0:v]fps={fps},scale={w}:{h},setsar=1,format=yuv420p[v0]"),
-        format!("[1:v]fps={fps},scale={w}:{h}:force_original_aspect_ratio=decrease,pad={w}:{h}:(ow-iw)/2:(oh-ih)/2:color=black,setsar=1,format=yuv420p[v1]"),
-        "[v0][v1]concat=n=2:v=1:a=0[v]".into(),
-    ];
+    let mut graph = match place.parts {
+        // each picture at its own size, top left of the frame
+        Some(_) => vec![format!("[0:v]fps={fps},pad={w}:{h}:0:0:color=black,setsar=1,format=yuv420p[v0]"), format!("[1:v]fps={fps},pad={w}:{h}:0:0:color=black,setsar=1,format=yuv420p[v1]")],
+        None => vec![
+            format!("[0:v]fps={fps},scale={w}:{h},setsar=1,format=yuv420p[v0]"),
+            format!("[1:v]fps={fps},scale={w}:{h}:force_original_aspect_ratio=decrease,pad={w}:{h}:(ow-iw)/2:(oh-ih)/2:color=black,setsar=1,format=yuv420p[v1]"),
+        ],
+    };
+    graph.push("[v0][v1]concat=n=2:v=1:a=0[v]".into());
     let mut outputs: Vec<String> = vec!["-map".into(), "[v]".into()];
     outputs.extend(display::hls_encode_args_for(&screen, display::target_bitrate(w, h, 0.85), display::video_encoder(), 0));
     let mut next_channel = a.next_channel().max(b.next_channel());
@@ -240,7 +288,7 @@ pub fn append_recording(dir: &Path, other: &Path, progress: impl Fn(f64), cancel
     }
     args.extend(["-filter_complex".into(), graph.join(";")]);
     args.extend(outputs);
-    let joined = run_ffmpeg(&args, &tmp, od + nd, &progress, cancel, "join the projects").and_then(|()| join_input(&a, &b, &tmp, &mut doc, &mut added));
+    let joined = run_ffmpeg(&args, &tmp, od + nd, &progress, cancel, "join the projects").and_then(|()| join_input(&a, &b, &place, &tmp, &mut doc, &mut added));
     if let Err(e) = joined {
         let _ = std::fs::remove_dir_all(&tmp);
         return Err(e);
@@ -271,9 +319,15 @@ pub fn append_recording(dir: &Path, other: &Path, progress: impl Fn(f64), cancel
         }
         list.extend(added);
         if let Some(screen) = list.iter_mut().find(|r| r["type"] == "display" || r["type"] == "window") {
-            let mut parts = screen["configuration"]["sfAppended"].as_array().cloned().unwrap_or_default();
-            parts.push(json!([od, nd]));
-            screen["configuration"]["sfAppended"] = Value::Array(parts);
+            let mut appended = screen["configuration"]["sfAppended"].as_array().cloned().unwrap_or_default();
+            appended.push(json!([od, nd]));
+            screen["configuration"]["sfAppended"] = Value::Array(appended);
+            if let Some(parts) = &place.parts {
+                screen["configuration"][PARTS_KEY] = serde_json::to_value(parts).map_err(Error::Json)?;
+                // the recorded area grows with the frame (this picture stays at its top left)
+                let (kx, ky) = place.pt_per_px;
+                screen["sessions"][0]["bounds"] = json!({ "x": a.area.x, "y": a.area.y, "width": w as f64 * kx, "height": h as f64 * ky });
+            }
         }
     }
     extend_metadata(&mut doc, nd, None);
@@ -283,11 +337,29 @@ pub fn append_recording(dir: &Path, other: &Path, progress: impl Fn(f64), cancel
     Ok(at)
 }
 
+/// Add the project at `other` to the end of the project at `project` and save it: the
+/// recordings joined ([`append_recording`]), then the other timeline, files and captions
+/// (`sf_project::merge::append_package`). `other` is only read. `progress` gets ms of the
+/// joined video written.
+pub fn join_projects(project: &Path, other: &Path, progress: impl Fn(f64), cancel: &AtomicBool) -> Result<()> {
+    let theirs = sf_project::ProjectPackage::open(other)?;
+    if theirs.recording.is_none() {
+        let name = other.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+        return Err(Error::InvalidConfig(format!("“{name}” has no recording in it")));
+    }
+    let mut pkg = sf_project::ProjectPackage::open(project)?;
+    let crops = [pkg.project.config.crop.rect01, theirs.project.config.crop.rect01];
+    let at = append_recording(&pkg.recording_dir(), &theirs.recording_dir(), crops, progress, cancel)?;
+    sf_project::merge::append_package(&mut pkg, &theirs, &at)?;
+    pkg.save()?;
+    Ok(())
+}
+
 /// Write the joined input logs (and `cursors.json`) into `tmp`. The other part's events move
 /// to this recording's clock and their positions onto this recording's area; events of this
 /// recording past its screen's end (left by an earlier cut) are dropped. Adds an input or
 /// cursor recorder to `added` when only the other recording has one.
-fn join_input(a: &Side, b: &Side, tmp: &Path, doc: &mut Value, added: &mut Vec<Value>) -> Result<()> {
+fn join_input(a: &Side, b: &Side, place: &Placement, tmp: &Path, doc: &mut Value, added: &mut Vec<Value>) -> Result<()> {
     let Some(theirs) = b.recorder(&["input"]) else { return Ok(()) };
     let their_session = &theirs["sessions"][0];
     let their_start = their_session["processTimeStartMs"].as_f64().unwrap_or(b.start);
@@ -296,6 +368,8 @@ fn join_input(a: &Side, b: &Side, tmp: &Path, doc: &mut Value, added: &mut Vec<V
     let end = my_start + a.video.duration_ms;
     // this recording's area once it stopped moving, which is where the other part plays
     let target = a.area_at(f64::INFINITY);
+    let (kx, ky) = place.pt_per_px;
+    let picture = place.theirs;
 
     let mut session = mine.as_ref().map(|r| r["sessions"][0].clone()).unwrap_or_else(|| new_session(&a.display, ""));
     if let Some(o) = session.as_object_mut() {
@@ -317,9 +391,10 @@ fn join_input(a: &Side, b: &Side, tmp: &Path, doc: &mut Value, added: &mut Vec<V
                 e["unixTimeMs"] = (u + moved - t).into();
             }
             if let (Some(x), Some(y)) = (e["x"].as_f64(), e["y"].as_f64()) {
+                // from the other recorded area to its picture in the joined video, in points
                 let from = b.area_at(t);
-                e["x"] = (target.x + (x - from.x) * target.width / from.width).into();
-                e["y"] = (target.y + (y - from.y) * target.height / from.height).into();
+                e["x"] = (target.x + (picture.x + (x - from.x) / from.width * picture.width) * kx).into();
+                e["y"] = (target.y + (picture.y + (y - from.y) / from.height * picture.height) * ky).into();
             }
             events.push(e);
         }
@@ -462,7 +537,7 @@ mod tests {
         add_input(&b, Rect { x: 1000.0, y: 500.0, width: 640.0, height: 480.0 }, json!([{ "type": "mouseMoved", "processTimeMs": 500.0, "unixTimeMs": 1.0, "x": 1320.0, "y": 740.0 }]));
         let before_b = std::fs::read_to_string(b.join("metadata.json")).unwrap();
 
-        let at = append_recording(&a, &b, |_| {}, &AtomicBool::new(false)).unwrap();
+        let at = append_recording(&a, &b, [Rect::UNIT; 2], |_| {}, &AtomicBool::new(false)).unwrap();
         assert!((at.start_ms - 3000.0).abs() < 150.0 && (at.len_ms - 2000.0).abs() < 150.0, "{at:?}");
         assert!(at.has_microphone && at.microphone_shift_ms.is_some_and(|s| (s - at.start_ms).abs() < 150.0));
         let p = probe(&a.join("channel-1-display-0.m3u8")).unwrap();
@@ -481,6 +556,8 @@ mod tests {
         let screen = doc["recorders"].as_array().unwrap().iter().find(|r| r["type"] == "display").unwrap().clone();
         assert_eq!(screen["configuration"]["sfAppended"].as_array().unwrap().len(), 1);
         assert!(!a.join(".join").exists());
+        // the metadata still loads as a recording (no null where a list belongs)
+        assert!(sf_project::recording::RecordingMetadata::load(&a).is_ok(), "{}", std::fs::read_to_string(a.join("metadata.json")).unwrap());
         assert_eq!(std::fs::read_to_string(b.join("metadata.json")).unwrap(), before_b, "the other recording is only read");
 
         // cutting the joined part off again takes its events with it
@@ -489,18 +566,46 @@ mod tests {
     }
 
     #[test]
-    fn refuses_another_shape() {
+    fn another_shape_keeps_its_own_in_a_part() {
         let root = tempfile::tempdir().unwrap();
         let root = root.path();
         let (first, second) = (root.join("first.mov"), root.join("second.mov"));
-        if clip(&first, "320x240", 1, false).is_none() || clip(&second, "240x320", 1, false).is_none() {
+        if clip(&first, "320x240", 2, false).is_none() || clip(&second, "240x320", 1, false).is_none() {
             return;
         }
         let (a, b) = (root.join("a"), root.join("b"));
         import_video(&first, &a, |_| {}, &AtomicBool::new(false)).unwrap();
         import_video(&second, &b, |_| {}, &AtomicBool::new(false)).unwrap();
-        let e = append_recording(&a, &b, |_| {}, &AtomicBool::new(false)).unwrap_err().to_string();
-        assert!(e.contains("different shapes"), "{e}");
+        add_input(&a, Rect { x: 0.0, y: 0.0, width: 320.0, height: 240.0 }, json!([]));
+        add_input(&b, Rect { x: 500.0, y: 0.0, width: 240.0, height: 320.0 }, json!([{ "type": "mouseMoved", "processTimeMs": 100.0, "unixTimeMs": 1.0, "x": 620.0, "y": 160.0 }]));
+        // this project shows the left half of its picture; the other is not cropped
+        let half = Rect { x: 0.0, y: 0.0, width: 0.5, height: 1.0 };
+        let at = append_recording(&a, &b, [half, Rect::UNIT], |_| {}, &AtomicBool::new(false)).unwrap();
+        assert!(at.crops_in_parts);
+
+        // a frame that holds both at their own size, each picture (with its crop) in its part
+        let p = probe(&a.join("channel-1-display-0.m3u8")).unwrap();
+        assert_eq!((p.width, p.height), (320, 320));
+        let doc = meta(&a);
+        let screen = doc["recorders"].as_array().unwrap().iter().find(|r| r["type"] == "display").unwrap().clone();
+        let parts: Vec<Part> = serde_json::from_value(screen["configuration"][PARTS_KEY].clone()).unwrap();
+        assert_eq!(parts.len(), 2);
+        assert_eq!((parts[0].start_ms, parts[0].rect01), (0.0, Rect { x: 0.0, y: 0.0, width: 0.5, height: 0.75 }));
+        assert_eq!((parts[1].start_ms, parts[1].rect01), (at.start_ms, Rect { x: 0.0, y: 0.0, width: 0.75, height: 1.0 }));
+        // the recorded area grows with the frame, and the other cursor lands on its picture
+        assert_eq!(serde_json::from_value::<Rect>(screen["sessions"][0]["bounds"].clone()).unwrap(), Rect { x: 0.0, y: 0.0, width: 320.0, height: 320.0 });
+        let moves = read_events(&a.join("mousemoves-0.json")).unwrap();
+        assert_eq!((moves[0]["x"].as_f64(), moves[0]["y"].as_f64()), (Some(120.0), Some(160.0)));
+
+        // joining a third recording keeps the parts, and cutting it off again drops its part
+        let at3 = append_recording(&a, &b, [Rect::UNIT; 2], |_| {}, &AtomicBool::new(false)).unwrap();
+        let screen = meta(&a)["recorders"].as_array().unwrap().iter().find(|r| r["type"] == "display").unwrap().clone();
+        let parts: Vec<Part> = serde_json::from_value(screen["configuration"][PARTS_KEY].clone()).unwrap();
+        assert_eq!(parts.iter().map(|p| p.rect01).collect::<Vec<_>>(), vec![Rect { x: 0.0, y: 0.0, width: 0.5, height: 0.75 }, Rect { x: 0.0, y: 0.0, width: 0.75, height: 1.0 }, Rect { x: 0.0, y: 0.0, width: 0.75, height: 1.0 }]);
+        crate::import::trim_recording(&a, at3.start_ms).unwrap();
+        assert_eq!(sf_project::recording::RecordingMetadata::load(&a).unwrap().display().unwrap().parts().len(), 2);
+        let screen = meta(&a)["recorders"].as_array().unwrap().iter().find(|r| r["type"] == "display").unwrap().clone();
+        assert_eq!(screen["configuration"][PARTS_KEY].as_array().unwrap().len(), 2);
     }
 
     #[test]
@@ -529,7 +634,7 @@ mod tests {
         doc["recorders"].as_array_mut().unwrap().push(json!({ "configuration": {}, "id": "channel-3-camera", "sessions": [session], "type": "camera" }));
         std::fs::write(b.join("metadata.json"), doc.to_string()).unwrap();
 
-        let at = append_recording(&a, &b, |_| {}, &AtomicBool::new(false)).unwrap();
+        let at = append_recording(&a, &b, [Rect::UNIT; 2], |_| {}, &AtomicBool::new(false)).unwrap();
         assert_eq!(at.camera_gaps, vec![[0.0, at.start_ms]]);
         assert!(at.has_microphone && !at.has_system_audio);
         let doc = meta(&a);

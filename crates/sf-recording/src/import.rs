@@ -249,7 +249,9 @@ pub(crate) fn extend_metadata(doc: &mut Value, added_ms: f64, new_mic: Option<&s
     };
     if let Some(list) = doc["recorders"].as_array_mut() {
         for r in list.iter_mut() {
-            if let Some(s) = r["sessions"].get_mut(0) {
+            // `get_mut`, not indexing: indexing a missing key adds it as null, and the cursor
+            // recorder has no sessions (a null list does not load)
+            if let Some(s) = r.get_mut("sessions").and_then(|s| s.get_mut(0)) {
                 grow(s);
             }
         }
@@ -335,6 +337,10 @@ pub fn trim_recording(dir: &Path, keep_ms: f64) -> Result<()> {
     videos.extend(camera.map(String::as_str));
     swap_in(dir, &tmp, &videos)?;
     if let Some(display) = doc["recorders"].as_array_mut().and_then(|l| l.iter_mut().find(|r| r["type"] == "display")) {
+        // parts of a join of different shapes that start past the cut go too
+        if let Some(parts) = display.get_mut("configuration").and_then(|c| c.get_mut(sf_project::recording::PARTS_KEY)).and_then(|p| p.as_array_mut()) {
+            parts.retain(|p| p["startMs"].as_f64().is_some_and(|s| s < keep_ms));
+        }
         let parts: Vec<Value> = display["configuration"]["sfAppended"].as_array().cloned().unwrap_or_default().into_iter().filter(|p| p[0].as_f64().is_some_and(|s| s < keep_ms)).collect();
         if parts.is_empty() {
             if let Some(c) = display["configuration"].as_object_mut() {
@@ -561,6 +567,17 @@ mod tests {
     fn probe_audio_ms(path: &Path) -> f64 {
         let out = std::process::Command::new(crate::ffmpeg::ffprobe_path().unwrap()).args(["-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0"]).arg(path).output().unwrap();
         String::from_utf8_lossy(&out.stdout).trim().parse::<f64>().unwrap() * 1000.0
+    }
+
+    #[test]
+    fn extending_keeps_a_screen_recording_loadable() {
+        // a screen recording has a cursor recorder without sessions
+        let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/recording/metadata.json");
+        let mut doc: Value = serde_json::from_str(&std::fs::read_to_string(fixture).unwrap()).unwrap();
+        extend_metadata(&mut doc, 1000.0, None);
+        assert!(doc["recorders"].as_array().unwrap().iter().all(|r| r.get("sessions").is_none_or(|s| s.is_array())));
+        let meta: sf_project::recording::RecordingMetadata = serde_json::from_value(doc).unwrap();
+        assert!((meta.duration_ms() - 164_219.35).abs() < 0.01);
     }
 
     #[test]

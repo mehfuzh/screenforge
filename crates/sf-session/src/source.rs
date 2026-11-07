@@ -4,7 +4,7 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 use sf_engine::cursor::CursorTrack;
-use sf_project::recording::{InputLog, RecorderSession};
+use sf_project::recording::{InputLog, Part, RecorderSession};
 use sf_project::schema::common::Rect;
 use sf_project::ProjectPackage;
 
@@ -20,6 +20,9 @@ pub struct SourceInfo {
     /// Where a window recording's region moved to when it followed the window (see
     /// [`sf_project::recording::Recorder::bounds_moves`]).
     pub bounds_moves: Vec<[f64; 3]>,
+    /// Pictures of different shapes joined into one video, each in its own rect of it (see
+    /// [`Part`]); empty when one picture fills the video.
+    pub parts: Vec<Part>,
     pub session: RecorderSession,
     pub process_time_start_ms: f64,
     pub microphone: Vec<PathBuf>,
@@ -68,6 +71,7 @@ impl SourceInfo {
             duration_ms: info.duration_ms().unwrap_or(session.duration_ms),
             bounds,
             bounds_moves: display.bounds_moves(),
+            parts: display.parts(),
             process_time_start_ms: session.process_time_start_ms,
             session,
             microphone: collect("microphone"),
@@ -75,6 +79,22 @@ impl SourceInfo {
             camera,
             camera_time_offset_ms,
         })
+    }
+
+    /// Index of the part playing at `source_ms` (0 for a recording without parts).
+    pub fn part_index(&self, source_ms: f64) -> usize {
+        self.parts.iter().rposition(|p| p.start_ms <= source_ms).unwrap_or(0)
+    }
+
+    /// The picture playing at `source_ms` in the video (fractions of it): its part, or all of it.
+    pub fn picture01(&self, source_ms: f64) -> Rect {
+        self.parts.get(self.part_index(source_ms)).map_or(Rect::UNIT, |p| p.rect01)
+    }
+
+    /// The project's crop `crop01` (fractions of the picture) of the picture playing at
+    /// `source_ms`, as fractions of the video: what the screen shows.
+    pub fn crop_at(&self, source_ms: f64, crop01: &Rect) -> Rect {
+        self.picture01(source_ms).inside(crop01)
     }
 
     /// Pixel size of the visible crop.

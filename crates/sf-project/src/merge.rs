@@ -7,6 +7,8 @@
 //! transcript are copied in. This project's settings stay: its background, frame, cursor and
 //! caption style, output size and music apply to the whole video, so changing the background
 //! afterwards restyles both parts. The other project's music clips are not taken over.
+//! Recordings of different shapes each keep their own: the screen frame changes shape at the
+//! join, inside the same canvas (see [`crate::recording::Part`]).
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -37,6 +39,10 @@ pub struct Appended {
     /// The joined recording has these tracks.
     pub has_microphone: bool,
     pub has_system_audio: bool,
+    /// The recordings had different shapes (or crops), so the joined one keeps each picture
+    /// in its own part ([`crate::recording::Part`]) with each project's crop built in: this
+    /// project's crop goes back to the whole picture, and from now on crops every part.
+    pub crops_in_parts: bool,
 }
 
 /// Add scene `b` after scene `a`: `b`'s source times move by `at.start_ms`, its output times
@@ -220,6 +226,9 @@ pub fn append_package(a: &mut ProjectPackage, b: &ProjectPackage, at: &Appended)
     }
 
     append_scene(&mut a.project.scenes[0], b_scene, at, &renamed);
+    if at.crops_in_parts {
+        a.project.config.crop.rect01 = crate::schema::common::Rect::UNIT;
+    }
     a.recording = Some(RecordingMetadata::load(&a.recording_dir())?);
     Ok(())
 }

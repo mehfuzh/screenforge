@@ -57,13 +57,32 @@ const MAX_CLICK_EFFECTS: usize = 3;
 /// `sensitive-data` masks blend the blurred pixels toward the surrounding colour by this much.
 const MASK_COVER_MIX: f32 = 0.5;
 
+/// What the screen shows over a stretch of the recording: its crop of the video and its place
+/// on the stage. A recording joined from recordings of different shapes has one per part (see
+/// [`sf_project::recording::Part`]), each fitted into the same canvas; others have one.
+#[derive(Debug, Clone, Copy)]
+struct View {
+    start_ms: f64,
+    crop01: Rect,
+    geometry: StageGeometry,
+}
+
+/// Index of the view showing at `source_ms`.
+fn view_index(views: &[View], source_ms: f64) -> usize {
+    views.iter().rposition(|v| v.start_ms <= source_ms).unwrap_or(0)
+}
+
 pub struct Session {
     pub pkg: ProjectPackage,
     pub source: SourceInfo,
     pub timeline: Timeline,
     pub cursor_track: CursorTrack,
     pub assets: assets::Assets,
+    /// The canvas (and the first part's screen on it).
     pub geometry: StageGeometry,
+    views: Vec<View>,
+    /// The view of the last frame, so a change of part restarts the camera like a cut.
+    last_view: Option<usize>,
     gpu: Gpu,
     screen: SourceStream,
     camera_stream: Option<SourceStream>,
@@ -105,8 +124,8 @@ impl Session {
         let cursor_track = source.cursor_track(&pkg).unwrap_or_default();
         let screen = SourceStream::new(&gpu, source.media_path.clone(), "screen");
         let camera_stream = source.camera.first().map(|p| SourceStream::new(&gpu, p.clone(), "camera"));
-        let geometry = Self::geometry_for(&pkg, &source);
-        let (camera, cursor_smoother) = Self::solvers(&pkg, &source, &cursor_track, geometry);
+        let (geometry, views) = Self::geometry_for(&pkg, &source);
+        let (camera, cursor_smoother) = Self::solvers(&pkg, &source, &cursor_track, geometry, &views);
         let camera_rect = SpringVec::new(SpringParams::from(pkg.project.config.animations.screen_movement_spring), [0.0; 4]);
         let captions = captions::Captions::load(&pkg, source.process_time_start_ms, &timeline);
         let shortcuts = shortcuts::Shortcuts::load(&pkg, &cursor_track);
@@ -118,6 +137,8 @@ impl Session {
             cursor_track,
             assets: assets::Assets::discover(),
             geometry,
+            views,
+            last_view: None,
             gpu,
             screen,
             camera_stream,
@@ -143,19 +164,36 @@ impl Session {
         Ok(s)
     }
 
-    fn geometry_for(pkg: &ProjectPackage, source: &SourceInfo) -> StageGeometry {
+    /// The canvas, and the view of each part: the first part's shape sets the canvas (with
+    /// `output.aspectRatio: auto`), the others fit inside it with their own.
+    fn geometry_for(pkg: &ProjectPackage, source: &SourceInfo) -> (StageGeometry, Vec<View>) {
         let cfg = &pkg.project.config;
-        let (cw, ch) = source.content_size_px(&cfg.crop.rect01);
+        let geometry = |aspect: &str, crop01: &Rect| {
+            let (cw, ch) = source.content_size_px(crop01);
+            StageGeometry::new(aspect, cw as f64 / ch.max(1) as f64, cfg.output.padding_ratio01, cfg.output.avoid_empty_zoom_area)
+        };
         let aspect = cfg.output.aspect_ratio.as_f64().map(|r| format!("{r}:1")).unwrap_or_else(|| "auto".into());
-        StageGeometry::new(&aspect, cw as f64 / ch.max(1) as f64, cfg.output.padding_ratio01, cfg.output.avoid_empty_zoom_area)
+        let first_crop = source.crop_at(0.0, &cfg.crop.rect01);
+        let first = geometry(&aspect, &first_crop);
+        let canvas = format!("{}:1", first.stage.width / first.stage.height);
+        let mut views = vec![View { start_ms: 0.0, crop01: first_crop, geometry: first }];
+        for p in source.parts.iter().skip(1) {
+            let crop01 = source.crop_at(p.start_ms, &cfg.crop.rect01);
+            views.push(View { start_ms: p.start_ms, crop01, geometry: geometry(&canvas, &crop01) });
+        }
+        (first, views)
     }
 
-    fn solvers(pkg: &ProjectPackage, source: &SourceInfo, track: &CursorTrack, geometry: StageGeometry) -> (CameraSolver, CursorSmoother) {
+    fn solvers(pkg: &ProjectPackage, source: &SourceInfo, track: &CursorTrack, geometry: StageGeometry, views: &[View]) -> (CameraSolver, CursorSmoother) {
         let cfg = &pkg.project.config;
-        let crop = cfg.crop.rect01;
         let (bw, bh) = (source.bounds.width, source.bounds.height);
-        let crop_px = Rect { x: crop.x * bw, y: crop.y * bh, width: crop.width * bw, height: crop.height * bh };
-        let camera = CameraSolver::new(&pkg.project.scenes[0].zooms, track, crop_px, geometry, SpringParams::from(cfg.animations.screen_movement_spring), cfg.zooms.start_animation_early);
+        // the crop in recording points (the cursor's space) and the screen's geometry
+        let view_at = |t: f64| {
+            let v = views[view_index(views, t)];
+            let c = v.crop01;
+            (Rect { x: c.x * bw, y: c.y * bh, width: c.width * bw, height: c.height * bh }, v.geometry)
+        };
+        let camera = CameraSolver::new(&pkg.project.scenes[0].zooms, track, view_at, geometry, SpringParams::from(cfg.animations.screen_movement_spring), cfg.zooms.start_animation_early);
         let cursor = CursorSmoother::new(SpringParams::from(cfg.animations.mouse_movement_spring));
         (camera, cursor)
     }
@@ -185,8 +223,8 @@ impl Session {
     pub fn rebuild(&mut self) {
         let scene = &self.pkg.project.scenes[0];
         self.timeline = Timeline::from_scene(scene);
-        self.geometry = Self::geometry_for(&self.pkg, &self.source);
-        let (camera, cursor) = Self::solvers(&self.pkg, &self.source, &self.cursor_track, self.geometry);
+        (self.geometry, self.views) = Self::geometry_for(&self.pkg, &self.source);
+        let (camera, cursor) = Self::solvers(&self.pkg, &self.source, &self.cursor_track, self.geometry, &self.views);
         self.camera = camera;
         self.cursor_smoother = cursor;
         self.camera_rect.set_params(SpringParams::from(self.pkg.project.config.animations.screen_movement_spring));
@@ -386,7 +424,11 @@ impl Session {
             Some(prev) if output_ms >= prev && output_ms - prev < 500.0 => false,
             _ => true,
         };
-        let crossed_cut = jump || self.timeline.is_cut_at_output(output_ms, 1.0);
+        // a new part of a joined recording restarts the camera like a cut
+        let view_i = view_index(&self.views, source_ms);
+        let view = self.views[view_i];
+        let crossed_cut = jump || self.timeline.is_cut_at_output(output_ms, 1.0) || self.last_view != Some(view_i);
+        self.last_view = Some(view_i);
         // springs run in source time so speed-ups don't change their feel
         let dt = if jump { 0.0 } else { (output_ms - self.last_output_ms.unwrap_or(output_ms)) * speed };
         self.last_output_ms = Some(output_ms);
@@ -394,13 +436,13 @@ impl Session {
         let cfg = self.pkg.project.config.clone();
         let layout = self.layout_at(source_ms);
         let camera_wanted = self.camera_stream.is_some() && !cfg.camera.hide && layout.is_camera_visible();
-        let frame = layout::layout_frame(&layout, &self.geometry, cfg.camera.aspect_ratio);
+        let frame = layout::layout_frame(&layout, &view.geometry, cfg.camera.aspect_ratio);
         let screen_visible = frame.screen_visible || !camera_wanted;
 
         self.seek_sources(source_ms, camera_wanted)?;
 
         let slice = span.map(|s| self.pkg.project.scenes[0].slices[s.index].clone());
-        let crop = cfg.crop.rect01;
+        let crop = view.crop01;
         let bounds = self.source.bounds;
         let s = out.scale(); // px per stage unit
         let geo = frame.screen_geometry;
@@ -640,10 +682,18 @@ impl Session {
         tex
     }
 
-    /// Canvas for the whole, uncropped recording at a given height (the crop editor's picture).
-    pub fn source_size(&self, height: u32) -> OutputSize {
-        let aspect = self.source.native_width.max(1) as f64 / self.source.native_height.max(1) as f64;
+    /// Canvas for the whole, uncropped picture at `output_ms` at a given height (the crop
+    /// editor's picture; the part playing then, for a recording joined from different shapes).
+    pub fn source_size(&self, output_ms: f64, height: u32) -> OutputSize {
+        let p = self.source.picture01(self.frame_source_ms(output_ms));
+        let aspect = (self.source.native_width.max(1) as f64 * p.width) / (self.source.native_height.max(1) as f64 * p.height).max(1e-6);
         OutputSize { width: ((height as f64 * aspect).round() as u32).max(2) & !1, height }
+    }
+
+    /// Pixel size of what the screen shows at `output_ms` (the space mask bounds live in).
+    pub fn content_size_at(&self, output_ms: f64) -> (u32, u32) {
+        let source_ms = self.frame_source_ms(output_ms.clamp(0.0, self.duration_ms().max(0.0)));
+        self.source.content_size_px(&self.views[view_index(&self.views, source_ms)].crop01)
     }
 
     /// The uncropped recording at `output_ms` filling `out`, with nothing drawn over it: what the
@@ -654,7 +704,8 @@ impl Session {
         self.seek_sources(source_ms, false)?;
         self.last_output_ms = None;
         let dst = Rect { x: 0.0, y: 0.0, width: out.width as f64, height: out.height as f64 };
-        let screen = ScreenLayer { texture: self.screen.texture.clone(), src01: Rect::UNIT, dst, corner_radius: 0.0, shadow: None, inset: None };
+        let src01 = self.source.picture01(source_ms);
+        let screen = ScreenLayer { texture: self.screen.texture.clone(), src01, dst, corner_radius: 0.0, shadow: None, inset: None };
         Ok(FrameDesc::new(out.width, out.height, BackgroundLayer::Color(Color::BLACK), vec![Layer::Screen(screen)]))
     }
 
@@ -676,7 +727,7 @@ impl Session {
     /// Masks active at `source_ms`, drawn over the screen. Bounds are pixel rects in
     /// cropped-recording space.
     fn push_masks(&self, layers: &mut Vec<Layer>, source_ms: f64, screen_px: Rect, corner_radius: f32) {
-        let crop = self.pkg.project.config.crop.rect01;
+        let crop = self.views[view_index(&self.views, source_ms)].crop01;
         let (nw, nh) = (self.source.native_width.max(1) as f64, self.source.native_height.max(1) as f64);
         let (cw, ch) = ((nw * crop.width).max(1.0), (nh * crop.height).max(1.0));
         let to_out = |b: &Rect| Rect { x: screen_px.x + b.x / cw * screen_px.width, y: screen_px.y + b.y / ch * screen_px.height, width: b.width / cw * screen_px.width, height: b.height / ch * screen_px.height };

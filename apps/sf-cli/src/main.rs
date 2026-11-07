@@ -107,6 +107,9 @@ enum Cmd {
         #[arg(long)]
         to: Option<PathBuf>,
     },
+    /// Add another project to the end of a project and save it (the other one is only read).
+    /// Like dropping a project on an open one in the app.
+    Join { project: PathBuf, other: PathBuf },
     /// List presets in the presets folder (~/Documents/ScreenForge Presets)
     Presets {
         #[arg(long)]
@@ -257,6 +260,11 @@ fn main() -> Result<()> {
             let folder = to.unwrap_or_else(sf_session::create::default_projects_folder);
             let dest = sf_project::package::import_screen_studio(&path, &folder)?;
             println!("imported {} as {}", path.display(), dest.display());
+            Ok(())
+        }
+        Cmd::Join { project, other } => {
+            sf_recording::merge::join_projects(&project, &other, |_| {}, &std::sync::atomic::AtomicBool::new(false))?;
+            println!("added {} to the end of {}", other.display(), project.display());
             Ok(())
         }
     }

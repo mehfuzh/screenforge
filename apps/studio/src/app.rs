@@ -549,13 +549,9 @@ fn project_root(path: PathBuf) -> PathBuf {
 fn append_to_project(project: &std::path::Path, dropped: &std::path::Path, source_ms: f64, progress: &sf_project::ImportProgress) -> anyhow::Result<PathBuf> {
     use std::sync::atomic::Ordering;
     if !sf_recording::import::is_video(dropped) {
-        let other = sf_project::ProjectPackage::open(dropped)?;
-        let Some(other_ms) = other.recording.as_ref().map(|r| r.duration_ms()) else { anyhow::bail!("“{}” has no recording in it", ed_name(dropped)) };
+        let other_ms = sf_project::ProjectPackage::open(dropped)?.recording.map_or(0.0, |r| r.duration_ms());
         progress.total.store((source_ms + other_ms).max(1.0) as u64, Ordering::Relaxed);
-        let mut pkg = sf_project::ProjectPackage::open(project)?;
-        let at = sf_recording::merge::append_recording(&pkg.recording_dir(), &other.recording_dir(), |ms| progress.done.store(ms as u64, Ordering::Relaxed), &progress.cancel)?;
-        sf_project::merge::append_package(&mut pkg, &other, &at)?;
-        pkg.save()?;
+        sf_recording::merge::join_projects(project, dropped, |ms| progress.done.store(ms as u64, Ordering::Relaxed), &progress.cancel)?;
         return Ok(project.to_path_buf());
     }
     let video = dropped;
