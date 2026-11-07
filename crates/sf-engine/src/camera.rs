@@ -145,13 +145,16 @@ pub struct CameraSolver {
 }
 
 impl CameraSolver {
-    /// `crop_px` is the visible crop in recording points (the space of the cursor samples).
-    pub fn new(zooms: &[Zoom], track: &CursorTrack, crop_px: Rect, geometry: StageGeometry, params: SpringParams, start_early: bool) -> Self {
+    /// `view_at` gives, for a source time, the visible crop in recording points (the space of
+    /// the cursor samples) and the stage geometry; both change at the parts of a recording
+    /// joined from recordings of different shapes. `geometry` is where the camera starts.
+    pub fn new(zooms: &[Zoom], track: &CursorTrack, view_at: impl Fn(f64) -> (Rect, StageGeometry), geometry: StageGeometry, params: SpringParams, start_early: bool) -> Self {
         let mut resolved: Vec<ResolvedZoom> = zooms
             .iter()
             .filter(|z| !z.is_disabled && z.source_end_ms > z.source_start_ms)
             .map(|z| {
-                let vis = geometry.visible_part(z.zoom);
+                let (crop_px, at) = view_at(z.source_start_ms);
+                let vis = at.visible_part(z.zoom);
                 let path = if z.is_auto() { focus_path(track, z.source_start_ms, z.source_end_ms, crop_px, vis) } else { FocusPath::default() };
                 ResolvedZoom { zoom: z.clone(), path }
             })

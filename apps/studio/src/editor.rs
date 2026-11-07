@@ -807,7 +807,7 @@ impl Editor {
             PreviewQuality::Full => 1080,
             PreviewQuality::Performance => 720,
         };
-        self.preview_size = if self.crop.is_some() { self.session.source_size(height) } else { self.session.output_size(height) };
+        self.preview_size = if self.crop.is_some() { self.session.source_size(self.playhead_ms, height) } else { self.session.output_size(height) };
         // while a sped-up clip plays, decode only the frames that will be shown
         self.session.decode_speed = if self.playing { self.session.timeline.speed_at_output(self.playhead_ms) } else { 1.0 };
         let rendered = if self.crop.is_some() {
