@@ -49,6 +49,7 @@ pub mod ffmpeg;
 pub mod import;
 pub mod input;
 pub mod log;
+pub mod merge;
 pub mod metadata;
 pub mod permissions;
 pub mod window_frame;
