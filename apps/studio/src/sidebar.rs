@@ -228,10 +228,11 @@ pub enum Section {
     Animations,
     Agent,
     DeviceFrame,
+    Chapters,
 }
 
 impl Section {
-    pub const ALL: [Section; 11] = [Section::Agent, Section::General, Section::Cursor, Section::CameraLayout, Section::CameraStyle, Section::Captions, Section::Audio, Section::Narration, Section::Shortcuts, Section::Animations, Section::DeviceFrame];
+    pub const ALL: [Section; 12] = [Section::Agent, Section::General, Section::Cursor, Section::CameraLayout, Section::CameraStyle, Section::Captions, Section::Audio, Section::Narration, Section::Shortcuts, Section::Animations, Section::DeviceFrame, Section::Chapters];
 
     pub fn icon(self) -> widgets::Icon {
         match self {
@@ -246,6 +247,7 @@ impl Section {
             Section::Animations => widgets::Icon::Animations,
             Section::Agent => widgets::Icon::Agent,
             Section::DeviceFrame => widgets::Icon::DeviceFrame,
+            Section::Chapters => widgets::Icon::Flag,
         }
     }
 
@@ -262,6 +264,7 @@ impl Section {
             Section::Animations => "Animations",
             Section::Agent => "Agent (⌘L)",
             Section::DeviceFrame => "Device frame",
+            Section::Chapters => "Chapters",
         }
     }
 }
@@ -343,6 +346,7 @@ pub fn ui(ed: &mut Editor, ui: &mut egui::Ui, section: Section) {
             Section::Animations => animations_ui(ed, ui),
             Section::Agent => {}
             Section::DeviceFrame => device_ui(ed, ui),
+            Section::Chapters => crate::chapters::ui(ed, ui),
         }
         ui.add_space(24.0);
     });

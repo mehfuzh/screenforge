@@ -180,11 +180,13 @@ pub struct TimelineWidget {
     /// when playback starts again.
     follow: bool,
     was_playing: bool,
+    /// The project before a chapter flag being dragged.
+    chapter_drag: Option<Project>,
 }
 
 impl Default for TimelineWidget {
     fn default() -> Self {
-        TimelineWidget { px_per_sec: 40.0, scroll_x: 0.0, drag: None, audio_drag: None, peaks: None, peaks_gen: u64::MAX, item_drag: None, voice_peaks: Default::default(), music_peaks: Default::default(), voice_peaks_gen: u64::MAX, ctx_ms: 0.0, snap_x: None, follow: true, was_playing: false }
+        TimelineWidget { px_per_sec: 40.0, scroll_x: 0.0, drag: None, audio_drag: None, peaks: None, peaks_gen: u64::MAX, item_drag: None, voice_peaks: Default::default(), music_peaks: Default::default(), voice_peaks_gen: u64::MAX, ctx_ms: 0.0, snap_x: None, follow: true, was_playing: false, chapter_drag: None }
     }
 }
 
@@ -586,6 +588,9 @@ impl TimelineWidget {
         // zoom items (source time; mapped through the slices, so cut parts are hidden)
         self.lane_ui(ed, ui, &painter, rect, zoom_top, Lane::Zoom, base_id, x_of, ms_of, &clip_boundaries, src_duration, &mut seek_to);
 
+        // chapter flags in the marker row, over the cut badges
+        self.chapters_ui(ed, ui, &painter, rect, marker_top, base_id, x_of, ms_of, &mut seek_to);
+
         // scrubbing on empty space / ruler
         if resp.clicked() || resp.drag_started() || resp.dragged() {
             if let Some(p) = resp.interact_pointer_pos() {
@@ -604,6 +609,9 @@ impl TimelineWidget {
         if ed.selected_slice.is_some() || ed.selected_zoom.is_some() || ed.selected_mask.is_some() || ed.selected_audio.is_some() {
             ed.selected_voice_over = None;
             ed.selected_music = None;
+        }
+        if ed.selected_slice.is_some() || ed.selected_zoom.is_some() || ed.selected_mask.is_some() || ed.selected_audio.is_some() || ed.selected_voice_over.is_some() || ed.selected_music.is_some() || ed.selected_clip.is_some() {
+            ed.selected_chapter = None;
         }
 
         // snap guide
@@ -628,6 +636,95 @@ impl TimelineWidget {
 }
 
 impl TimelineWidget {
+    /// Chapter flags in the marker row (`top`): a click selects one and goes to it, a drag
+    /// moves it, right-click removes it. On the empty row a double-click or the context menu
+    /// adds one; a click or drag scrubs.
+    #[allow(clippy::too_many_arguments)]
+    fn chapters_ui(&mut self, ed: &mut Editor, ui: &mut egui::Ui, painter: &egui::Painter, rect: Rect, top: f32, base_id: egui::Id, x_of: impl Fn(f64) -> f32 + Copy, ms_of: impl Fn(f32) -> f64 + Copy, seek_to: &mut Option<f64>) {
+        let row = Rect::from_min_max(pos2(rect.left(), top), pos2(rect.right(), top + MARKER_H));
+        let bg = ui.interact(row, base_id.with("chapter-row"), Sense::click_and_drag()).on_hover_text("Double-click to add a chapter");
+        if let Some(p) = bg.interact_pointer_pos() {
+            if bg.double_clicked() {
+                crate::chapters::add_at(ed, ms_of(p.x));
+            } else if bg.clicked() || bg.drag_started() || bg.dragged() {
+                *seek_to = Some(ms_of(p.x));
+            }
+            if bg.secondary_clicked() {
+                self.ctx_ms = ms_of(p.x);
+            }
+        }
+        let ctx_ms = self.ctx_ms;
+        bg.context_menu(|ui| {
+            if ui.button("Add chapter here").clicked() {
+                crate::chapters::add_at(ed, ctx_ms);
+                ui.close();
+            }
+        });
+
+        let pal = theme::p();
+        let duration = ed.duration_ms();
+        let placed = sf_engine::chapters::placed(&ed.session.pkg.project.scenes[0], &ed.session.timeline);
+        for (i, c) in placed.iter().enumerate() {
+            let x = x_of(c.start_ms);
+            let next_x = placed.get(i + 1).map_or(f32::INFINITY, |n| x_of(n.start_ms));
+            let title = if c.title.trim().is_empty() { "Untitled".to_string() } else { c.title.clone() };
+            let galley = painter.layout_no_wrap(title.clone(), egui::FontId::proportional(12.0), pal.text);
+            let w = (24.0 + galley.size().x).min(180.0).min((next_x - x - 2.0).max(20.0));
+            let flag = Rect::from_min_size(pos2(x, top), vec2(w, MARKER_H - 2.0));
+            if flag.right() < rect.left() || flag.left() > rect.right() {
+                continue;
+            }
+            let selected = ed.selected_chapter.as_deref() == Some(c.id.as_str());
+            let fill = if selected { pal.accent.gamma_multiply(0.35) } else { pal.card_3 };
+            painter.rect(flag, 2.0, fill, Stroke::new(1.0, if selected { pal.accent } else { pal.border }), egui::StrokeKind::Inside);
+            painter.line_segment([pos2(x, flag.bottom()), pos2(x, top + MARKER_H + GAP)], Stroke::new(1.0, if selected { pal.accent } else { pal.text_faint }));
+            crate::widgets::paint_icon(painter, Rect::from_center_size(pos2(x + 11.0, flag.center().y), vec2(12.0, 12.0)), crate::widgets::Icon::Flag, if selected { pal.accent } else { pal.text_dim });
+            painter.with_clip_rect(flag.shrink(1.0).intersect(rect)).galley(pos2(x + 20.0, flag.center().y - galley.size().y / 2.0), galley, pal.text);
+
+            let resp = ui
+                .interact(flag, base_id.with(("chapter", &c.id)), Sense::click_and_drag())
+                .on_hover_cursor(CursorIcon::Grab)
+                .on_hover_text(format!("{title}  {}\nDrag to move it", sf_engine::chapters::timestamp(c.start_ms, duration)));
+            if resp.clicked() || resp.drag_started() {
+                ed.selected_slice = None;
+                ed.selected_zoom = None;
+                ed.selected_mask = None;
+                ed.selected_clip = None;
+                ed.selected_audio = None;
+                ed.selected_voice_over = None;
+                ed.selected_music = None;
+                crate::chapters::select(ed, &c.id);
+            }
+            if resp.clicked() {
+                *seek_to = Some(c.start_ms);
+            }
+            if resp.drag_started() {
+                self.chapter_drag = Some(ed.session.pkg.project.clone());
+            }
+            if resp.dragged() {
+                let t = ms_of(x + resp.drag_delta().x);
+                crate::chapters::move_live(ed, &c.id, t);
+                *seek_to = Some(t.clamp(0.0, duration));
+            }
+            if resp.drag_stopped() {
+                if let Some(s) = self.chapter_drag.take() {
+                    ed.commit_live_edit(s);
+                }
+            }
+            let id = c.id.clone();
+            resp.context_menu(|ui| {
+                if ui.button("Rename").clicked() {
+                    crate::chapters::select(ed, &id);
+                    ui.close();
+                }
+                if ui.button("Remove chapter").clicked() {
+                    crate::chapters::remove(ed, &id);
+                    ui.close();
+                }
+            });
+        }
+    }
+
     #[allow(clippy::too_many_arguments)]
     /// Refresh the cached waveform of `track` when the audio was reloaded.
     /// Items of a zoom or mask lane at `top`: blocks you can select, move and resize, with a
@@ -1955,6 +2052,9 @@ fn zoom_track_menu(ed: &mut Editor, ui: &mut egui::Ui, at_ms: f64) {
     if ui.button("Add zoom here").clicked() {
         let src = ed.session.timeline.output_to_source(at_ms).unwrap_or(0.0);
         add_zoom_at(ed, src);
+    }
+    if ui.button("Add chapter here").clicked() {
+        crate::chapters::add_at(ed, at_ms);
     }
     if ui.button("Auto zooms").on_hover_text("Replace all zooms with automatic ones generated from clicks").clicked() {
         let zooms = ed.session.auto_zooms();

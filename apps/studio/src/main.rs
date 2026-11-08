@@ -7,6 +7,7 @@ mod window_select;
 mod audio;
 mod camera_bubble;
 mod captions;
+mod chapters;
 mod crop;
 mod editor;
 mod enhance;

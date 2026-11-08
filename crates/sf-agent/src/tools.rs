@@ -88,6 +88,7 @@ pub fn definitions() -> Value {
     if let Value::Array(list) = &mut tools {
         list.extend(crate::items::definitions());
         list.extend(crate::layers::definitions());
+        list.extend(crate::chapters::definitions());
     }
     tools
 }
@@ -378,7 +379,7 @@ impl Workspace {
         if self.project.scenes.is_empty() {
             return Err("the project has no scene".into());
         }
-        let outcome = match self.run_item(name, input).or_else(|| self.run_layer(name, input)) {
+        let outcome = match self.run_item(name, input).or_else(|| self.run_layer(name, input)).or_else(|| self.run_chapters(name, input)) {
             Some(r) => r,
             None => self.run_timeline(name, input),
         }?;

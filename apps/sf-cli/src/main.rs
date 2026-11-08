@@ -98,6 +98,9 @@ enum Cmd {
         #[arg(short, long, default_value = "captions.srt")]
         out: PathBuf,
     },
+    /// Print the chapters as a YouTube description lists them (`00:00 Intro`, edited-video
+    /// times); what YouTube would object to goes to stderr
+    Chapters { path: PathBuf },
     /// Re-save a package (useful to migrate v3 → v4 on disk). Writes project.json.bak first.
     Resave { path: PathBuf },
     /// Copy a .screenstudio package into a folder as a .screenforge package (the original is untouched)
@@ -248,6 +251,19 @@ fn main() -> Result<()> {
             let vtt = out.extension().is_some_and(|e| e.eq_ignore_ascii_case("vtt"));
             std::fs::write(&out, if vtt { session.captions_vtt() } else { session.captions_srt() })?;
             println!("wrote {}", out.display());
+            Ok(())
+        }
+        Cmd::Chapters { path } => {
+            let pkg = sf_project::ProjectPackage::open(&path)?;
+            let scene = pkg.project.scenes.first().ok_or_else(|| anyhow::anyhow!("the project has no scene"))?;
+            let timeline = sf_engine::timeline::Timeline::from_scene(scene);
+            let yt = sf_engine::chapters::youtube(&sf_engine::chapters::placed(scene, &timeline), timeline.duration_ms());
+            if !yt.text.is_empty() {
+                println!("{}", yt.text);
+            }
+            for w in &yt.warnings {
+                eprintln!("warning: {w}");
+            }
             Ok(())
         }
         Cmd::Resave { path } => {
