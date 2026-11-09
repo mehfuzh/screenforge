@@ -337,6 +337,35 @@ fn exports_a_range_without_audio() {
     assert!((d - 1000.0).abs() < 150.0, "duration {d}");
 }
 
+#[test]
+fn exports_chapters_into_the_mp4_and_a_youtube_list_beside_it() {
+    use sf_project::{Chapter, SceneChaptersExt};
+    let f = fixture(false);
+    let mut pkg = ProjectPackage::open(&f.project).unwrap();
+    // 2× over the second half: chapters keep their moments, the file's times shrink
+    let scene = &mut pkg.project.scenes[0];
+    scene.slices = vec![Slice::new(0.0, 2000.0), Slice { time_scale: 0.5, ..Slice::new(2000.0, DURATION_MS) }];
+    scene.set_chapters(vec![Chapter::new("Intro", 0.0, None), Chapter::new("Middle", 1500.0, None), Chapter::new("Fast part", 3000.0, None)]);
+    pkg.save().unwrap();
+
+    let opts = sf_export::ExportOptions { output: f.root.join("chapters.mp4"), fps: 15.0, max_height: 240, ..Default::default() };
+    let Some(path) = export(&f.project, opts) else { return };
+    let out = Command::new(sf_media::ffmpeg::ffprobe_path().unwrap()).args(["-v", "error", "-show_chapters", "-of", "json"]).arg(&path).output().unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let chapters: Vec<(String, f64)> = v["chapters"].as_array().unwrap().iter().map(|c| (c["tags"]["title"].as_str().unwrap().to_string(), c["start_time"].as_str().unwrap().parse::<f64>().unwrap())).collect();
+    assert_eq!(chapters.iter().map(|c| c.0.as_str()).collect::<Vec<_>>(), ["Intro", "Middle", "Fast part"]);
+    assert!((chapters[1].1 - 1.5).abs() < 0.01 && (chapters[2].1 - 2.5).abs() < 0.01, "{chapters:?}");
+
+    let txt = std::fs::read_to_string(sf_export::chapters_txt_path(&path)).unwrap();
+    assert_eq!(txt, "00:00 Intro\n00:01 Middle\n00:02 Fast part\n");
+    assert_eq!(sf_export::chapters_txt_path(&path), f.root.join("chapters.chapters.txt"));
+
+    // a range starts the file with the chapter playing there
+    let opts = sf_export::ExportOptions { output: f.root.join("part.mp4"), fps: 15.0, max_height: 240, range_ms: Some((2000.0, 3000.0)), ..Default::default() };
+    let Some(path) = export(&f.project, opts) else { return };
+    assert_eq!(std::fs::read_to_string(sf_export::chapters_txt_path(&path)).unwrap(), "00:00 Middle\n00:00 Fast part\n");
+}
+
 fn export_short(codec: sf_media::VideoCodec, name: &str, expect: &str) -> Option<sf_media::MediaInfo> {
     let f = fixture(false);
     let opts = sf_export::ExportOptions { output: f.root.join(name), fps: 15.0, max_height: 240, codec, range_ms: Some((0.0, 1000.0)), ..Default::default() };

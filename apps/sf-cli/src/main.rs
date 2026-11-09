@@ -180,6 +180,11 @@ fn main() -> Result<()> {
                 }
             })?;
             eprintln!("\nwrote {}", result.display());
+            let txt = sf_export::chapters_txt_path(&result);
+            let modified = |f: &std::path::Path| std::fs::metadata(f).and_then(|m| m.modified()).ok();
+            if modified(&txt).zip(modified(&result)).is_some_and(|(t, v)| t >= v) {
+                eprintln!("wrote {} (chapters for a YouTube description)", txt.display());
+            }
             Ok(())
         }
         Cmd::Presets { folder } => {

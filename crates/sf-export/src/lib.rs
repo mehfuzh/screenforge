@@ -144,6 +144,9 @@ pub fn export_cancellable(session: &mut Session, comp: &mut Compositor, opts: &E
         duration_ms: Some(total_frames as f64 * frame_ms),
         ..Default::default()
     };
+    // chapters as they fall in this file (none in a GIF)
+    let chapters = if opts.codec == VideoCodec::Gif { vec![] } else { exported_chapters(session, start, end) };
+    let wopts = VideoWriterOptions { chapters: chapters.iter().map(|c| (c.start_ms, c.title.clone())).collect(), ..wopts };
     let mut writer = VideoWriter::create(&opts.output, &wopts)?;
 
     session.decode_max_width = None;
@@ -158,5 +161,23 @@ pub fn export_cancellable(session: &mut Session, comp: &mut Compositor, opts: &E
         writer.write_frame(&px)?;
         progress(Progress { frame: i + 1, total_frames, output_ms: t });
     }
-    Ok(writer.finish()?)
+    let path = writer.finish()?;
+    if !chapters.is_empty() {
+        let yt = sf_engine::chapters::youtube(&chapters, end - start);
+        std::fs::write(chapters_txt_path(&path), yt.text + "\n")?;
+    }
+    Ok(path)
+}
+
+/// The project's chapters in an export of `[start, end)` of the timeline.
+fn exported_chapters(session: &Session, start: f64, end: f64) -> Vec<sf_engine::chapters::Placed> {
+    let Some(scene) = session.pkg.project.scenes.first() else { return vec![] };
+    sf_engine::chapters::in_range(&sf_engine::chapters::placed(scene, &session.timeline), start, end)
+}
+
+/// Where an export's chapter list for a YouTube description is written: beside the video,
+/// `Demo.mp4` → `Demo.chapters.txt`.
+pub fn chapters_txt_path(video: &std::path::Path) -> PathBuf {
+    let stem = video.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| "export".into());
+    video.with_file_name(format!("{stem}.chapters.txt"))
 }

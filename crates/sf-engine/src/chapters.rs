@@ -45,6 +45,24 @@ pub fn placed(scene: &Scene, timeline: &Timeline) -> Vec<Placed> {
     list
 }
 
+/// `chapters` (from [`placed`]) as they fall in an export of `[start, end)` of the timeline,
+/// with times from the start of that file. The chapter playing at `start` (or the first one
+/// after it) starts the file at 0, as YouTube and players expect.
+pub fn in_range(chapters: &[Placed], start: f64, end: f64) -> Vec<Placed> {
+    let mut out: Vec<Placed> = vec![];
+    for c in chapters.iter().filter(|c| c.start_ms < end) {
+        let at = (c.start_ms - start).max(0.0);
+        if at == 0.0 {
+            out.clear();
+        }
+        out.push(Placed { start_ms: at, ..c.clone() });
+    }
+    if let Some(first) = out.first_mut() {
+        first.start_ms = 0.0;
+    }
+    out
+}
+
 /// `m:ss`, or `h:mm:ss` when the video is an hour or longer (whole seconds, rounded down, as
 /// YouTube links to them).
 pub fn timestamp(ms: f64, video_ms: f64) -> String {
@@ -134,6 +152,16 @@ mod tests {
         s.set_chapters(vec![Chapter::new("Welcome", src, card), Chapter::new("Demo", src2, None)]);
         let list = placed(&s, &tl);
         assert_eq!(list.iter().map(|c| c.start_ms).collect::<Vec<_>>(), vec![0.0, 5000.0]);
+    }
+
+    #[test]
+    fn an_exported_range_keeps_its_chapters_from_zero() {
+        let all = placed_at(&[(2000.0, "A"), (20_000.0, "B"), (40_000.0, "C"), (70_000.0, "D")]);
+        let whole = in_range(&all, 0.0, 90_000.0);
+        assert_eq!(whole.iter().map(|c| (c.title.as_str(), c.start_ms)).collect::<Vec<_>>(), vec![("A", 0.0), ("B", 20_000.0), ("C", 40_000.0), ("D", 70_000.0)]);
+        let part = in_range(&all, 30_000.0, 60_000.0);
+        assert_eq!(part.iter().map(|c| (c.title.as_str(), c.start_ms)).collect::<Vec<_>>(), vec![("B", 0.0), ("C", 10_000.0)]);
+        assert!(in_range(&[], 0.0, 1000.0).is_empty());
     }
 
     #[test]

@@ -215,6 +215,15 @@ impl ExportDialog {
                     ui.add_space(2.0);
                     let name = p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
                     ui.label(RichText::new(name).size(13.0).color(pal.text_dim)).on_hover_text(p.display().to_string());
+                    // written after the video by this export (an older list of a project that
+                    // has no chapters now is not mentioned)
+                    let txt = sf_export::chapters_txt_path(p);
+                    let modified = |f: &std::path::Path| std::fs::metadata(f).and_then(|m| m.modified()).ok();
+                    if modified(&txt).zip(modified(p)).is_some_and(|(t, v)| t >= v) {
+                        ui.add_space(4.0);
+                        let txt_name = txt.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                        widgets::hint(ui, &format!("Chapters are in the video, and listed for a YouTube description in {txt_name}."));
+                    }
                     ui.add_space(10.0);
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if widgets::accent_button(ui, "Done").clicked() {
