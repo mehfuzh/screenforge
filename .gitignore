@@ -12,6 +12,9 @@
 backend/supabase/.temp/
 /supabase/
 
+# release notes pages, generated before each deploy (scripts/gen-releases.py)
+/site/releases/
+
 # wrangler (Cloudflare Pages deploy) cache
 .wrangler/
 .claude/
