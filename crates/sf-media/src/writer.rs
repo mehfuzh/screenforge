@@ -128,6 +128,9 @@ pub struct VideoWriterOptions {
     pub audio_sample_rate: u32,
     /// Clip the output (video and mixed audio) to this length.
     pub duration_ms: Option<f64>,
+    /// Chapters as (start ms, title), in order: written into MP4, MOV and WebM files for
+    /// players' chapter menus (GIF has none). Each ends where the next starts.
+    pub chapters: Vec<(f64, String)>,
 }
 
 impl Default for VideoWriterOptions {
@@ -142,6 +145,7 @@ impl Default for VideoWriterOptions {
             audio: vec![],
             audio_sample_rate: 48_000,
             duration_ms: None,
+            chapters: vec![],
         }
     }
 }
@@ -152,6 +156,31 @@ pub struct VideoWriter {
     frame_bytes: usize,
     pub frames_written: u64,
     pub output: PathBuf,
+    /// The chapters' ffmetadata file, removed when the writer is done.
+    chapters_file: Option<PathBuf>,
+}
+
+/// An ffmetadata value: `=`, `;`, `#`, `\\` and line breaks are escaped with a backslash.
+fn ffmeta_escape(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        if matches!(c, '=' | ';' | '#' | '\\' | '\n') {
+            out.push('\\');
+        }
+        out.push(c);
+    }
+    out
+}
+
+/// ffmpeg's metadata file for `chapters` (start ms, title), each ending at the next start and
+/// the last at `end_ms`.
+pub fn chapters_ffmetadata(chapters: &[(f64, String)], end_ms: f64) -> String {
+    let mut s = String::from(";FFMETADATA1\n");
+    for (i, (start, title)) in chapters.iter().enumerate() {
+        let end = chapters.get(i + 1).map_or(end_ms, |n| n.0).max(*start + 1.0);
+        s.push_str(&format!("[CHAPTER]\nTIMEBASE=1/1000\nSTART={}\nEND={}\ntitle={}\n", start.round() as i64, end.round() as i64, ffmeta_escape(title)));
+    }
+    s
 }
 
 impl VideoWriter {
@@ -178,6 +207,17 @@ impl VideoWriter {
             }
             cmd.arg("-i").arg(&a.path);
         }
+        // n+1: the chapters, as an ffmetadata file
+        let chapters_file = if opts.chapters.is_empty() || opts.codec == VideoCodec::Gif {
+            None
+        } else {
+            let end = opts.duration_ms.unwrap_or_else(|| opts.chapters.last().map_or(0.0, |c| c.0) + 1000.0);
+            let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
+            let path = std::env::temp_dir().join(format!("sf-chapters-{}-{nanos}.txt", std::process::id()));
+            std::fs::write(&path, chapters_ffmetadata(&opts.chapters, end))?;
+            cmd.args(["-f", "ffmetadata", "-i"]).arg(&path);
+            Some(path)
+        };
         if !opts.audio.is_empty() {
             let mut filter = String::new();
             for (i, a) in opts.audio.iter().enumerate() {
@@ -198,6 +238,9 @@ impl VideoWriter {
             filter.push_str(&format!("amix=inputs={}:normalize=0:dropout_transition=0[aout]", opts.audio.len()));
             cmd.arg("-filter_complex").arg(filter);
             cmd.args(["-map", "0:v", "-map", "[aout]"]);
+            if chapters_file.is_some() {
+                cmd.arg("-map_chapters").arg((opts.audio.len() + 1).to_string());
+            }
             // WebM only carries Vorbis or Opus audio
             if opts.codec == VideoCodec::Vp9 {
                 cmd.args(["-c:a", "libopus", "-b:a", "160k"]);
@@ -248,6 +291,9 @@ impl VideoWriter {
                 cmd.arg("-crf").arg(crf.to_string());
             }
         }
+        if chapters_file.is_some() && opts.audio.is_empty() {
+            cmd.args(["-map", "0:v", "-map_chapters", "1"]);
+        }
         if let Some(d) = opts.duration_ms {
             cmd.arg("-t").arg(format!("{:.3}", d / 1000.0));
         }
@@ -261,6 +307,7 @@ impl VideoWriter {
             frame_bytes: opts.width as usize * opts.height as usize * opts.format.bytes_per_pixel(),
             frames_written: 0,
             output: output.into(),
+            chapters_file,
         })
     }
 
@@ -314,6 +361,9 @@ impl Drop for VideoWriter {
         if self.stdin.is_some() {
             drop(self.stdin.take());
             let _ = self.child.wait();
+        }
+        if let Some(f) = self.chapters_file.take() {
+            let _ = std::fs::remove_file(f);
         }
     }
 }
@@ -377,5 +427,40 @@ mod tests {
         }
         assert_eq!(n, 15);
         let _ = std::fs::remove_file(out);
+    }
+
+    #[test]
+    fn chapter_titles_are_escaped_and_each_ends_at_the_next() {
+        let meta = chapters_ffmetadata(&[(0.0, "Intro".into()), (12_345.6, "a=b; #1 \\ x\ny".into())], 30_000.0);
+        assert_eq!(meta, ";FFMETADATA1\n[CHAPTER]\nTIMEBASE=1/1000\nSTART=0\nEND=12346\ntitle=Intro\n[CHAPTER]\nTIMEBASE=1/1000\nSTART=12346\nEND=30000\ntitle=a\\=b\\; \\#1 \\\\ x\\\ny\n");
+    }
+
+    #[test]
+    fn chapters_are_written_into_the_file() {
+        if crate::ffmpeg::ffmpeg_path().is_err() {
+            eprintln!("ffmpeg missing; skipping");
+            return;
+        }
+        for (codec, ext, audio) in [(VideoCodec::H264, "mp4", false), (VideoCodec::H264, "mp4", true), (VideoCodec::Vp9, "webm", false)] {
+            let out = std::env::temp_dir().join(format!("sf-media-chapters-{audio}.{ext}"));
+            let wav = std::env::temp_dir().join("sf-media-chapters.wav");
+            let mut opts = VideoWriterOptions { width: 64, height: 64, fps: 10.0, codec, duration_ms: Some(3000.0), chapters: vec![(0.0, "One".into()), (1000.0, "Two".into()), (2000.0, "Three".into())], ..Default::default() };
+            if audio {
+                let ok = crate::ffmpeg::ffmpeg_cmd().unwrap().args(["-y", "-v", "error", "-f", "lavfi", "-i", "sine=d=3", "-ar", "48000"]).arg(&wav).status().unwrap();
+                assert!(ok.success());
+                opts.audio = vec![AudioMixInput::new(&wav)];
+            }
+            let mut w = VideoWriter::create(&out, &opts).unwrap();
+            let px = vec![128u8; 64 * 64 * 4];
+            for _ in 0..30 {
+                w.write_frame(&px).unwrap();
+            }
+            w.finish().unwrap();
+            let probe = crate::ffmpeg::ffprobe_cmd().unwrap().args(["-v", "error", "-show_chapters", "-of", "json"]).arg(&out).output().unwrap();
+            let v: serde_json::Value = serde_json::from_slice(&probe.stdout).unwrap();
+            let titles: Vec<&str> = v["chapters"].as_array().unwrap().iter().map(|c| c["tags"]["title"].as_str().unwrap_or("")).collect();
+            assert_eq!(titles, ["One", "Two", "Three"], "{codec:?} audio={audio}");
+            let _ = std::fs::remove_file(out);
+        }
     }
 }

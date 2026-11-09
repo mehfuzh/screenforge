@@ -22,6 +22,7 @@
 //! Screen Studio survive a load/save round-trip through this crate.
 
 pub mod audio_clips;
+pub mod chapters;
 pub mod ids;
 pub mod merge;
 pub mod music_clips;
@@ -36,6 +37,7 @@ pub mod transcript;
 pub use package::{ImportProgress, ProjectPackage, PACKAGE_EXTENSION, PRESET_EXTENSION, SCREEN_STUDIO_EXTENSION, SCREEN_STUDIO_PRESET_EXTENSION};
 pub use preset::Preset;
 pub use audio_clips::{AudioClip, AudioTrack, SceneAudioExt};
+pub use chapters::{Chapter, SceneChaptersExt};
 pub use music_clips::{MusicClip, SceneMusicExt};
 pub use tracks::{Clip, ClipAnim, MediaItem, MediaKind, SceneTracksExt, TextStyle, Track, TrackKind};
 pub use schema::v4::{self as v4, Project};

@@ -14,6 +14,7 @@
 pub mod audio;
 pub mod autozoom;
 pub mod camera;
+pub mod chapters;
 pub mod captions;
 pub mod cursor;
 pub mod device;

@@ -95,6 +95,10 @@ pub struct Editor {
     pub selected_zoom: Option<String>,
     /// Selected mask (id): its regions are edited on the preview.
     pub selected_mask: Option<String>,
+    /// Selected chapter (id), highlighted on the timeline and in the Chapters page.
+    pub selected_chapter: Option<String>,
+    /// The project before a chapter title being typed (one undo step once the field is left).
+    pub chapter_snapshot: Option<sf_project::Project>,
     /// Mask region being dragged on the preview.
     pub mask_drag: Option<crate::masks::RegionDrag>,
     /// Frames drawn since the project opened, until the window has been grown to fit the
@@ -207,6 +211,8 @@ impl Editor {
             selected_slice: None,
             selected_zoom: None,
             selected_mask: None,
+            selected_chapter: None,
+            chapter_snapshot: None,
             selected_clip: None,
             rail_fit_frames: 0,
             layers: Default::default(),
@@ -241,6 +247,7 @@ impl Editor {
                 Ok("camera-style") => Section::CameraStyle,
                 Ok("agent") => Section::Agent,
                 Ok("device") => Section::DeviceFrame,
+                Ok("chapters") => Section::Chapters,
                 Ok("general") => Section::General,
                 // the agent is the first thing to see (it offers the upgrade without Pro)
                 _ => Section::Agent,
@@ -1027,6 +1034,11 @@ impl Editor {
     }
 
     pub fn delete_selected(&mut self) {
+        if let Some(id) = self.selected_chapter.clone() {
+            crate::chapters::remove(self, &id);
+            self.set_status("Removed chapter");
+            return;
+        }
         if let Some(id) = self.selected_music.take() {
             use sf_project::SceneMusicExt;
             let mut clips = sf_engine::lanes::music_clips(&self.session.pkg.project, &self.session.timeline);
