@@ -67,6 +67,8 @@ echo "  $PAGES_HOST"
 
 echo "→ Release notes pages from the GitHub releases"
 python3 scripts/gen-releases.py
+echo "→ Shared footer on every page"
+python3 scripts/site_partials.py
 echo "→ Deploying $SITE_DIR"
 CLOUDFLARE_ACCOUNT_ID=$ACCOUNT_ID npx --yes wrangler@4 pages deploy "$SITE_DIR" --project-name "$PROJECT" --branch main --commit-dirty=true
 

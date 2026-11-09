@@ -6,6 +6,8 @@ on:
     paths:
       - "site/**"
       - "scripts/gen-releases.py"
+      - "scripts/site_partials.py"
+      - "scripts/site/**"
       - ".github/workflows/site.yml"
   # the release workflow starts this once a release is published (a release it creates with
   # GITHUB_TOKEN does not trigger `release` events); `release` covers ones published by hand
@@ -33,6 +35,9 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: python3 scripts/gen-releases.py
+      - name: Shared footer on every page
+        if: ${{ env.CF_TOKEN != '' }}
+        run: python3 scripts/site_partials.py
       - name: Deploy site/ to Cloudflare Pages
         if: ${{ env.CF_TOKEN != '' }}
         uses: cloudflare/wrangler-action@v3
