@@ -65,6 +65,8 @@ PAGES_HOST=$(cf "$API/accounts/$ACCOUNT_ID/pages/projects/$PROJECT" | jq -r '.re
 PAGES_HOST=${PAGES_HOST:-$PROJECT.pages.dev}
 echo "  $PAGES_HOST"
 
+echo "→ Release notes pages from the GitHub releases"
+python3 scripts/gen-releases.py
 echo "→ Deploying $SITE_DIR"
 CLOUDFLARE_ACCOUNT_ID=$ACCOUNT_ID npx --yes wrangler@4 pages deploy "$SITE_DIR" --project-name "$PROJECT" --branch main --commit-dirty=true
 

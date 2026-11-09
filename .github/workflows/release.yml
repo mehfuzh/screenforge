@@ -25,6 +25,7 @@ on:
         default: false
 permissions:
   contents: write
+  actions: write   # start the site deploy (release notes pages) once published
 jobs:
   build:
     name: Build, sign, notarize
@@ -272,3 +273,10 @@ jobs:
             linux/*
             windows/*
           draft: ${{ inputs.draft == true }}
+      - name: Update the site's release notes pages
+        # deploys site/ with the pages built from the releases, now including this one
+        if: ${{ inputs.draft != true }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: gh workflow run site.yml --ref main

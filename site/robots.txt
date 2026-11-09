@@ -2,3 +2,4 @@ User-agent: *
 Allow: /
 
 Sitemap: https://screenforge.studio/sitemap.xml
+Sitemap: https://screenforge.studio/releases/sitemap.xml
