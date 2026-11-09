@@ -7,7 +7,8 @@ Writes into site/releases/ (generated, not committed):
   feed.xml            Atom feed of recent releases
   sitemap.xml         the pages above (listed in site/robots.txt)
 
-The pages reuse site/terms.html's head, navigation and footer, so they match the site. Run from
+The pages reuse site/terms.html's head and navigation and the shared footer
+(scripts/site_partials.py), so they match the site. Run from
 anywhere; .github/workflows/site.yml runs it before every deploy, and the release workflow
 starts that deploy once a release is published. GH_TOKEN or GITHUB_TOKEN, when set, raises the
 GitHub API rate limit.
@@ -23,6 +24,9 @@ import sys
 import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import site_partials  # noqa: E402  the shared footer
 
 REPO = os.environ.get("REPO", "mehfuzh/screenforge")
 SITE = "https://screenforge.studio"
@@ -101,10 +105,8 @@ class Template:
         t = (SITE_DIR / "terms.html").read_text(encoding="utf-8")
         self.head = t[: t.index("</head>")]
         self.nav = t[t.index("<nav>") : t.index("</nav>") + len("</nav>")]
+        # the footer comes from the shared one (scripts/site_partials.py) when the page is written
         self.foot = t[t.index("<footer>") :]
-        if 'href="releases/"' not in self.foot:
-            self.foot = self.foot.replace('<a href="terms.html">terms</a>', '<a href="terms.html">terms</a>\n      <a href="releases/">releases</a>', 1)
-
     def page(self, depth, url, title, description, body, extra_head=""):
         head = self.head
         e = html.escape
@@ -117,7 +119,8 @@ class Template:
         head = re.sub(r'<link rel="alternate" hreflang="[^"]*" href="[^"]*">\n', "", head)
         # the template's links are relative to the site root; `body`'s to the page itself
         up = lambda part: re.sub(r'((?:href|src)=")(?!https?:|/|#|mailto:|data:)', r"\g<1>" + "../" * depth, part)
-        return up(head) + STYLE + extra_head + "</head>\n<body>\n\n" + up(self.nav) + "\n\n<main class=\"doc\">\n" + body + "\n</main>\n\n" + up(self.foot)
+        doc = up(head) + STYLE + extra_head + "</head>\n<body>\n\n" + up(self.nav) + "\n\n<main class=\"doc\">\n" + body + "\n</main>\n\n" + up(self.foot)
+        return site_partials.apply(SITE_DIR / url.removeprefix(SITE + "/").rstrip("/") / "index.html", doc)
 
 
 STYLE = """<style>
@@ -129,6 +132,8 @@ STYLE = """<style>
   .rel time, .rel-meta { font-family: var(--mono); font-size: 12.5px; color: var(--dim); font-weight: 400; }
   .rel ul, .doc .changes { margin: 0 0 8px; }
   .rel .more { font-size: 14px; }
+  .doc .lede { font-size: 17px; line-height: 1.6; margin: 18px 0 8px; max-width: 60ch; }
+  .rel .new { font-family: var(--mono); font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--on-accent); background: var(--jade); border-radius: 2px; padding: 2px 7px; }
   .dl { display: flex; flex-wrap: wrap; gap: 10px; margin: 18px 0 8px; }
   .dl a { border: 1px solid var(--line-2); border-radius: 8px; padding: 9px 14px; font-size: 14px; text-decoration: none; color: var(--white); }
   .dl a:hover { border-color: var(--jade); }
@@ -190,22 +195,21 @@ def digest_page(t, releases):
     parts = []
     for k in order:
         rs = months[k]
-        parts.append(f'  <h2 class="rel-month">{k} <span class="n">{len(rs)} release{"s" if len(rs) != 1 else ""}</span></h2>')
+        parts.append(f'  <h2 class="rel-month">{k}</h2>')
         for r in rs:
             v, items = version(r), changes(r["body"])
             shown = "\n".join(f"      <li>{inline(i)}</li>" for i in items[:DIGEST_ITEMS]) or "      <li>Maintenance release.</li>"
-            more = f'\n    <p class="more"><a href="v{v}/">and {len(items) - DIGEST_ITEMS} more changes</a></p>' if len(items) > DIGEST_ITEMS else ""
+            more = f'\n    <p class="more"><a href="v{v}/">See all {len(items)} changes</a></p>' if len(items) > DIGEST_ITEMS else ""
             d = date(r)
             parts.append(f"""  <article class="rel">
-    <h3><a href="v{v}/">ScreenForge {v}</a><time datetime="{d.strftime('%Y-%m-%d')}">{d.day} {d.strftime('%b')}</time></h3>
+    <h3><a href="v{v}/">ScreenForge {v}</a>{'<span class="new">Latest</span>' if r is latest else ''}<time datetime="{d.strftime('%Y-%m-%d')}">{d.day} {d.strftime('%B')}</time></h3>
     <ul>
 {shown}
     </ul>{more}
   </article>""")
-    body = f"""  <div class="eyebrow">Changelog</div>
-  <h1>Release notes</h1>
-  <p class="stamp">Latest: <a href="v{version(latest)}/">ScreenForge {version(latest)}</a>, {long_date(date(latest))} · {len(releases)} releases · <a href="feed.xml">Atom feed</a></p>
-  <p>What changed in every version of ScreenForge, the screen recorder and editor for macOS, Windows and Linux. Newest first; each version has its own page with its downloads.</p>
+    body = f"""  <div class="eyebrow">Release notes</div>
+  <h1>What’s new in ScreenForge</h1>
+  <p class="lede">Every update to ScreenForge, newest first. Open a version to see everything in it and download it. The app tells you when a new one is out, or you can <a href="feed.xml">follow updates with RSS</a>.</p>
 {chr(10).join(parts)}"""
     extra = f'<link rel="alternate" type="application/atom+xml" title="ScreenForge releases" href="{SITE}/releases/feed.xml">\n'
     desc = f"What changed in each ScreenForge version, newest first. Latest: {version(latest)} ({long_date(date(latest))}): " + summary(changes(latest["body"]), 90)
