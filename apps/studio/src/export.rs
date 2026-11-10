@@ -426,7 +426,8 @@ impl ExportDialog {
                 let line = if *n == free { format!("You have {free} free exports. After that, Pro or Creator keeps you exporting.") } else { format!("{n} of {free} free exports left on this computer.") };
                 ui.add(egui::Label::new(RichText::new(line).size(13.0).color(pal.text)).wrap());
                 ui.add_space(4.0);
-                if !self.show_upgrade && !self.signing_in && ui.link(RichText::new("Remove the limit").color(pal.text_dim)).clicked() {
+                // secondary: Export stays the dialog's one accent button
+                if !self.show_upgrade && !self.signing_in && widgets::secondary_button(ui, "Remove the limit").clicked() {
                     self.show_upgrade = true;
                 }
                 self.show_upgrade || self.signing_in
