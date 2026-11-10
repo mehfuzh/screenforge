@@ -65,6 +65,8 @@ pub struct ExportDialog {
     /// (`Err`: the server could not be reached, so there is none).
     free_left: Option<Result<u32, String>>,
     free_rx: Option<Receiver<Result<u32, String>>>,
+    /// The dialog was open last frame (opening it refreshes the free exports).
+    was_open: bool,
     /// The export running now is a free one: counted once it finishes.
     free_job: bool,
     progress: Option<sf_export::Progress>,
@@ -77,7 +79,7 @@ pub struct ExportDialog {
 /// that loads the license and talks to the backend.
 impl Default for ExportDialog {
     fn default() -> Self {
-        ExportDialog { open: false, license: sf_license::Status::Invalid("no key".into()), email: String::new(), activation: None, check_in: None, activation_msg: None, code_sent_to: None, code: String::new(), signing_in: false, promo: String::new(), promo_open: false, checkout: None, claim_until: None, next_claim: None, claim: None, free_left: None, free_rx: None, free_job: false, format: Format::Mp4, fps: 60.0, height: 1080, quality: QualityPreset::SocialMedia, codec: VideoCodec::H264, audio: true, job: None, progress: None, result: None, started: None }
+        ExportDialog { open: false, license: sf_license::Status::Invalid("no key".into()), email: String::new(), activation: None, check_in: None, activation_msg: None, code_sent_to: None, code: String::new(), signing_in: false, promo: String::new(), promo_open: false, checkout: None, claim_until: None, next_claim: None, claim: None, free_left: None, free_rx: None, was_open: false, free_job: false, format: Format::Mp4, fps: 60.0, height: 1080, quality: QualityPreset::SocialMedia, codec: VideoCodec::H264, audio: true, job: None, progress: None, result: None, started: None }
     }
 }
 
@@ -102,6 +104,10 @@ impl ExportDialog {
         };
         // a checkout from an earlier session, paid after quitting: look for it a while
         let mut d = ExportDialog { license, email, check_in, ..Default::default() };
+        // known before the dialog first opens
+        if !d.license.is_valid() {
+            d.fetch_free_exports();
+        }
         if !d.license.is_valid() && sf_license::pending_claim() {
             d.watch_claim(10 * 60);
             d.next_claim = Some(std::time::Instant::now());
@@ -216,29 +222,31 @@ impl ExportDialog {
     /// Free exports left: asked when the dialog opens without a license, forgotten when it
     /// closes so the next open asks again.
     fn poll_free_exports(&mut self, ctx: &egui::Context) {
-        if !self.open {
-            if self.free_rx.is_none() {
-                self.free_left = None;
-            }
-        } else if !self.license.is_valid() && self.free_left.is_none() && self.free_rx.is_none() {
-            let (tx, rx) = channel();
-            std::thread::spawn(move || {
-                let _ = tx.send(sf_license::free_exports_left());
-            });
-            self.free_rx = Some(rx);
+        // asked when the editor opens and again on each open, keeping the last answer
+        // meanwhile so the dialog does not change size as it appears
+        let opened = self.open && !self.was_open;
+        self.was_open = self.open;
+        if !self.license.is_valid() && self.free_rx.is_none() && (opened || (self.open && self.free_left.is_none())) {
+            self.fetch_free_exports();
         }
         if let Some(rx) = &self.free_rx {
             match rx.try_recv() {
                 Ok(r) => {
                     self.free_rx = None;
-                    if self.open {
-                        self.free_left = Some(r);
-                    }
+                    self.free_left = Some(r);
                 }
                 Err(std::sync::mpsc::TryRecvError::Empty) => ctx.request_repaint_after(std::time::Duration::from_millis(200)),
                 Err(std::sync::mpsc::TryRecvError::Disconnected) => self.free_rx = None,
             }
         }
+    }
+
+    fn fetch_free_exports(&mut self) {
+        let (tx, rx) = channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(sf_license::free_exports_left());
+        });
+        self.free_rx = Some(rx);
     }
 
     /// Exporting is allowed: a license, or a free export left (known from the server).
@@ -416,9 +424,10 @@ impl ExportDialog {
         widgets::title(ui, "License");
         let free = sf_license::FREE_EXPORTS;
         let show = match &self.free_left {
+            // same layout as the answer (the upgrade buttons below), so nothing jumps
             None => {
-                widgets::hint(ui, "Checking your free exports…");
-                false
+                ui.add(egui::Label::new(RichText::new("Checking your free exports…").size(13.0).color(pal.text_dim)).wrap());
+                true
             }
             Some(Ok(n)) if *n > 0 => {
                 // the upgrade buttons show right under it, as when none are left
