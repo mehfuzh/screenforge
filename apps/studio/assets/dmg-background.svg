@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="560" height="360" viewBox="0 0 560 360">
+  <!-- DMG window background (scripts/gen-icons.sh renders it to dmg-background.tiff at 1x and 2x).
+       Light on purpose: Finder draws the icon labels in dark text over a background picture.
+       Icons sit at (150,190) and (410,190), 112 px; see scripts/dmg.sh. -->
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0.3" y2="1">
+      <stop offset="0" stop-color="#fbfaff"/>
+      <stop offset="1" stop-color="#eeedf3"/>
+    </linearGradient>
+    <radialGradient id="warm" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#ff8a45" stop-opacity="0.16"/>
+      <stop offset="1" stop-color="#ff8a45" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="arrow" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#ffb070"/>
+      <stop offset="1" stop-color="#ff4a5c"/>
+    </linearGradient>
+  </defs>
+  <rect width="560" height="360" fill="url(#bg)"/>
+  <ellipse cx="150" cy="186" rx="130" ry="112" fill="url(#warm)"/>
+  <text x="280" y="54" text-anchor="middle" font-family="Helvetica Neue, Helvetica, Arial, sans-serif"
+        font-size="20" font-weight="600" fill="#232130">Install ScreenForge</text>
+  <text x="280" y="78" text-anchor="middle" font-family="Helvetica Neue, Helvetica, Arial, sans-serif"
+        font-size="12" fill="#6b6878">Drag the app into your Applications folder</text>
+  <path d="M230 184 C 260 162, 298 162, 324 180" fill="none" stroke="url(#arrow)" stroke-width="3.5"
+        stroke-linecap="round" stroke-dasharray="0.1 10"/>
+  <path d="M327.3 172.1 L332 185 L318.3 185.3" fill="none" stroke="#ff4a5c" stroke-width="3.5"
+        stroke-linecap="round" stroke-linejoin="round"/>
+  <text x="280" y="330" text-anchor="middle" font-family="Helvetica Neue, Helvetica, Arial, sans-serif"
+        font-size="10" fill="#9a97a6">screenforge.studio</text>
+</svg>

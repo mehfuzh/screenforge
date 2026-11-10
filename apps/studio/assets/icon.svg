@@ -23,8 +23,9 @@
       <stop offset="1" stop-color="#ff4a5c"/>
     </linearGradient>
   </defs>
-  <rect x="100" y="118" width="824" height="824" rx="185" fill="#000" opacity="0.35" filter="url(#shadow)"/>
-  <rect x="100" y="100" width="824" height="824" rx="185" fill="url(#bg)"/>
+  <!-- the tile is Apple's continuous-corner squircle (the same mask macOS 26 applies), so the system does not re-mask it -->
+  <path transform="translate(0 18)" d="M427.13 100.00L596.87 100.00C691.06 100.00 738.16 100.00 788.86 116.03C844.22 136.18 887.82 179.78 907.97 235.14C924.00 285.84 924.00 332.94 924.00 427.13L924.00 596.87C924.00 691.06 924.00 738.16 907.97 788.86C887.82 844.22 844.22 887.82 788.86 907.97C738.16 924.00 691.06 924.00 596.87 924.00L427.13 924.00C332.94 924.00 285.84 924.00 235.14 907.97C179.78 887.82 136.18 844.22 116.03 788.86C100.00 738.16 100.00 691.06 100.00 596.87L100.00 427.13C100.00 332.94 100.00 285.84 116.03 235.14C136.18 179.78 179.78 136.18 235.14 116.03C285.84 100.00 332.94 100.00 427.13 100.00Z" fill="#000" opacity="0.35" filter="url(#shadow)"/>
+  <path d="M427.13 100.00L596.87 100.00C691.06 100.00 738.16 100.00 788.86 116.03C844.22 136.18 887.82 179.78 907.97 235.14C924.00 285.84 924.00 332.94 924.00 427.13L924.00 596.87C924.00 691.06 924.00 738.16 907.97 788.86C887.82 844.22 844.22 887.82 788.86 907.97C738.16 924.00 691.06 924.00 596.87 924.00L427.13 924.00C332.94 924.00 285.84 924.00 235.14 907.97C179.78 887.82 136.18 844.22 116.03 788.86C100.00 738.16 100.00 691.06 100.00 596.87L100.00 427.13C100.00 332.94 100.00 285.84 116.03 235.14C136.18 179.78 179.78 136.18 235.14 116.03C285.84 100.00 332.94 100.00 427.13 100.00Z" fill="url(#bg)"/>
   <!-- the mark: a round inset lens (dark well, inner shadow at the top, light bezel edge) with a record dot.
        It is a circle so the same artwork works as a circle-cropped avatar. The tile is a lighter slate than
        the well so the lens reads as inset, and the bezel is bright enough to survive 32 px. -->

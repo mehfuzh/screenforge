@@ -83,7 +83,7 @@ mod windows_tray {
     use tray_icon::{Icon, TrayIcon, TrayIconBuilder};
 
     pub fn create(menu: &muda::Menu) -> Option<TrayIcon> {
-        let img = image::load_from_memory(include_bytes!("../assets/icon-256.png")).ok()?.resize_exact(32, 32, image::imageops::FilterType::Lanczos3).to_rgba8();
+        let img = image::load_from_memory(include_bytes!("../assets/icon-tile-256.png")).ok()?.resize_exact(32, 32, image::imageops::FilterType::Lanczos3).to_rgba8();
         let (w, h) = img.dimensions();
         let icon = Icon::from_rgba(img.into_raw(), w, h).ok()?;
         TrayIconBuilder::new().with_menu(Box::new(menu.clone())).with_tooltip("ScreenForge").with_icon(icon).build().ok()

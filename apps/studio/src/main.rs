@@ -52,6 +52,13 @@ fn main() -> eframe::Result {
     sf_recording::clock::init();
     tracing_subscriber::fmt().with_env_filter(tracing_subscriber::EnvFilter::from_default_env()).init();
     open_docs::install();
+    // macOS: an empty icon keeps the bundle's icon.icns in the Dock; setting one would swap it for a
+    // single 256 px raster. Windows uses the shadowless tile that icon.ico is built from.
+    #[cfg(target_os = "macos")]
+    let icon = egui::IconData::default();
+    #[cfg(target_os = "windows")]
+    let icon = eframe::icon_data::from_png_bytes(include_bytes!("../assets/icon-tile-256.png")).expect("app icon");
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     let icon = eframe::icon_data::from_png_bytes(include_bytes!("../assets/icon-256.png")).expect("app icon");
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
