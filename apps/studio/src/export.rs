@@ -49,6 +49,18 @@ pub struct ExportDialog {
     /// A code was emailed for this address; the dialog asks for it.
     code_sent_to: Option<String>,
     code: String,
+    /// "Already bought? Sign in": the email and code form is open.
+    signing_in: bool,
+    /// Coupon for the checkout, and whether its field is open.
+    promo: String,
+    promo_open: bool,
+    /// A checkout being opened: its URL, or why it failed (an unknown coupon).
+    checkout: Option<Receiver<Result<String, String>>>,
+    /// A checkout started here, polled silently until then: once paid it activates this
+    /// computer by itself (see `sf_license::claim_checkout`).
+    claim_until: Option<std::time::Instant>,
+    next_claim: Option<std::time::Instant>,
+    claim: Option<Receiver<Result<sf_license::Claim, String>>>,
     progress: Option<sf_export::Progress>,
     result: Option<Result<PathBuf, String>>,
     started: Option<std::time::Instant>,
@@ -59,7 +71,7 @@ pub struct ExportDialog {
 /// that loads the license and talks to the backend.
 impl Default for ExportDialog {
     fn default() -> Self {
-        ExportDialog { open: false, license: sf_license::Status::Invalid("no key".into()), email: String::new(), activation: None, check_in: None, activation_msg: None, code_sent_to: None, code: String::new(), format: Format::Mp4, fps: 60.0, height: 1080, quality: QualityPreset::SocialMedia, codec: VideoCodec::H264, audio: true, job: None, progress: None, result: None, started: None }
+        ExportDialog { open: false, license: sf_license::Status::Invalid("no key".into()), email: String::new(), activation: None, check_in: None, activation_msg: None, code_sent_to: None, code: String::new(), signing_in: false, promo: String::new(), promo_open: false, checkout: None, claim_until: None, next_claim: None, claim: None, format: Format::Mp4, fps: 60.0, height: 1080, quality: QualityPreset::SocialMedia, codec: VideoCodec::H264, audio: true, job: None, progress: None, result: None, started: None }
     }
 }
 
@@ -82,7 +94,13 @@ impl ExportDialog {
         } else {
             None
         };
-        ExportDialog { license, email, check_in, ..Default::default() }
+        // a checkout from an earlier session, paid after quitting: look for it a while
+        let mut d = ExportDialog { license, email, check_in, ..Default::default() };
+        if !d.license.is_valid() && sf_license::pending_claim() {
+            d.watch_claim(10 * 60);
+            d.next_claim = Some(std::time::Instant::now());
+        }
+        d
     }
 }
 
@@ -97,8 +115,101 @@ impl ExportDialog {
         self.job.is_some() || self.result.is_some()
     }
 
+    fn watch_claim(&mut self, secs: u64) {
+        let now = std::time::Instant::now();
+        self.claim_until = Some(now + std::time::Duration::from_secs(secs));
+        self.next_claim = Some(now + std::time::Duration::from_secs(3));
+    }
+
+    /// Open checkout for `plan`; once paid this computer is activated by itself.
+    fn buy(&mut self, plan: &str) {
+        let (tx, rx) = channel();
+        let (plan, promo) = (plan.to_string(), self.promo.trim().to_string());
+        let email = sf_license::load_email();
+        std::thread::spawn(move || {
+            let _ = tx.send(sf_license::start_checkout(&plan, email.as_deref(), Some(&promo)));
+        });
+        self.checkout = Some(rx);
+        self.activation_msg = None;
+    }
+
+    /// Checkout links and the silent check for a paid checkout.
+    fn poll_checkout(&mut self, ctx: &egui::Context) {
+        let now = std::time::Instant::now();
+        if let Some(rx) = &self.checkout {
+            match rx.try_recv() {
+                Ok(Ok(url)) => {
+                    crate::os::open(url);
+                    self.checkout = None;
+                    self.watch_claim(30 * 60);
+                }
+                Ok(Err(e)) => {
+                    self.checkout = None;
+                    self.activation_msg = Some((false, e));
+                }
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => self.checkout = None,
+                Err(std::sync::mpsc::TryRecvError::Empty) => ctx.request_repaint_after(std::time::Duration::from_millis(200)),
+            }
+        }
+        if let Some(rx) = &self.claim {
+            let r = match rx.try_recv() {
+                Ok(r) => Some(r),
+                Err(std::sync::mpsc::TryRecvError::Empty) => None,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => Some(Err("no checkout".into())),
+            };
+            if let Some(r) = r {
+                self.claim = None;
+                match r {
+                    Ok(sf_license::Claim::Done(status)) => {
+                        self.claim_until = None;
+                        self.promo.clear();
+                        self.promo_open = false;
+                        self.signing_in = false;
+                        self.activation_msg = Some(if status.is_valid() { (true, "Payment received. Export is unlocked on this computer.".into()) } else { (false, format!("That license is not valid here: {status:?}")) });
+                        self.license = status;
+                    }
+                    Ok(sf_license::Claim::Pending) => self.next_claim = Some(now + std::time::Duration::from_secs(3)),
+                    Ok(sf_license::Claim::Verify(email)) => {
+                        // the address had a license before: confirm it with the emailed code
+                        self.claim_until = None;
+                        self.signing_in = true;
+                        self.email = email.clone();
+                        let (tx, rx) = channel();
+                        std::thread::spawn(move || {
+                            let _ = tx.send(sf_license::activate(&email, true));
+                        });
+                        self.activation = Some(rx);
+                    }
+                    Err(e) if e == "no checkout" => self.claim_until = None,
+                    Err(e) if e.contains("already used") => {
+                        self.claim_until = None;
+                        self.activation_msg = Some((false, e));
+                    }
+                    // offline or a server hiccup: keep trying, slower
+                    Err(_) => self.next_claim = Some(now + std::time::Duration::from_secs(10)),
+                }
+            }
+        }
+        // the agent panel's sign-in or its own claim may have unlocked export meanwhile
+        if self.claim_until.is_some_and(|t| now > t) || self.license.is_valid() || self.signing_in {
+            self.claim_until = None;
+        }
+        if self.claim_until.is_some() {
+            if self.claim.is_none() && self.next_claim.is_some_and(|t| now >= t) {
+                self.next_claim = None;
+                let (tx, rx) = channel();
+                std::thread::spawn(move || {
+                    let _ = tx.send(sf_license::claim_checkout());
+                });
+                self.claim = Some(rx);
+            }
+            ctx.request_repaint_after(std::time::Duration::from_millis(500));
+        }
+    }
+
     /// Drain background messages (export progress, activation) and handle Escape.
     pub fn poll(&mut self, ctx: &egui::Context) {
+        self.poll_checkout(ctx);
         if let Some(rx) = &self.check_in {
             match rx.try_recv() {
                 Ok(r) => {
@@ -108,7 +219,8 @@ impl ExportDialog {
                     self.license = sf_license::load_saved().map(|k| sf_license::verify(&k)).unwrap_or_else(|| sf_license::Status::Invalid("no key".into()));
                     if matches!(r, Ok(Some(false))) && had_valid && !self.license.is_valid() {
                         // the license form shows whenever there is no valid license
-                        self.activation_msg = Some((false, "This license was moved to another computer. Press Activate to move it back here.".into()));
+                        self.signing_in = true;
+                        self.activation_msg = Some((false, "This license was moved to another computer. Sign in to move it back here.".into()));
                     }
                 }
                 Err(std::sync::mpsc::TryRecvError::Empty) => ctx.request_repaint_after(std::time::Duration::from_millis(500)),
@@ -134,7 +246,7 @@ impl ExportDialog {
                             sf_license::Status::Invalid(e) => (false, format!("The server sent a key this build cannot verify ({e}).")),
                         });
                     }
-                    Err(e) if e == "no license" => self.activation_msg = Some((false, "No license for that email yet. Buy one below, then activate again.".into())),
+                    Err(e) if e == "no license" => self.activation_msg = Some((false, "No license for that email. Buy Pro or Creator above, or use the email you paid with.".into())),
                     Err(e) => self.activation_msg = Some((false, e)),
                 }
                 self.activation = None;
@@ -258,53 +370,79 @@ impl ExportDialog {
                 widgets::title(ui, "License");
                 widgets::hint(ui, "Recording and editing are free; exporting needs Pro or Creator.");
                 ui.add_space(4.0);
-                ui.label("Email used at checkout");
-                ui.add_space(2.0);
-                widgets::text_field(ui, &mut self.email, "you@example.com");
-                // a code belongs to the address it was sent to
-                let awaiting_code = self.code_sent_to.as_deref() == Some(self.email.trim());
-                if awaiting_code {
-                    ui.add_space(6.0);
-                    ui.label("Code from the email");
-                    ui.add_space(2.0);
-                    widgets::text_field(ui, &mut self.code, "123456");
-                }
-                ui.add_space(8.0);
+                let opening = self.checkout.is_some();
                 ui.horizontal_wrapped(|ui| {
-                    let busy = self.activation.is_some();
-                    let start = |this: &mut Self, f: Box<dyn FnOnce() -> Result<sf_license::Activation, String> + Send>| {
-                        let (tx, rx) = channel();
-                        std::thread::spawn(move || {
-                            let _ = tx.send(f());
-                        });
-                        this.activation = Some(rx);
-                        this.activation_msg = None;
-                    };
+                    // both ways to export: Pro with the agent, or Creator for export alone
+                    if ui.add_enabled_ui(!opening, |ui| widgets::accent_button(ui, &format!("Pro · {}", sf_license::PRICE_PRO))).inner.on_hover_text("Unlimited export and the AI agent with 1,000 credits a month").clicked() {
+                        self.buy("pro");
+                    }
+                    if ui.add_enabled_ui(!opening, |ui| widgets::secondary_button(ui, &format!("Creator · {}", sf_license::PRICE_LIFETIME))).inner.on_hover_text("Unlimited export, without the AI agent").clicked() {
+                        self.buy("lifetime");
+                    }
+                });
+                ui.add_space(6.0);
+                if self.promo_open {
+                    ui.label("Coupon code");
+                    ui.add_space(2.0);
+                    widgets::text_field(ui, &mut self.promo, "CODE");
+                } else if ui.link(RichText::new("Have a coupon code?").color(theme::p().text_dim)).clicked() {
+                    self.promo_open = true;
+                }
+                ui.add_space(4.0);
+                widgets::hint(ui, "No key or code to type: once you pay, export turns on here by itself. It works on one computer at a time.");
+                ui.add_space(6.0);
+                if !self.signing_in && self.code_sent_to.is_none() {
+                    if ui.link(RichText::new("Already bought? Sign in").color(theme::p().text_dim)).clicked() {
+                        self.signing_in = true;
+                    }
+                } else {
+                    ui.label("Email used at checkout");
+                    ui.add_space(2.0);
+                    widgets::text_field(ui, &mut self.email, "you@example.com");
+                    // a code belongs to the address it was sent to
+                    let awaiting_code = self.code_sent_to.as_deref() == Some(self.email.trim());
                     if awaiting_code {
-                        if ui.add_enabled_ui(!busy, |ui| widgets::secondary_button(ui, if busy { "Checking…" } else { "Confirm" })).inner.clicked() {
-                            let (email, code) = (self.email.clone(), self.code.clone());
-                            start(self, Box::new(move || sf_license::confirm_code(&email, &code).map(sf_license::Activation::Done)));
-                        }
-                        if ui.add_enabled_ui(!busy, |ui| widgets::secondary_button(ui, "Send again")).inner.clicked() {
+                        ui.add_space(6.0);
+                        ui.label("Code from the email");
+                        ui.add_space(2.0);
+                        widgets::text_field(ui, &mut self.code, "123456");
+                    }
+                    ui.add_space(8.0);
+                    ui.horizontal_wrapped(|ui| {
+                        let busy = self.activation.is_some();
+                        let start = |this: &mut Self, f: Box<dyn FnOnce() -> Result<sf_license::Activation, String> + Send>| {
+                            let (tx, rx) = channel();
+                            std::thread::spawn(move || {
+                                let _ = tx.send(f());
+                            });
+                            this.activation = Some(rx);
+                            this.activation_msg = None;
+                        };
+                        if awaiting_code {
+                            if ui.add_enabled_ui(!busy, |ui| widgets::accent_button(ui, if busy { "Checking…" } else { "Confirm" })).inner.clicked() {
+                                let (email, code) = (self.email.clone(), self.code.clone());
+                                start(self, Box::new(move || sf_license::confirm_code(&email, &code).map(sf_license::Activation::Done)));
+                            }
+                            if ui.add_enabled_ui(!busy, |ui| widgets::secondary_button(ui, "Send again")).inner.clicked() {
+                                let email = self.email.clone();
+                                start(self, Box::new(move || sf_license::activate(&email, true)));
+                            }
+                        } else if ui.add_enabled_ui(!busy && self.email.contains('@'), |ui| widgets::accent_button(ui, if busy { "Checking…" } else { "Email me a code" })).inner.clicked() {
                             let email = self.email.clone();
                             start(self, Box::new(move || sf_license::activate(&email, true)));
                         }
-                    } else if ui.add_enabled_ui(!busy, |ui| widgets::secondary_button(ui, if busy { "Activating…" } else { "Activate" })).inner.clicked() {
-                        let email = self.email.clone();
-                        start(self, Box::new(move || sf_license::activate(&email, true)));
-                    }
-                    // both ways to export: Pro with the agent, or Creator for export alone
-                    if widgets::accent_button(ui, &format!("Pro · {}", sf_license::PRICE_PRO)).on_hover_text("Unlimited export and the AI agent with 1,000 credits a month").clicked() {
-                        open_checkout(&self.email, "pro");
-                    }
-                    if widgets::secondary_button(ui, &format!("Creator · {}", sf_license::PRICE_LIFETIME)).on_hover_text("Unlimited export, without the AI agent").clicked() {
-                        open_checkout(&self.email, "lifetime");
-                    }
-                });
+                        if widgets::secondary_button(ui, "Cancel").clicked() {
+                            self.signing_in = false;
+                            self.code_sent_to = None;
+                            self.code.clear();
+                            self.activation_msg = None;
+                        }
+                    });
+                }
                 if let Some((ok, msg)) = &self.activation_msg {
+                    ui.add_space(4.0);
                     ui.colored_label(if *ok { theme::p().accent_hover } else { theme::p().danger }, msg);
                 }
-                widgets::hint(ui, "After paying, press Activate: we email you a code to confirm this computer, then the key is stored on it. Nothing to copy. It works on one computer at a time; activating another computer moves it there.");
                 ui.add_space(6.0);
                 ui.separator();
             }
@@ -416,15 +554,4 @@ impl ExportDialog {
         self.job = Some((rx, handle, cancel));
         self.open = false;
     }
-}
-
-/// Open Stripe checkout in the browser; falls back to the pricing page when the backend is not
-/// configured or unreachable.
-fn open_checkout(email: &str, plan: &str) {
-    let email = email.to_string();
-    let plan = plan.to_string();
-    std::thread::spawn(move || {
-        let url = sf_license::checkout_url(&email, &plan).unwrap_or_else(|_| sf_license::PURCHASE_URL.to_string());
-        crate::os::open(url);
-    });
 }

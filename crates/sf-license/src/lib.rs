@@ -219,12 +219,16 @@ pub enum Claim {
 pub fn claim_checkout() -> Result<Claim, String> {
     let secret = claim_file().and_then(|p| std::fs::read_to_string(p).ok()).map(|s| s.trim().to_string()).filter(|s| s.len() == 64).ok_or("no checkout")?;
     let device = device_id().ok_or_else(|| "ScreenForge cannot identify this computer.".to_string())?;
-    let v = request("license-claim", serde_json::json!({ "device": device, "claim": secret })).map_err(|(code, msg)| {
-        if code == 410 {
+    let v = match request("license-claim", serde_json::json!({ "device": device, "claim": secret })) {
+        Ok(v) => v,
+        Err((410, msg)) => {
             drop_claim();
+            // claimed already, by the agent panel or Export watching the same checkout
+            let saved = load_saved().map(|k| verify(&k)).filter(Status::is_valid);
+            return saved.map(Claim::Done).ok_or(msg);
         }
-        msg
-    })?;
+        Err((_, msg)) => return Err(msg),
+    };
     match v.get("status").and_then(|s| s.as_str()) {
         Some("pending") => Ok(Claim::Pending),
         Some("verify") => {
