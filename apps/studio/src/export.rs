@@ -451,133 +451,137 @@ impl ExportDialog {
     pub fn settings_ui(&mut self, ed: &mut Editor, ui: &mut egui::Ui) {
             ui.label(RichText::new("Export").size(18.0).strong());
             ui.add_space(4.0);
-            if !self.license.is_valid() && self.free_upgrade_ui(ui) {
-                let opening = self.checkout.is_some();
-                ui.horizontal_wrapped(|ui| {
-                    // both ways to export: Pro with the agent, or Creator for export alone
-                    if ui.add_enabled_ui(!opening, |ui| widgets::accent_button(ui, &format!("Pro · {}", sf_license::PRICE_PRO))).inner.on_hover_text("Unlimited export and the AI agent with 1,000 credits a month").clicked() {
-                        self.buy("pro");
-                    }
-                    if ui.add_enabled_ui(!opening, |ui| widgets::secondary_button(ui, &format!("Creator · {}", sf_license::PRICE_LIFETIME))).inner.on_hover_text("Unlimited export, without the AI agent").clicked() {
-                        self.buy("lifetime");
-                    }
-                });
-                ui.add_space(6.0);
-                if self.promo_open {
-                    ui.label("Coupon code");
-                    ui.add_space(2.0);
-                    let f = widgets::text_field(ui, &mut self.promo, "CODE");
-                    // Enter: Pro's checkout with the code (Creator by its button)
-                    if widgets::submitted(ui, &f) && !opening && !self.promo.trim().is_empty() {
-                        self.buy("pro");
-                    }
-                } else if ui.link(RichText::new("Have a coupon code?").color(theme::p().text_dim)).clicked() {
-                    self.promo_open = true;
-                }
-                ui.add_space(4.0);
-                widgets::hint(ui, "No key or code to type: once you pay, export turns on here by itself. It works on one computer at a time.");
-                ui.add_space(6.0);
-                if !self.signing_in && self.code_sent_to.is_none() {
-                    if ui.link(RichText::new("Already bought? Sign in").color(theme::p().text_dim)).clicked() {
-                        self.signing_in = true;
-                    }
-                } else {
-                    ui.label("Email used at checkout");
-                    ui.add_space(2.0);
-                    let f = widgets::text_field(ui, &mut self.email, "you@example.com");
-                    let mut enter = widgets::submitted(ui, &f);
-                    // a code belongs to the address it was sent to
-                    let awaiting_code = self.code_sent_to.as_deref() == Some(self.email.trim());
-                    if awaiting_code {
-                        ui.add_space(6.0);
-                        ui.label("Code from the email");
-                        ui.add_space(2.0);
-                        let f = widgets::text_field(ui, &mut self.code, "123456");
-                        enter |= widgets::submitted(ui, &f);
-                    }
-                    ui.add_space(8.0);
+            // the settings scroll on a short window; Export and Cancel stay in view below
+            let max_h = (ui.ctx().content_rect().height() - 200.0).max(160.0);
+            egui::ScrollArea::vertical().max_height(max_h).auto_shrink([false, true]).show(ui, |ui| {
+                if !self.license.is_valid() && self.free_upgrade_ui(ui) {
+                    let opening = self.checkout.is_some();
                     ui.horizontal_wrapped(|ui| {
-                        let busy = self.activation.is_some();
-                        let start = |this: &mut Self, f: Box<dyn FnOnce() -> Result<sf_license::Activation, String> + Send>| {
-                            let (tx, rx) = channel();
-                            std::thread::spawn(move || {
-                                let _ = tx.send(f());
-                            });
-                            this.activation = Some(rx);
-                            this.activation_msg = None;
-                        };
+                        // both ways to export: Pro with the agent, or Creator for export alone
+                        if ui.add_enabled_ui(!opening, |ui| widgets::accent_button(ui, &format!("Pro · {}", sf_license::PRICE_PRO))).inner.on_hover_text("Unlimited export and the AI agent with 1,000 credits a month").clicked() {
+                            self.buy("pro");
+                        }
+                        if ui.add_enabled_ui(!opening, |ui| widgets::secondary_button(ui, &format!("Creator · {}", sf_license::PRICE_LIFETIME))).inner.on_hover_text("Unlimited export, without the AI agent").clicked() {
+                            self.buy("lifetime");
+                        }
+                    });
+                    ui.add_space(6.0);
+                    if self.promo_open {
+                        ui.label("Coupon code");
+                        ui.add_space(2.0);
+                        let f = widgets::text_field(ui, &mut self.promo, "CODE");
+                        // Enter: Pro's checkout with the code (Creator by its button)
+                        if widgets::submitted(ui, &f) && !opening && !self.promo.trim().is_empty() {
+                            self.buy("pro");
+                        }
+                    } else if ui.link(RichText::new("Have a coupon code?").color(theme::p().text_dim)).clicked() {
+                        self.promo_open = true;
+                    }
+                    ui.add_space(4.0);
+                    widgets::hint(ui, "No key or code to type: once you pay, export turns on here by itself. It works on one computer at a time.");
+                    ui.add_space(6.0);
+                    if !self.signing_in && self.code_sent_to.is_none() {
+                        if ui.link(RichText::new("Already bought? Sign in").color(theme::p().text_dim)).clicked() {
+                            self.signing_in = true;
+                        }
+                    } else {
+                        ui.label("Email used at checkout");
+                        ui.add_space(2.0);
+                        let f = widgets::text_field(ui, &mut self.email, "you@example.com");
+                        let mut enter = widgets::submitted(ui, &f);
+                        // a code belongs to the address it was sent to
+                        let awaiting_code = self.code_sent_to.as_deref() == Some(self.email.trim());
                         if awaiting_code {
-                            if ui.add_enabled_ui(!busy, |ui| widgets::accent_button(ui, if busy { "Checking…" } else { "Confirm" })).inner.clicked() || (enter && !busy) {
-                                let (email, code) = (self.email.clone(), self.code.clone());
-                                start(self, Box::new(move || sf_license::confirm_code(&email, &code).map(sf_license::Activation::Done)));
-                            }
-                            if ui.add_enabled_ui(!busy, |ui| widgets::secondary_button(ui, "Send again")).inner.clicked() {
+                            ui.add_space(6.0);
+                            ui.label("Code from the email");
+                            ui.add_space(2.0);
+                            let f = widgets::text_field(ui, &mut self.code, "123456");
+                            enter |= widgets::submitted(ui, &f);
+                        }
+                        ui.add_space(8.0);
+                        ui.horizontal_wrapped(|ui| {
+                            let busy = self.activation.is_some();
+                            let start = |this: &mut Self, f: Box<dyn FnOnce() -> Result<sf_license::Activation, String> + Send>| {
+                                let (tx, rx) = channel();
+                                std::thread::spawn(move || {
+                                    let _ = tx.send(f());
+                                });
+                                this.activation = Some(rx);
+                                this.activation_msg = None;
+                            };
+                            if awaiting_code {
+                                if ui.add_enabled_ui(!busy, |ui| widgets::accent_button(ui, if busy { "Checking…" } else { "Confirm" })).inner.clicked() || (enter && !busy) {
+                                    let (email, code) = (self.email.clone(), self.code.clone());
+                                    start(self, Box::new(move || sf_license::confirm_code(&email, &code).map(sf_license::Activation::Done)));
+                                }
+                                if ui.add_enabled_ui(!busy, |ui| widgets::secondary_button(ui, "Send again")).inner.clicked() {
+                                    let email = self.email.clone();
+                                    start(self, Box::new(move || sf_license::activate(&email, true)));
+                                }
+                            } else if ui.add_enabled_ui(!busy && self.email.contains('@'), |ui| widgets::accent_button(ui, if busy { "Checking…" } else { "Email me a code" })).inner.clicked() || (enter && !busy && self.email.contains('@')) {
                                 let email = self.email.clone();
                                 start(self, Box::new(move || sf_license::activate(&email, true)));
                             }
-                        } else if ui.add_enabled_ui(!busy && self.email.contains('@'), |ui| widgets::accent_button(ui, if busy { "Checking…" } else { "Email me a code" })).inner.clicked() || (enter && !busy && self.email.contains('@')) {
-                            let email = self.email.clone();
-                            start(self, Box::new(move || sf_license::activate(&email, true)));
+                            if widgets::secondary_button(ui, "Cancel").clicked() {
+                                self.signing_in = false;
+                                self.code_sent_to = None;
+                                self.code.clear();
+                                self.activation_msg = None;
+                            }
+                        });
+                    }
+                    if let Some((ok, msg)) = &self.activation_msg {
+                        ui.add_space(4.0);
+                        ui.colored_label(if *ok { theme::p().accent_hover } else { theme::p().danger }, msg);
+                    }
+                    ui.add_space(6.0);
+                    ui.separator();
+                }
+                widgets::title(ui, "Format");
+                if let Some(i) = widgets::segmented(ui, if self.format == Format::Mp4 { 0 } else { 1 }, &["MP4", "GIF"]) {
+                    self.format = if i == 0 { Format::Mp4 } else { Format::Gif };
+                    if self.format == Format::Gif {
+                        self.fps = 15.0;
+                        self.height = 480;
+                        self.quality = QualityPreset::Studio;
+                    } else {
+                        self.fps = 60.0;
+                        self.height = 1080;
+                        self.quality = QualityPreset::SocialMedia;
+                    }
+                }
+                widgets::title(ui, "Frame rate");
+                let fps_list: &[f64] = if self.format == Format::Mp4 { &MP4_FPS } else { &GIF_FPS };
+                let labels: Vec<String> = fps_list.iter().map(|f| format!("{f}")).collect();
+                let label_refs: Vec<&str> = labels.iter().map(String::as_str).collect();
+                if let Some(i) = widgets::segmented(ui, fps_list.iter().position(|f| *f == self.fps).unwrap_or(0), &label_refs) {
+                    self.fps = fps_list[i];
+                }
+                widgets::title(ui, "Resolution");
+                let res: &[(u32, &str)] = if self.format == Format::Mp4 { &MP4_RES } else { &GIF_RES };
+                let rl: Vec<&str> = res.iter().map(|r| r.1).collect();
+                if let Some(i) = widgets::segmented(ui, res.iter().position(|r| r.0 == self.height).unwrap_or(1), &rl) {
+                    self.height = res[i].0;
+                }
+                let size = ed.session.output_size(self.height);
+                widgets::hint(ui, &format!("{} px × {} px", size.width, size.height));
+                widgets::title(ui, "Compression");
+                let qs: &[QualityPreset] = if self.format == Format::Mp4 { &QualityPreset::ALL } else { &QualityPreset::ALL[..2] };
+                let ql: Vec<&str> = qs.iter().map(|q| q.label()).collect();
+                if let Some(i) = widgets::segmented(ui, qs.iter().position(|q| *q == self.quality).unwrap_or(1), &ql) {
+                    self.quality = qs[i];
+                }
+                if self.format == Format::Mp4 {
+                    egui::CollapsingHeader::new("Advanced").show(ui, |ui| {
+                        widgets::title(ui, "Codec");
+                        let codecs = [VideoCodec::H264, VideoCodec::Hevc, VideoCodec::ProRes4444, VideoCodec::Vp9];
+                        if let Some(i) = widgets::segmented(ui, codecs.iter().position(|c| *c == self.codec).unwrap_or(0), &["H.264", "HEVC", "ProRes", "WebM"]) {
+                            self.codec = codecs[i];
                         }
-                        if widgets::secondary_button(ui, "Cancel").clicked() {
-                            self.signing_in = false;
-                            self.code_sent_to = None;
-                            self.code.clear();
-                            self.activation_msg = None;
-                        }
+                        ui.checkbox(&mut self.audio, "Include audio");
                     });
                 }
-                if let Some((ok, msg)) = &self.activation_msg {
-                    ui.add_space(4.0);
-                    ui.colored_label(if *ok { theme::p().accent_hover } else { theme::p().danger }, msg);
-                }
-                ui.add_space(6.0);
-                ui.separator();
-            }
-            widgets::title(ui, "Format");
-            if let Some(i) = widgets::segmented(ui, if self.format == Format::Mp4 { 0 } else { 1 }, &["MP4", "GIF"]) {
-                self.format = if i == 0 { Format::Mp4 } else { Format::Gif };
-                if self.format == Format::Gif {
-                    self.fps = 15.0;
-                    self.height = 480;
-                    self.quality = QualityPreset::Studio;
-                } else {
-                    self.fps = 60.0;
-                    self.height = 1080;
-                    self.quality = QualityPreset::SocialMedia;
-                }
-            }
-            widgets::title(ui, "Frame rate");
-            let fps_list: &[f64] = if self.format == Format::Mp4 { &MP4_FPS } else { &GIF_FPS };
-            let labels: Vec<String> = fps_list.iter().map(|f| format!("{f}")).collect();
-            let label_refs: Vec<&str> = labels.iter().map(String::as_str).collect();
-            if let Some(i) = widgets::segmented(ui, fps_list.iter().position(|f| *f == self.fps).unwrap_or(0), &label_refs) {
-                self.fps = fps_list[i];
-            }
-            widgets::title(ui, "Resolution");
-            let res: &[(u32, &str)] = if self.format == Format::Mp4 { &MP4_RES } else { &GIF_RES };
-            let rl: Vec<&str> = res.iter().map(|r| r.1).collect();
-            if let Some(i) = widgets::segmented(ui, res.iter().position(|r| r.0 == self.height).unwrap_or(1), &rl) {
-                self.height = res[i].0;
-            }
-            let size = ed.session.output_size(self.height);
-            widgets::hint(ui, &format!("{} px × {} px", size.width, size.height));
-            widgets::title(ui, "Compression");
-            let qs: &[QualityPreset] = if self.format == Format::Mp4 { &QualityPreset::ALL } else { &QualityPreset::ALL[..2] };
-            let ql: Vec<&str> = qs.iter().map(|q| q.label()).collect();
-            if let Some(i) = widgets::segmented(ui, qs.iter().position(|q| *q == self.quality).unwrap_or(1), &ql) {
-                self.quality = qs[i];
-            }
-            if self.format == Format::Mp4 {
-                egui::CollapsingHeader::new("Advanced").show(ui, |ui| {
-                    widgets::title(ui, "Codec");
-                    let codecs = [VideoCodec::H264, VideoCodec::Hevc, VideoCodec::ProRes4444, VideoCodec::Vp9];
-                    if let Some(i) = widgets::segmented(ui, codecs.iter().position(|c| *c == self.codec).unwrap_or(0), &["H.264", "HEVC", "ProRes", "WebM"]) {
-                        self.codec = codecs[i];
-                    }
-                    ui.checkbox(&mut self.audio, "Include audio");
-                });
-            }
+            });
             ui.add_space(6.0);
             let secs = ed.duration_ms() / 1000.0;
             widgets::hint(ui, &format!("{:.0}s of video at {} fps", secs, self.fps));
