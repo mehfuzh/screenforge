@@ -488,10 +488,27 @@ pub fn billing_portal_url() -> Result<String, String> {
     v.get("url").and_then(|u| u.as_str()).map(String::from).ok_or_else(|| "no portal url".to_string())
 }
 
+/// Bumped whenever the key on this computer is saved or removed (activated, renewed, signed
+/// out, moved away), so every part of the app that shows the plan can refresh: the agent
+/// panel and Export each check [`license_generation`] and re-read when it changed.
+static LICENSE_GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+pub fn license_generation() -> u64 {
+    LICENSE_GENERATION.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+fn license_changed() {
+    LICENSE_GENERATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+}
+
 /// Remove the saved key (the license moved to another computer).
 pub fn forget() -> std::io::Result<()> {
     match key_file() {
-        Some(p) if p.exists() => std::fs::remove_file(p),
+        Some(p) if p.exists() => {
+            std::fs::remove_file(p)?;
+            license_changed();
+            Ok(())
+        }
         _ => Ok(()),
     }
 }
@@ -499,7 +516,9 @@ pub fn forget() -> std::io::Result<()> {
 pub fn save(key: &str) -> std::io::Result<()> {
     let p = key_file().ok_or_else(|| std::io::Error::other("no home dir"))?;
     std::fs::create_dir_all(p.parent().unwrap())?;
-    std::fs::write(p, key.trim())
+    std::fs::write(p, key.trim())?;
+    license_changed();
+    Ok(())
 }
 
 #[cfg(test)]
