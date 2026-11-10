@@ -268,6 +268,14 @@ fn set_unsent_exports(n: u32) {
 /// is no free export (licensed export works offline). Free exports recorded while offline are
 /// sent first.
 pub fn free_exports_left() -> Result<u32, String> {
+    let _one = FREE_EXPORTS_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    free_exports_left_locked()
+}
+
+/// One check or record at a time: two sending the same unsent export would count it twice.
+static FREE_EXPORTS_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+fn free_exports_left_locked() -> Result<u32, String> {
     let device = device_id().ok_or_else(|| "ScreenForge cannot identify this computer.".to_string())?;
     let mut unsent = unsent_exports();
     let mut v = None;
@@ -288,8 +296,9 @@ pub fn free_exports_left() -> Result<u32, String> {
 /// A free export finished: count it (kept here until the server can be told). Returns what
 /// is left, as far as this computer knows.
 pub fn record_free_export() -> Result<u32, String> {
+    let _one = FREE_EXPORTS_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     set_unsent_exports(unsent_exports() + 1);
-    free_exports_left()
+    free_exports_left_locked()
 }
 
 fn email_file() -> Option<std::path::PathBuf> {

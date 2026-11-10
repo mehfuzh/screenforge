@@ -316,10 +316,15 @@ impl ExportDialog {
                     Msg::Progress(p) => self.progress = Some(p),
                     Msg::Done(r) => {
                         // a finished free export is counted (kept on disk until online)
-                        if std::mem::take(&mut self.free_job) && r.is_ok() {
-                            std::thread::spawn(|| {
-                                let _ = sf_license::record_free_export();
+                        // the server's answer replaces the count (a cancelled or failed one
+                        // gives back the export taken off when it started)
+                        if std::mem::take(&mut self.free_job) {
+                            let ok = r.is_ok();
+                            let (tx, rx) = channel();
+                            std::thread::spawn(move || {
+                                let _ = tx.send(if ok { sf_license::record_free_export() } else { sf_license::free_exports_left() });
                             });
+                            self.free_rx = Some(rx);
                         }
                         // a cancelled export just returns to the dialog
                         self.result = match r {
