@@ -7,7 +7,8 @@ import { MONTHLY_CREDITS } from "../_shared/credits.ts";
 // Stripe events (endpoint set up by setup.sh / setup-credits.sh):
 //   checkout.session.completed / .async_payment_succeeded
 //       license checkout: sign and store the key (lifetime, or monthly for Pro) and email how
-//       to activate with the address;
+//       to activate with the address; when the app started the checkout (metadata device +
+//       claim), record the claim that `license-claim` activates that computer with;
 //       top-up pack: add its credits (only once paid: delayed methods arrive later as
 //       async_payment_succeeded).
 //   invoice.paid             Pro's agent credits for the paid period (the first invoice and
@@ -52,7 +53,22 @@ serve(async (req) => {
       await rpc("credits_topup", { p_email: s.metadata.email ?? email, p_credits: Number(s.metadata.credits ?? 0), p_ref: s.id });
       return;
     }
+    const { device, claim } = s.metadata ?? {};
+    const claimed = /^[0-9a-f]{64}$/.test(device ?? "") && /^[0-9a-f]{64}$/.test(claim ?? "");
+    // an address with a license before this purchase may not be the payer's: its claim asks
+    // for the emailed code (a redelivered event finds this purchase's own license: also not
+    // fresh, which only costs the code)
+    let fresh = false;
+    if (claimed) {
+      const { count, error } = await db.from("licenses").select("email", { count: "exact", head: true }).ilike("email", email.replace(/[\\%_]/g, (c: string) => `\\${c}`));
+      if (error) throw new Error(error.message);
+      fresh = (count ?? 0) === 0;
+    }
     await issue(email, (s.metadata?.plan as "monthly" | "lifetime") ?? "monthly", (s.customer as string) ?? null, (s.subscription as string) ?? null, true);
+    if (claimed) {
+      const { error } = await db.from("checkout_claims").upsert({ claim_hash: claim, device_id: device, email, fresh }, { onConflict: "claim_hash", ignoreDuplicates: true });
+      if (error) throw new Error(error.message);
+    }
   };
 
   try {

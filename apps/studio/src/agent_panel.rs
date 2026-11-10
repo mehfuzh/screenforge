@@ -313,8 +313,19 @@ pub struct AgentPanel {
     credits_rx: Option<mpsc::Receiver<Result<Value, String>>>,
     /// The plan could not be checked (offline): shown with Try again.
     credits_error: Option<String>,
-    /// Email for checkout when the computer has no license email saved.
+    /// Email for top-up checkout when the computer has no license email saved.
     email: String,
+    /// Coupon typed on the upgrade card (applied to the Pro checkout), and whether its field
+    /// is open.
+    promo: String,
+    promo_open: bool,
+    /// A Pro checkout started here: until when it is polled (`license-claim`) to activate this
+    /// computer by itself once paid, the next poll, and the poll in flight.
+    claim_until: Option<std::time::Instant>,
+    next_claim: Option<std::time::Instant>,
+    claim_rx: Option<mpsc::Receiver<Result<sf_license::Claim, String>>>,
+    /// A checkout left pending by an earlier session was looked for.
+    claim_resumed: bool,
     /// A checkout being opened: its URL, or why it failed.
     checkout_rx: Option<mpsc::Receiver<Result<String, String>>>,
     /// The sign-in form, while it is open.
@@ -433,8 +444,18 @@ impl AgentPanel {
         self.credits_rx = Some(rx);
     }
 
-    /// Open Stripe Checkout for `plan` (`pro`, `topup_10` …) in the browser.
+    /// Open Stripe Checkout for `plan` (`pro`, `topup_10` …) in the browser. Pro needs no email
+    /// here: Checkout asks for it, and this computer is activated once paid (see `poll_claim`).
     fn buy(&mut self, plan: &str) {
+        if plan == "pro" {
+            let (tx, rx) = mpsc::channel();
+            let (email, promo) = (sf_license::load_email(), self.promo.trim().to_string());
+            std::thread::spawn(move || {
+                let _ = tx.send(sf_license::start_checkout("pro", email.as_deref(), Some(&promo)));
+            });
+            self.checkout_rx = Some(rx);
+            return;
+        }
         let email = sf_license::load_email().unwrap_or_else(|| self.email.trim().to_string());
         if !email.contains('@') {
             self.log.push(Entry::Error("Enter your email in the credits menu first.".into()));
@@ -560,7 +581,13 @@ impl AgentPanel {
             match rx.try_recv() {
                 Ok(Ok(url)) => {
                     crate::os::open(&url);
-                    self.log.push(Entry::Note("Opened checkout in your browser. Credits arrive here a moment after you pay.".into()));
+                    let note = if sf_license::pending_claim() && self.credits.as_ref().is_some_and(|c| c["pro"].as_bool() != Some(true)) {
+                        self.watch_claim(30 * 60);
+                        "Opened checkout in your browser. Pro turns on here by itself once you pay."
+                    } else {
+                        "Opened checkout in your browser. Credits arrive here a moment after you pay."
+                    };
+                    self.log.push(Entry::Note(note.into()));
                     self.checkout_rx = None;
                 }
                 Ok(Err(e)) => {
@@ -570,6 +597,77 @@ impl AgentPanel {
                 Err(mpsc::TryRecvError::Disconnected) => self.checkout_rx = None,
                 Err(mpsc::TryRecvError::Empty) => {}
             }
+        }
+    }
+
+    /// Poll the checkout started here for `secs` (it activates this computer once paid).
+    fn watch_claim(&mut self, secs: u64) {
+        let now = std::time::Instant::now();
+        self.claim_until = Some(now + std::time::Duration::from_secs(secs));
+        self.next_claim = Some(now + std::time::Duration::from_secs(3));
+    }
+
+    /// Ask whether the checkout was paid; activate here when it was.
+    fn poll_claim(&mut self) {
+        // a checkout from an earlier session (paid after quitting, or still open)
+        if !self.claim_resumed && self.credits.as_ref().is_some_and(|c| c["allowed"].as_bool() == Some(false)) {
+            self.claim_resumed = true;
+            if sf_license::pending_claim() && self.claim_until.is_none() {
+                self.watch_claim(10 * 60);
+                self.next_claim = Some(std::time::Instant::now());
+            }
+        }
+        if let Some(rx) = &self.claim_rx {
+            let r = match rx.try_recv() {
+                Ok(r) => r,
+                Err(mpsc::TryRecvError::Empty) => return,
+                Err(mpsc::TryRecvError::Disconnected) => Err("no checkout".into()),
+            };
+            self.claim_rx = None;
+            let now = std::time::Instant::now();
+            match r {
+                Ok(sf_license::Claim::Done(st)) if st.is_valid() => {
+                    self.claim_until = None;
+                    self.promo.clear();
+                    self.promo_open = false;
+                    self.after_account_change(Some("Welcome to Pro. The agent is ready on this computer.".into()));
+                }
+                Ok(sf_license::Claim::Done(st)) => {
+                    self.claim_until = None;
+                    self.log.push(Entry::Error(format!("That license is not valid here: {st:?}")));
+                }
+                Ok(sf_license::Claim::Pending) => self.next_claim = Some(now + std::time::Duration::from_secs(3)),
+                Ok(sf_license::Claim::Verify(email)) => {
+                    // the address had an account before: confirm it is yours with the code
+                    self.claim_until = None;
+                    self.email = email.clone();
+                    self.sign_in = Some(SignIn { email, ..Default::default() });
+                    self.sign_in_step();
+                    self.notice = Some("Payment received. That email already has a ScreenForge account, so confirm it with the code we email you.".into());
+                }
+                Err(e) if e == "no checkout" => self.claim_until = None,
+                Err(e) if e.contains("already used") => {
+                    self.claim_until = None;
+                    self.log.push(Entry::Error(e));
+                }
+                // offline or a server hiccup: keep trying, slower
+                Err(e) => {
+                    tracing::info!("checking the checkout: {e}");
+                    self.next_claim = Some(now + std::time::Duration::from_secs(10));
+                }
+            }
+        }
+        let now = std::time::Instant::now();
+        if self.claim_until.is_some_and(|t| now > t) {
+            self.claim_until = None;
+        }
+        if self.claim_until.is_some() && self.claim_rx.is_none() && self.next_claim.is_some_and(|t| now >= t) {
+            self.next_claim = None;
+            let (tx, rx) = mpsc::channel();
+            std::thread::spawn(move || {
+                let _ = tx.send(sf_license::claim_checkout());
+            });
+            self.claim_rx = Some(rx);
         }
     }
 
@@ -694,7 +792,8 @@ impl AgentPanel {
         let detail = if pro { format!("{} this month · {} top-up", thousands(num("monthly")), thousands(num("topup"))) } else { "About 1¢ of Claude each".to_string() };
         ui.label(RichText::new(detail).size(12.0).color(pal.text_faint));
 
-        if sf_license::load_email().is_none() {
+        // top-ups go to the license's address (Pro's checkout asks for its own)
+        if licensed && sf_license::load_email().is_none() {
             ui.add_space(8.0);
             ui.label(RichText::new("Email for checkout").size(12.0).color(pal.text_dim));
             widgets::text_field(ui, &mut self.email, "you@example.com");
@@ -746,51 +845,41 @@ impl AgentPanel {
                     ui.add(egui::Label::new(RichText::new(line).size(13.0).color(pal.text_dim)).wrap());
                 });
             }
-            ui.add_space(12.0);
-            // one email for both, as in Export: Upgrade opens checkout, Activate signs in
-            ui.label(RichText::new("Email used at checkout").size(12.5).color(pal.text_dim));
-            ui.add_space(2.0);
-            widgets::text_field(ui, &mut self.email, "you@example.com");
-            let typed = self.email.trim().to_string();
-            let awaiting = self.sign_in.as_ref().is_some_and(|s| s.code_sent && s.email.trim().eq_ignore_ascii_case(&typed));
-            if awaiting {
-                ui.add_space(6.0);
-                ui.label(RichText::new("Code from the email").size(12.5).color(pal.text_dim));
-                ui.add_space(2.0);
-                if let Some(s) = self.sign_in.as_mut() {
-                    widgets::text_field(ui, &mut s.code, "123456");
-                }
+            ui.add_space(14.0);
+            if self.sign_in.is_some() {
+                // Already subscribed: the email, then the emailed code
+                self.sign_in_ui(ui);
+                return;
+            }
+            let opening = self.checkout_rx.is_some();
+            let waiting = self.claim_until.is_some();
+            let label = if opening { "Opening checkout…" } else { "Upgrade to Pro · $20/month" };
+            if ui.add_enabled_ui(!opening, |ui| widgets::accent_button(ui, label)).inner.clicked() {
+                self.buy("pro");
             }
             ui.add_space(8.0);
-            let busy = self.sign_in.as_ref().is_some_and(|s| s.rx.is_some());
-            let (mut activate, mut confirm) = (false, false);
-            ui.horizontal_wrapped(|ui| {
-                if awaiting {
-                    confirm = ui.add_enabled_ui(!busy, |ui| widgets::secondary_button(ui, if busy { "Checking…" } else { "Confirm" })).inner.clicked();
-                    activate = ui.add_enabled_ui(!busy, |ui| widgets::secondary_button(ui, "Send again")).inner.clicked();
-                } else {
-                    activate = ui.add_enabled_ui(!busy && typed.contains('@'), |ui| widgets::secondary_button(ui, if busy { "Activating…" } else { "Activate" })).inner.clicked();
-                }
-                if widgets::accent_button(ui, "Upgrade to Pro · $20/month").clicked() {
-                    self.buy("pro");
-                }
-            });
-            if activate {
-                // a fresh sign-in for the typed email (asks for a code unless already activated)
-                self.sign_in = Some(SignIn { email: typed.clone(), ..Default::default() });
-                self.sign_in_step();
-            } else if confirm {
-                self.sign_in_step();
+            if self.promo_open {
+                ui.label(RichText::new("Coupon code").size(12.5).color(pal.text_dim));
+                ui.add_space(2.0);
+                widgets::text_field(ui, &mut self.promo, "CODE");
+                ui.add_space(2.0);
+                widgets::hint(ui, "Applied when checkout opens.");
+            } else if quiet_link(ui, "Have a coupon code?").clicked() {
+                self.promo_open = true;
             }
-            if let Some(e) = self.sign_in.as_ref().and_then(|s| s.error.clone()) {
-                ui.add_space(4.0);
-                ui.add(egui::Label::new(RichText::new(e).size(12.5).color(pal.danger)).wrap());
-            } else if awaiting {
-                ui.add_space(4.0);
-                ui.add(egui::Label::new(RichText::new(format!("We emailed a 6-digit code to {typed}.")).size(12.5).color(pal.accent_hover)).wrap());
+            ui.add_space(10.0);
+            if waiting {
+                ui.horizontal(|ui| {
+                    working_dots(ui);
+                    ui.add(egui::Label::new(RichText::new("Waiting for your payment. Pro turns on here by itself.").size(12.5).color(pal.text_dim)).wrap());
+                });
+            } else {
+                widgets::hint(ui, "No key or code to type: once you pay, Pro turns on here by itself.");
             }
             ui.add_space(6.0);
-            widgets::hint(ui, "Already subscribed? Press Activate: we email you a code to confirm this computer. After paying, do the same to start using Pro here.");
+            if quiet_link(ui, "Already subscribed? Sign in").clicked() {
+                self.open_sign_in(None);
+            }
         });
         if let Some(n) = &self.notice {
             ui.add_space(8.0);
@@ -950,11 +1039,15 @@ impl AgentPanel {
     pub fn ui(&mut self, ed: &mut Editor, ui: &mut egui::Ui) {
         let pal = theme::p();
         self.poll_billing();
+        self.poll_claim();
         if std::mem::take(&mut self.license_changed) {
             ed.export.license = sf_license::load_saved().map(|k| sf_license::verify(&k)).unwrap_or_else(|| sf_license::Status::Invalid("no key".into()));
         }
         if self.credits.is_none() && self.credits_error.is_none() {
             self.fetch_credits();
+        }
+        if self.claim_until.is_some() {
+            ui.ctx().request_repaint_after(std::time::Duration::from_millis(500));
         }
         if self.credits_rx.is_some() || self.restore_rx.is_some() || self.checkout_rx.is_some() || self.account_rx.is_some() || self.sign_in.as_ref().is_some_and(|s| s.rx.is_some()) {
             ui.ctx().request_repaint_after(std::time::Duration::from_millis(200));

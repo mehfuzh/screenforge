@@ -161,6 +161,85 @@ pub fn checkout_url(email: &str, plan: &str) -> Result<String, String> {
     v.get("url").and_then(|u| u.as_str()).map(String::from).ok_or_else(|| "no checkout url".to_string())
 }
 
+/// Start a checkout for a license `plan` ("pro", "lifetime") that activates this computer by
+/// itself once paid: a fresh secret is saved here (see [`pending_claim`]) and only its SHA-256
+/// goes to the backend; [`claim_checkout`] then fetches the key. `email` (optional) prefills
+/// Checkout, `promo` (optional) is a promotion code; an invalid one is an `Err` with the reason.
+pub fn start_checkout(plan: &str, email: Option<&str>, promo: Option<&str>) -> Result<String, String> {
+    use rand::RngCore;
+    let device = device_id().ok_or_else(|| "ScreenForge cannot identify this computer.".to_string())?;
+    let mut secret = [0u8; 32];
+    rand::rngs::OsRng.fill_bytes(&mut secret);
+    let secret = hex(&secret);
+    let mut body = serde_json::json!({ "plan": plan, "device": device, "claim": hex(&Sha256::digest(secret.as_bytes())) });
+    if let Some(e) = email.map(str::trim).filter(|e| e.contains('@')) {
+        body["email"] = e.into();
+    }
+    if let Some(p) = promo.map(str::trim).filter(|p| !p.is_empty()) {
+        body["promo"] = p.into();
+    }
+    let v = call_function("create-checkout", body)?;
+    let url = v.get("url").and_then(|u| u.as_str()).map(String::from).ok_or_else(|| "no checkout url".to_string())?;
+    // kept on disk, so paying after a restart still activates
+    if let Some(p) = claim_file() {
+        let _ = std::fs::create_dir_all(p.parent().unwrap());
+        let _ = std::fs::write(p, &secret);
+    }
+    Ok(url)
+}
+
+fn claim_file() -> Option<std::path::PathBuf> {
+    key_file().map(|p| p.with_file_name("checkout-claim"))
+}
+
+/// A checkout started here that has not activated this computer yet.
+pub fn pending_claim() -> bool {
+    claim_file().and_then(|p| std::fs::read_to_string(p).ok()).is_some_and(|s| s.trim().len() == 64)
+}
+
+fn drop_claim() {
+    if let Some(p) = claim_file() {
+        let _ = std::fs::remove_file(p);
+    }
+}
+
+/// Outcome of [`claim_checkout`].
+#[derive(Debug, Clone, PartialEq)]
+pub enum Claim {
+    /// Paid: this computer is activated (key and email saved).
+    Done(Status),
+    /// Not paid yet: ask again in a moment.
+    Pending,
+    /// Paid with an address that had a license already: sign in with the emailed code.
+    Verify(String),
+}
+
+/// Ask whether the checkout from [`start_checkout`] was paid, activating this computer when it
+/// was. The saved secret is removed once it is used up (or refused).
+pub fn claim_checkout() -> Result<Claim, String> {
+    let secret = claim_file().and_then(|p| std::fs::read_to_string(p).ok()).map(|s| s.trim().to_string()).filter(|s| s.len() == 64).ok_or("no checkout")?;
+    let device = device_id().ok_or_else(|| "ScreenForge cannot identify this computer.".to_string())?;
+    let v = request("license-claim", serde_json::json!({ "device": device, "claim": secret })).map_err(|(code, msg)| {
+        if code == 410 {
+            drop_claim();
+        }
+        msg
+    })?;
+    match v.get("status").and_then(|s| s.as_str()) {
+        Some("pending") => Ok(Claim::Pending),
+        Some("verify") => {
+            drop_claim();
+            Ok(Claim::Verify(v.get("email").and_then(|e| e.as_str()).unwrap_or_default().to_string()))
+        }
+        _ => {
+            let email = v.get("email").and_then(|e| e.as_str()).unwrap_or_default().to_string();
+            let status = store_key(&v, &email)?;
+            drop_claim();
+            Ok(Claim::Done(status))
+        }
+    }
+}
+
 fn email_file() -> Option<std::path::PathBuf> {
     key_file().map(|p| p.with_file_name("email"))
 }
