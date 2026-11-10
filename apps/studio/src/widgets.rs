@@ -253,6 +253,11 @@ pub fn square_icon_button(ui: &mut Ui, icon: Icon, tooltip: &str) -> Response {
 
 /// Single-line text field: roomy (38 px) with 4 px corners like the buttons, padded text and a
 /// quiet border that turns accent while focused.
+/// Enter was pressed in this single-line field (it loses focus on Enter): submit the form.
+pub fn submitted(ui: &Ui, field: &Response) -> bool {
+    field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter))
+}
+
 pub fn text_field(ui: &mut Ui, text: &mut String, hint: &str) -> Response {
     let pal = theme::p();
     let id = ui.next_auto_id().with("text_field");

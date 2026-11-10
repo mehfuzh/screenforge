@@ -161,6 +161,146 @@ pub fn checkout_url(email: &str, plan: &str) -> Result<String, String> {
     v.get("url").and_then(|u| u.as_str()).map(String::from).ok_or_else(|| "no checkout url".to_string())
 }
 
+/// Start a checkout for a license `plan` ("pro", "lifetime") that activates this computer by
+/// itself once paid: a fresh secret is saved here (see [`pending_claim`]) and only its SHA-256
+/// goes to the backend; [`claim_checkout`] then fetches the key. `email` (optional) prefills
+/// Checkout, `promo` (optional) is a promotion code; an invalid one is an `Err` with the reason.
+pub fn start_checkout(plan: &str, email: Option<&str>, promo: Option<&str>) -> Result<String, String> {
+    use rand::RngCore;
+    let device = device_id().ok_or_else(|| "ScreenForge cannot identify this computer.".to_string())?;
+    let mut secret = [0u8; 32];
+    rand::rngs::OsRng.fill_bytes(&mut secret);
+    let secret = hex(&secret);
+    let mut body = serde_json::json!({ "plan": plan, "device": device, "claim": hex(&Sha256::digest(secret.as_bytes())) });
+    if let Some(e) = email.map(str::trim).filter(|e| e.contains('@')) {
+        body["email"] = e.into();
+    }
+    if let Some(p) = promo.map(str::trim).filter(|p| !p.is_empty()) {
+        body["promo"] = p.into();
+    }
+    let v = call_function("create-checkout", body)?;
+    let url = v.get("url").and_then(|u| u.as_str()).map(String::from).ok_or_else(|| "no checkout url".to_string())?;
+    // kept on disk, so paying after a restart still activates
+    if let Some(p) = claim_file() {
+        let _ = std::fs::create_dir_all(p.parent().unwrap());
+        let _ = std::fs::write(p, &secret);
+    }
+    Ok(url)
+}
+
+fn claim_file() -> Option<std::path::PathBuf> {
+    key_file().map(|p| p.with_file_name("checkout-claim"))
+}
+
+/// A checkout started here that has not activated this computer yet.
+pub fn pending_claim() -> bool {
+    claim_file().and_then(|p| std::fs::read_to_string(p).ok()).is_some_and(|s| s.trim().len() == 64)
+}
+
+fn drop_claim() {
+    if let Some(p) = claim_file() {
+        let _ = std::fs::remove_file(p);
+    }
+}
+
+/// Outcome of [`claim_checkout`].
+#[derive(Debug, Clone, PartialEq)]
+pub enum Claim {
+    /// Paid: this computer is activated (key and email saved).
+    Done(Status),
+    /// Not paid yet: ask again in a moment.
+    Pending,
+    /// Paid with an address that had a license already: sign in with the emailed code.
+    Verify(String),
+}
+
+/// Ask whether the checkout from [`start_checkout`] was paid, activating this computer when it
+/// was. The saved secret is removed once it is used up (or refused).
+pub fn claim_checkout() -> Result<Claim, String> {
+    let secret = claim_file().and_then(|p| std::fs::read_to_string(p).ok()).map(|s| s.trim().to_string()).filter(|s| s.len() == 64).ok_or("no checkout")?;
+    let device = device_id().ok_or_else(|| "ScreenForge cannot identify this computer.".to_string())?;
+    let v = match request("license-claim", serde_json::json!({ "device": device, "claim": secret })) {
+        Ok(v) => v,
+        Err((410, msg)) => {
+            drop_claim();
+            // claimed already, by the agent panel or Export watching the same checkout
+            let saved = load_saved().map(|k| verify(&k)).filter(Status::is_valid);
+            return saved.map(Claim::Done).ok_or(msg);
+        }
+        Err((_, msg)) => return Err(msg),
+    };
+    match v.get("status").and_then(|s| s.as_str()) {
+        Some("pending") => Ok(Claim::Pending),
+        Some("verify") => {
+            drop_claim();
+            Ok(Claim::Verify(v.get("email").and_then(|e| e.as_str()).unwrap_or_default().to_string()))
+        }
+        _ => {
+            let email = v.get("email").and_then(|e| e.as_str()).unwrap_or_default().to_string();
+            let status = store_key(&v, &email)?;
+            drop_claim();
+            Ok(Claim::Done(status))
+        }
+    }
+}
+
+/// Free exports per computer without a license (the backend's `export-allowance` has the
+/// final say).
+pub const FREE_EXPORTS: u32 = 2;
+
+/// Free exports finished while the server could not be told, sent on the next check.
+fn unsent_exports_file() -> Option<std::path::PathBuf> {
+    key_file().map(|p| p.with_file_name("free-exports-unsent"))
+}
+
+fn unsent_exports() -> u32 {
+    unsent_exports_file().and_then(|p| std::fs::read_to_string(p).ok()).and_then(|s| s.trim().parse().ok()).unwrap_or(0)
+}
+
+fn set_unsent_exports(n: u32) {
+    if let Some(p) = unsent_exports_file() {
+        let _ = std::fs::create_dir_all(p.parent().unwrap());
+        let _ = if n == 0 { std::fs::remove_file(p) } else { std::fs::write(p, n.to_string()) };
+    }
+}
+
+/// Free exports this computer has left. Needs the server: offline it is an `Err` and there
+/// is no free export (licensed export works offline). Free exports recorded while offline are
+/// sent first.
+pub fn free_exports_left() -> Result<u32, String> {
+    let _one = FREE_EXPORTS_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    free_exports_left_locked()
+}
+
+/// One check or record at a time: two sending the same unsent export would count it twice.
+static FREE_EXPORTS_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+fn free_exports_left_locked() -> Result<u32, String> {
+    let device = device_id().ok_or_else(|| "ScreenForge cannot identify this computer.".to_string())?;
+    let mut unsent = unsent_exports();
+    let mut v = None;
+    while unsent > 0 {
+        v = Some(call_backend("export-allowance", serde_json::json!({ "device": device, "record": true }))?);
+        unsent -= 1;
+        set_unsent_exports(unsent);
+    }
+    let v = match v {
+        Some(v) => v,
+        None => call_backend("export-allowance", serde_json::json!({ "device": device }))?,
+    };
+    let used = v.get("used").and_then(|u| u.as_u64()).unwrap_or(u64::from(FREE_EXPORTS)) as u32;
+    let free = v.get("free").and_then(|f| f.as_u64()).map(|f| f as u32).unwrap_or(FREE_EXPORTS);
+    Ok(free.saturating_sub(used))
+}
+
+/// A free export finished: count it (kept here until the server can be told). Returns what
+/// is left, as far as this computer knows.
+pub fn record_free_export() -> Result<u32, String> {
+    let _one = FREE_EXPORTS_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    set_unsent_exports(unsent_exports() + 1);
+    free_exports_left_locked()
+}
+
 fn email_file() -> Option<std::path::PathBuf> {
     key_file().map(|p| p.with_file_name("email"))
 }

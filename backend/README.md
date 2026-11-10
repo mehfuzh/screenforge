@@ -26,7 +26,7 @@ manual steps, for reference:
 2. Stripe: create a product with a one-time US$49 price (`setup.sh` does this; `update-price.sh <cents>` changes the price later, Stripe and Supabase in one go); set `STRIPE_SECRET_KEY`,
    `STRIPE_WEBHOOK_SECRET`, `STRIPE_PRICE_LIFETIME`.
 3. Resend: `RESEND_API_KEY`, `LICENSE_FROM_EMAIL`.
-4. `supabase db push && supabase functions deploy create-checkout stripe-webhook license-refresh license-activate free-export unsplash jamendo agent voice`
+4. `supabase db push && supabase functions deploy create-checkout stripe-webhook license-refresh license-activate license-claim export-allowance free-export unsplash jamendo agent voice`
 5. Point `PURCHASE_URL` in `crates/sf-license` at your checkout page (or the `create-checkout` URL).
 
 ## Activation from the app
