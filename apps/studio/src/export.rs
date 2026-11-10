@@ -61,6 +61,14 @@ pub struct ExportDialog {
     claim_until: Option<std::time::Instant>,
     next_claim: Option<std::time::Instant>,
     claim: Option<Receiver<Result<sf_license::Claim, String>>>,
+    /// Free exports left on this computer without a license: asked each time the dialog opens
+    /// (`Err`: the server could not be reached, so there is none).
+    free_left: Option<Result<u32, String>>,
+    free_rx: Option<Receiver<Result<u32, String>>>,
+    /// The export running now is a free one: counted once it finishes.
+    free_job: bool,
+    /// Pro, Creator and sign-in shown while free exports remain ("Remove the limit").
+    show_upgrade: bool,
     progress: Option<sf_export::Progress>,
     result: Option<Result<PathBuf, String>>,
     started: Option<std::time::Instant>,
@@ -71,7 +79,7 @@ pub struct ExportDialog {
 /// that loads the license and talks to the backend.
 impl Default for ExportDialog {
     fn default() -> Self {
-        ExportDialog { open: false, license: sf_license::Status::Invalid("no key".into()), email: String::new(), activation: None, check_in: None, activation_msg: None, code_sent_to: None, code: String::new(), signing_in: false, promo: String::new(), promo_open: false, checkout: None, claim_until: None, next_claim: None, claim: None, format: Format::Mp4, fps: 60.0, height: 1080, quality: QualityPreset::SocialMedia, codec: VideoCodec::H264, audio: true, job: None, progress: None, result: None, started: None }
+        ExportDialog { open: false, license: sf_license::Status::Invalid("no key".into()), email: String::new(), activation: None, check_in: None, activation_msg: None, code_sent_to: None, code: String::new(), signing_in: false, promo: String::new(), promo_open: false, checkout: None, claim_until: None, next_claim: None, claim: None, free_left: None, free_rx: None, free_job: false, show_upgrade: false, format: Format::Mp4, fps: 60.0, height: 1080, quality: QualityPreset::SocialMedia, codec: VideoCodec::H264, audio: true, job: None, progress: None, result: None, started: None }
     }
 }
 
@@ -207,9 +215,43 @@ impl ExportDialog {
         }
     }
 
+    /// Free exports left: asked when the dialog opens without a license, forgotten when it
+    /// closes so the next open asks again.
+    fn poll_free_exports(&mut self, ctx: &egui::Context) {
+        if !self.open {
+            if self.free_rx.is_none() {
+                self.free_left = None;
+            }
+        } else if !self.license.is_valid() && self.free_left.is_none() && self.free_rx.is_none() {
+            let (tx, rx) = channel();
+            std::thread::spawn(move || {
+                let _ = tx.send(sf_license::free_exports_left());
+            });
+            self.free_rx = Some(rx);
+        }
+        if let Some(rx) = &self.free_rx {
+            match rx.try_recv() {
+                Ok(r) => {
+                    self.free_rx = None;
+                    if self.open {
+                        self.free_left = Some(r);
+                    }
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => ctx.request_repaint_after(std::time::Duration::from_millis(200)),
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => self.free_rx = None,
+            }
+        }
+    }
+
+    /// Exporting is allowed: a license, or a free export left (known from the server).
+    fn can_export(&self) -> bool {
+        self.license.is_valid() || matches!(self.free_left, Some(Ok(n)) if n > 0)
+    }
+
     /// Drain background messages (export progress, activation) and handle Escape.
     pub fn poll(&mut self, ctx: &egui::Context) {
         self.poll_checkout(ctx);
+        self.poll_free_exports(ctx);
         if let Some(rx) = &self.check_in {
             match rx.try_recv() {
                 Ok(r) => {
@@ -267,6 +309,12 @@ impl ExportDialog {
                 match m {
                     Msg::Progress(p) => self.progress = Some(p),
                     Msg::Done(r) => {
+                        // a finished free export is counted (kept on disk until online)
+                        if std::mem::take(&mut self.free_job) && r.is_ok() {
+                            std::thread::spawn(|| {
+                                let _ = sf_license::record_free_export();
+                            });
+                        }
                         // a cancelled export just returns to the dialog
                         self.result = match r {
                             Err(e) if e.contains("cancelled") => None,
@@ -363,13 +411,52 @@ impl ExportDialog {
 
     /// Export settings, drawn in the export dialog over the editor. Escape, Cancel or a click
     /// outside dismisses it.
+    /// Without a license: the free exports line. Returns true when Pro, Creator and sign-in
+    /// should show below it (no free export left, offline, or "Remove the limit").
+    fn free_upgrade_ui(&mut self, ui: &mut egui::Ui) -> bool {
+        let pal = theme::p();
+        widgets::title(ui, "License");
+        let free = sf_license::FREE_EXPORTS;
+        let show = match &self.free_left {
+            None => {
+                widgets::hint(ui, "Checking your free exports…");
+                false
+            }
+            Some(Ok(n)) if *n > 0 => {
+                let line = if *n == free { format!("You have {free} free exports. After that, Pro or Creator keeps you exporting.") } else { format!("{n} of {free} free exports left on this computer.") };
+                ui.add(egui::Label::new(RichText::new(line).size(13.0).color(pal.text)).wrap());
+                ui.add_space(4.0);
+                if !self.show_upgrade && !self.signing_in && ui.link(RichText::new("Remove the limit").color(pal.text_dim)).clicked() {
+                    self.show_upgrade = true;
+                }
+                self.show_upgrade || self.signing_in
+            }
+            Some(Ok(_)) => {
+                widgets::hint(ui, &format!("Your {free} free exports are used. Pro or Creator keeps you exporting."));
+                true
+            }
+            Some(Err(_)) => {
+                ui.add(egui::Label::new(RichText::new("Free exports need an internet connection. Connect and try again, or use a license (it works offline).").size(13.0).color(pal.danger)).wrap());
+                ui.add_space(4.0);
+                if ui.link(RichText::new("Try again").color(pal.text_dim)).clicked() {
+                    self.free_left = None;
+                }
+                true
+            }
+        };
+        if show {
+            ui.add_space(4.0);
+        } else {
+            ui.add_space(6.0);
+            ui.separator();
+        }
+        show
+    }
+
     pub fn settings_ui(&mut self, ed: &mut Editor, ui: &mut egui::Ui) {
             ui.label(RichText::new("Export").size(18.0).strong());
             ui.add_space(4.0);
-            if !self.license.is_valid() {
-                widgets::title(ui, "License");
-                widgets::hint(ui, "Recording and editing are free; exporting needs Pro or Creator.");
-                ui.add_space(4.0);
+            if !self.license.is_valid() && self.free_upgrade_ui(ui) {
                 let opening = self.checkout.is_some();
                 ui.horizontal_wrapped(|ui| {
                     // both ways to export: Pro with the agent, or Creator for export alone
@@ -502,8 +589,7 @@ impl ExportDialog {
             ui.add_space(6.0);
             ui.horizontal(|ui| {
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    let licensed = self.license.is_valid();
-                    let btn = ui.add_enabled_ui(licensed, |ui| widgets::accent_button(ui, "Export to file…")).inner;
+                    let btn = ui.add_enabled_ui(self.can_export(), |ui| widgets::accent_button(ui, "Export to file…")).inner;
                     if btn.clicked() {
                         let ext = match (self.format, self.codec) {
                             (Format::Gif, _) => "gif",
@@ -554,6 +640,13 @@ impl ExportDialog {
             };
             let _ = tx.send(Msg::Done(run().map_err(|e| format!("{e:#}"))));
         });
+        self.free_job = !self.license.is_valid();
+        if self.free_job {
+            // one used, as far as this dialog knows (the server counts it once it finishes)
+            if let Some(Ok(n)) = &mut self.free_left {
+                *n = n.saturating_sub(1);
+            }
+        }
         self.started = Some(std::time::Instant::now());
         self.progress = None;
         self.result = None;
