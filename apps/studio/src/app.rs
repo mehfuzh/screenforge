@@ -786,6 +786,85 @@ fn ed_name(p: &std::path::Path) -> String {
     p.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default()
 }
 
+impl App {
+    /// An error, or the steps to allow a macOS permission, over whatever is on screen.
+    fn error_modal(&mut self, ctx: &egui::Context, err: &str) {
+        use crate::widgets::{self, Icon};
+        use egui::{vec2, CornerRadius, RichText};
+        let pal = crate::theme::p();
+        let help = crate::recorder::permission_help(err);
+        let frame = egui::Frame::NONE.fill(pal.bg).stroke(egui::Stroke::new(1.0, pal.border)).corner_radius(crate::theme::RADIUS).inner_margin(egui::Margin::symmetric(22, 20)).shadow(ctx.global_style().visuals.window_shadow);
+        // over the floating toolbar the window is see-through: no dimmed backdrop there
+        let backdrop = if matches!(self.screen, Screen::Picker(_)) { egui::Color32::TRANSPARENT } else { pal.overlay };
+        let mut close = false;
+        let resp = egui::Modal::new(egui::Id::new("error_modal")).frame(frame).backdrop_color(backdrop).show(ctx, |ui| {
+            ui.set_width(400.0);
+            ui.spacing_mut().item_spacing = vec2(10.0, 0.0);
+            let (icon, title) = match &help {
+                Some(h) => (h.icon, h.title),
+                None => (Icon::Close, "Something went wrong"),
+            };
+            ui.horizontal(|ui| {
+                let (tile, _) = ui.allocate_exact_size(vec2(40.0, 40.0), egui::Sense::hover());
+                ui.painter().rect_filled(tile, CornerRadius::same(crate::theme::RADIUS_SM), pal.card_2);
+                widgets::paint_icon(ui.painter(), egui::Rect::from_center_size(tile.center(), vec2(18.0, 18.0)), icon, if help.is_some() { pal.accent } else { pal.danger });
+                ui.vertical(|ui| {
+                    ui.add_space(10.0);
+                    ui.label(RichText::new(title).size(16.0).strong().color(pal.text));
+                });
+            });
+            ui.add_space(14.0);
+            match &help {
+                Some(h) => {
+                    ui.add(egui::Label::new(RichText::new(h.why).size(13.0).color(pal.text_dim)).wrap());
+                    ui.add_space(14.0);
+                    let steps = [format!("Open System Settings → Privacy & Security → {}.", h.pane), "Turn on ScreenForge.".to_string(), h.then.to_string()];
+                    for (i, step) in steps.iter().enumerate() {
+                        ui.horizontal_top(|ui| {
+                            let (dot, _) = ui.allocate_exact_size(vec2(20.0, 20.0), egui::Sense::hover());
+                            ui.painter().circle_filled(dot.center(), 10.0, pal.card_2);
+                            ui.painter().text(dot.center(), egui::Align2::CENTER_CENTER, (i + 1).to_string(), egui::FontId::proportional(11.5), pal.text);
+                            ui.vertical(|ui| {
+                                ui.add_space(2.0);
+                                ui.add(egui::Label::new(RichText::new(step).size(13.0).color(pal.text)).wrap());
+                            });
+                        });
+                        ui.add_space(8.0);
+                    }
+                    // a development build run from a terminal: macOS asks about the terminal
+                    if cfg!(debug_assertions) {
+                        ui.add(egui::Label::new(RichText::new("Development build: when run with cargo run, allow the terminal app instead.").size(11.5).color(pal.text_faint)).wrap());
+                        ui.add_space(8.0);
+                    }
+                    ui.add_space(6.0);
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if widgets::accent_button(ui, "Open System Settings").clicked() {
+                            let _ = sf_recording::permissions::open_settings(h.permission);
+                            close = true;
+                        }
+                        if widgets::secondary_button(ui, "Not now").clicked() {
+                            close = true;
+                        }
+                    });
+                }
+                None => {
+                    ui.add(egui::Label::new(RichText::new(err).size(13.0).color(pal.text_dim)).wrap());
+                    ui.add_space(16.0);
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if widgets::accent_button(ui, "OK").clicked() {
+                            close = true;
+                        }
+                    });
+                }
+            }
+        });
+        // Escape or a click outside
+        if close || resp.should_close() {
+            self.error = None;
+        }
+    }
+}
+
 impl eframe::App for App {
     fn on_exit(&mut self) {
         self.leave_editor();
@@ -1162,36 +1241,7 @@ impl eframe::App for App {
         }
 
         if let Some(err) = self.error.clone() {
-            let mut open = true;
-            let help = crate::recorder::permission_help(&err);
-            let title = if help.is_some() { "Permission needed" } else { "Error" };
-            egui::Window::new(title).collapsible(false).resizable(false).open(&mut open).anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0]).show(ctx, |ui| {
-                ui.set_max_width(420.0);
-                match help {
-                    Some((text, perm)) => {
-                        ui.label(text);
-                        ui.add_space(8.0);
-                        ui.horizontal(|ui| {
-                            if ui.button("Open System Settings").clicked() {
-                                let _ = sf_recording::permissions::open_settings(perm);
-                                self.error = None;
-                            }
-                            if ui.button("Cancel").clicked() {
-                                self.error = None;
-                            }
-                        });
-                    }
-                    None => {
-                        ui.label(err);
-                        if ui.button("OK").clicked() {
-                            self.error = None;
-                        }
-                    }
-                }
-            });
-            if !open {
-                self.error = None;
-            }
+            self.error_modal(ctx, &err);
         }
         #[cfg(target_os = "linux")]
         self.update_input_region(ctx);

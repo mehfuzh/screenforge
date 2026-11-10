@@ -247,7 +247,7 @@ impl Section {
             Section::Animations => widgets::Icon::Animations,
             Section::Agent => widgets::Icon::Agent,
             Section::DeviceFrame => widgets::Icon::DeviceFrame,
-            Section::Chapters => widgets::Icon::Flag,
+            Section::Chapters => widgets::Icon::Chapters,
         }
     }
 

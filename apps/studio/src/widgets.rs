@@ -330,6 +330,9 @@ pub enum Icon {
     Pause,
     Play,
     Flag,
+    /// A video frame with a play mark over a progress bar split into chapters (the Chapters
+    /// section).
+    Chapters,
     Restart,
     /// Magnifier with a plus (a zoom, a bigger preview).
     Zoom,
@@ -585,6 +588,13 @@ pub fn paint_icon(p: &egui::Painter, rect: Rect, icon: Icon, color: Color32) {
         Icon::Flag => {
             line((-0.6, -0.8), (-0.6, 0.9));
             p.add(egui::Shape::convex_polygon(vec![pos2(c.x - 0.6 * r, c.y - 0.8 * r), pos2(c.x + 0.7 * r, c.y - 0.5 * r), pos2(c.x - 0.6 * r, c.y - 0.1 * r)], color, Stroke::NONE));
+        }
+        Icon::Chapters => {
+            p.rect_stroke(rr(-0.9, -0.8, 0.9, 0.3), 3.0, s, egui::StrokeKind::Middle);
+            p.add(egui::Shape::convex_polygon(vec![pos2(c.x - 0.18 * r, c.y - 0.5 * r), pos2(c.x + 0.27 * r, c.y - 0.25 * r), pos2(c.x - 0.18 * r, c.y)], color, Stroke::NONE));
+            for (a, b) in [(-0.9, -0.38), (-0.18, 0.3), (0.5, 0.9)] {
+                line((a, 0.75), (b, 0.75));
+            }
         }
         Icon::Restart => {
             // open circular arrow
