@@ -67,8 +67,6 @@ pub struct ExportDialog {
     free_rx: Option<Receiver<Result<u32, String>>>,
     /// The export running now is a free one: counted once it finishes.
     free_job: bool,
-    /// Pro, Creator and sign-in shown while free exports remain ("Remove the limit").
-    show_upgrade: bool,
     progress: Option<sf_export::Progress>,
     result: Option<Result<PathBuf, String>>,
     started: Option<std::time::Instant>,
@@ -79,7 +77,7 @@ pub struct ExportDialog {
 /// that loads the license and talks to the backend.
 impl Default for ExportDialog {
     fn default() -> Self {
-        ExportDialog { open: false, license: sf_license::Status::Invalid("no key".into()), email: String::new(), activation: None, check_in: None, activation_msg: None, code_sent_to: None, code: String::new(), signing_in: false, promo: String::new(), promo_open: false, checkout: None, claim_until: None, next_claim: None, claim: None, free_left: None, free_rx: None, free_job: false, show_upgrade: false, format: Format::Mp4, fps: 60.0, height: 1080, quality: QualityPreset::SocialMedia, codec: VideoCodec::H264, audio: true, job: None, progress: None, result: None, started: None }
+        ExportDialog { open: false, license: sf_license::Status::Invalid("no key".into()), email: String::new(), activation: None, check_in: None, activation_msg: None, code_sent_to: None, code: String::new(), signing_in: false, promo: String::new(), promo_open: false, checkout: None, claim_until: None, next_claim: None, claim: None, free_left: None, free_rx: None, free_job: false, format: Format::Mp4, fps: 60.0, height: 1080, quality: QualityPreset::SocialMedia, codec: VideoCodec::H264, audio: true, job: None, progress: None, result: None, started: None }
     }
 }
 
@@ -412,7 +410,7 @@ impl ExportDialog {
     /// Export settings, drawn in the export dialog over the editor. Escape, Cancel or a click
     /// outside dismisses it.
     /// Without a license: the free exports line. Returns true when Pro, Creator and sign-in
-    /// should show below it (no free export left, offline, or "Remove the limit").
+    /// should show below it (always, once the free exports are known).
     fn free_upgrade_ui(&mut self, ui: &mut egui::Ui) -> bool {
         let pal = theme::p();
         widgets::title(ui, "License");
@@ -423,14 +421,10 @@ impl ExportDialog {
                 false
             }
             Some(Ok(n)) if *n > 0 => {
-                let line = if *n == free { format!("You have {free} free exports. After that, Pro or Creator keeps you exporting.") } else { format!("{n} of {free} free exports left on this computer.") };
+                // the upgrade buttons show right under it, as when none are left
+                let line = if *n == free { format!("You have {free} free exports. Upgrade for unlimited export.") } else { format!("{n} of {free} free exports left on this computer. Upgrade for unlimited export.") };
                 ui.add(egui::Label::new(RichText::new(line).size(13.0).color(pal.text)).wrap());
-                ui.add_space(4.0);
-                // secondary: Export stays the dialog's one accent button
-                if !self.show_upgrade && !self.signing_in && widgets::secondary_button(ui, "Remove the limit").clicked() {
-                    self.show_upgrade = true;
-                }
-                self.show_upgrade || self.signing_in
+                true
             }
             Some(Ok(_)) => {
                 widgets::hint(ui, &format!("Your {free} free exports are used. Pro or Creator keeps you exporting."));
