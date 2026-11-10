@@ -67,6 +67,9 @@ pub struct ExportDialog {
     free_rx: Option<Receiver<Result<u32, String>>>,
     /// The dialog was open last frame (opening it refreshes the free exports).
     was_open: bool,
+    /// `sf_license::license_generation` the license was last read at: a key saved or removed
+    /// elsewhere (the agent panel's upgrade) reads it again.
+    license_seen: u64,
     /// The export running now is a free one: counted once it finishes.
     free_job: bool,
     progress: Option<sf_export::Progress>,
@@ -79,7 +82,7 @@ pub struct ExportDialog {
 /// that loads the license and talks to the backend.
 impl Default for ExportDialog {
     fn default() -> Self {
-        ExportDialog { open: false, license: sf_license::Status::Invalid("no key".into()), email: String::new(), activation: None, check_in: None, activation_msg: None, code_sent_to: None, code: String::new(), signing_in: false, promo: String::new(), promo_open: false, checkout: None, claim_until: None, next_claim: None, claim: None, free_left: None, free_rx: None, was_open: false, free_job: false, format: Format::Mp4, fps: 60.0, height: 1080, quality: QualityPreset::SocialMedia, codec: VideoCodec::H264, audio: true, job: None, progress: None, result: None, started: None }
+        ExportDialog { open: false, license: sf_license::Status::Invalid("no key".into()), email: String::new(), activation: None, check_in: None, activation_msg: None, code_sent_to: None, code: String::new(), signing_in: false, promo: String::new(), promo_open: false, checkout: None, claim_until: None, next_claim: None, claim: None, free_left: None, free_rx: None, was_open: false, license_seen: 0, free_job: false, format: Format::Mp4, fps: 60.0, height: 1080, quality: QualityPreset::SocialMedia, codec: VideoCodec::H264, audio: true, job: None, progress: None, result: None, started: None }
     }
 }
 
@@ -103,7 +106,7 @@ impl ExportDialog {
             None
         };
         // a checkout from an earlier session, paid after quitting: look for it a while
-        let mut d = ExportDialog { license, email, check_in, ..Default::default() };
+        let mut d = ExportDialog { license, email, check_in, license_seen: sf_license::license_generation(), ..Default::default() };
         // known before the dialog first opens
         if !d.license.is_valid() {
             d.fetch_free_exports();
@@ -256,6 +259,11 @@ impl ExportDialog {
 
     /// Drain background messages (export progress, activation) and handle Escape.
     pub fn poll(&mut self, ctx: &egui::Context) {
+        let generation = sf_license::license_generation();
+        if generation != self.license_seen {
+            self.license_seen = generation;
+            self.license = sf_license::load_saved().map(|k| sf_license::verify(&k)).unwrap_or_else(|| sf_license::Status::Invalid("no key".into()));
+        }
         self.poll_checkout(ctx);
         self.poll_free_exports(ctx);
         if let Some(rx) = &self.check_in {

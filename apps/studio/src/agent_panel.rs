@@ -338,6 +338,9 @@ pub struct AgentPanel {
     /// here (the app's data was reset): the sign-in being restored, tried once per session.
     restore_rx: Option<mpsc::Receiver<Result<sf_license::Activation, String>>>,
     restore_tried: bool,
+    /// `sf_license::license_generation` when the plan was last fetched: a key saved or removed
+    /// elsewhere (Export activated Pro, a renewal) fetches it again.
+    license_seen: Option<u64>,
     /// "Signed in." and the like: shown above the suggestions until the first message.
     notice: Option<String>,
 }
@@ -683,6 +686,8 @@ impl AgentPanel {
         self.log.clear();
         self.notice = note;
         self.license_changed = true;
+        // this panel's own sign-in: no second fetch for the key it just saved
+        self.license_seen = Some(sf_license::license_generation());
         self.fetch_credits();
     }
 
@@ -1042,6 +1047,20 @@ impl AgentPanel {
         self.poll_claim();
         if std::mem::take(&mut self.license_changed) {
             ed.export.license = sf_license::load_saved().map(|k| sf_license::verify(&k)).unwrap_or_else(|| sf_license::Status::Invalid("no key".into()));
+        }
+        // the license changed outside this panel (bought or signed in from Export): fetch the
+        // plan again, keeping the chat
+        // (a fetch already running is left to finish; the next frame asks again)
+        let generation = sf_license::license_generation();
+        match self.license_seen {
+            None => self.license_seen = Some(generation),
+            Some(seen) if seen != generation && self.credits_rx.is_none() => {
+                self.license_seen = Some(generation);
+                self.credits = None;
+                self.credits_error = None;
+                self.fetch_credits();
+            }
+            _ => {}
         }
         if self.credits.is_none() && self.credits_error.is_none() {
             self.fetch_credits();
