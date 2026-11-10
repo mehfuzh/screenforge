@@ -583,7 +583,7 @@ impl AgentPanel {
                     crate::os::open(&url);
                     let note = if sf_license::pending_claim() && self.credits.as_ref().is_some_and(|c| c["pro"].as_bool() != Some(true)) {
                         self.watch_claim(30 * 60);
-                        "Opened checkout in your browser. Pro turns on here by itself once you pay."
+                        "Opened checkout in your browser."
                     } else {
                         "Opened checkout in your browser. Credits arrive here a moment after you pay."
                     };
@@ -658,7 +658,10 @@ impl AgentPanel {
             }
         }
         let now = std::time::Instant::now();
-        if self.claim_until.is_some_and(|t| now > t) {
+        // the watch is silent and ends by itself: on time, or once this computer has the agent
+        // another way (signed in, or the sign-in form is open)
+        let unlocked = self.credits.as_ref().is_some_and(|c| c["allowed"].as_bool() == Some(true));
+        if self.claim_until.is_some_and(|t| now > t) || unlocked || self.sign_in.is_some() {
             self.claim_until = None;
         }
         if self.claim_until.is_some() && self.claim_rx.is_none() && self.next_claim.is_some_and(|t| now >= t) {
@@ -852,7 +855,6 @@ impl AgentPanel {
                 return;
             }
             let opening = self.checkout_rx.is_some();
-            let waiting = self.claim_until.is_some();
             let label = if opening { "Opening checkout…" } else { "Upgrade to Pro · $20/month" };
             if ui.add_enabled_ui(!opening, |ui| widgets::accent_button(ui, label)).inner.clicked() {
                 self.buy("pro");
@@ -868,14 +870,7 @@ impl AgentPanel {
                 self.promo_open = true;
             }
             ui.add_space(10.0);
-            if waiting {
-                ui.horizontal(|ui| {
-                    working_dots(ui);
-                    ui.add(egui::Label::new(RichText::new("Waiting for your payment. Pro turns on here by itself.").size(12.5).color(pal.text_dim)).wrap());
-                });
-            } else {
-                widgets::hint(ui, "No key or code to type: once you pay, Pro turns on here by itself.");
-            }
+            widgets::hint(ui, "No key or code to type: once you pay, Pro turns on here by itself.");
             ui.add_space(6.0);
             if quiet_link(ui, "Already subscribed? Sign in").clicked() {
                 self.open_sign_in(None);
