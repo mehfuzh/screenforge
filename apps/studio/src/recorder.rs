@@ -81,12 +81,48 @@ pub fn check_permissions(req: &mut RecordRequest) -> Option<String> {
     None
 }
 
-/// User-facing text for a `permission:*` message and the settings pane it refers to.
-pub fn permission_help(msg: &str) -> Option<(&'static str, sf_recording::Permission)> {
+/// What the permission dialog shows for a `permission:*` message.
+pub struct PermissionHelp {
+    pub title: &'static str,
+    /// Why ScreenForge asks, in a sentence.
+    pub why: &'static str,
+    /// The System Settings pane, as the steps name it.
+    pub pane: &'static str,
+    /// The last step: what to do once it is allowed.
+    pub then: &'static str,
+    pub icon: crate::widgets::Icon,
+    pub permission: sf_recording::Permission,
+}
+
+/// The dialog for a `permission:*` message (`None` for any other error).
+pub fn permission_help(msg: &str) -> Option<PermissionHelp> {
+    use crate::widgets::Icon;
+    use sf_recording::Permission;
     match msg {
-        "permission:screen" => Some(("ScreenForge needs Screen Recording permission to capture the screen.\n\nEnable ScreenForge in System Settings → Privacy & Security → Screen Recording, then start the recording again. If you launched it from a terminal with cargo run, the permission applies to the terminal app instead.", sf_recording::Permission::ScreenRecording)),
-        "permission:device" => Some(("ScreenForge needs Camera permission to record an iPhone or iPad: macOS treats a connected device's screen like a camera.\n\nEnable ScreenForge in System Settings → Privacy & Security → Camera, then try again.", sf_recording::Permission::Camera)),
-        "permission:camera" => Some(("ScreenForge needs Camera permission to record your camera.\n\nEnable ScreenForge in System Settings → Privacy & Security → Camera, or choose \"Don't record camera\" in the toolbar.", sf_recording::Permission::Camera)),
+        "permission:screen" => Some(PermissionHelp {
+            title: "Allow screen recording",
+            why: "macOS needs your OK before ScreenForge can capture the screen.",
+            pane: "Screen & System Audio Recording",
+            then: "Quit and reopen ScreenForge if macOS asks, then record again.",
+            icon: Icon::Display,
+            permission: Permission::ScreenRecording,
+        }),
+        "permission:device" => Some(PermissionHelp {
+            title: "Allow camera access",
+            why: "macOS treats a connected iPhone or iPad screen like a camera, so recording one needs camera access.",
+            pane: "Camera",
+            then: "Come back and record again.",
+            icon: Icon::Device,
+            permission: Permission::Camera,
+        }),
+        "permission:camera" => Some(PermissionHelp {
+            title: "Allow camera access",
+            why: "macOS needs your OK before ScreenForge can record your camera. Or record without it: choose Don't record camera in the toolbar.",
+            pane: "Camera",
+            then: "Come back and record again.",
+            icon: Icon::Camera,
+            permission: Permission::Camera,
+        }),
         _ => None,
     }
 }
