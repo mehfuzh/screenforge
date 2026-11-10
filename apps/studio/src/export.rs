@@ -384,7 +384,11 @@ impl ExportDialog {
                 if self.promo_open {
                     ui.label("Coupon code");
                     ui.add_space(2.0);
-                    widgets::text_field(ui, &mut self.promo, "CODE");
+                    let f = widgets::text_field(ui, &mut self.promo, "CODE");
+                    // Enter: Pro's checkout with the code (Creator by its button)
+                    if widgets::submitted(ui, &f) && !opening && !self.promo.trim().is_empty() {
+                        self.buy("pro");
+                    }
                 } else if ui.link(RichText::new("Have a coupon code?").color(theme::p().text_dim)).clicked() {
                     self.promo_open = true;
                 }
@@ -398,14 +402,16 @@ impl ExportDialog {
                 } else {
                     ui.label("Email used at checkout");
                     ui.add_space(2.0);
-                    widgets::text_field(ui, &mut self.email, "you@example.com");
+                    let f = widgets::text_field(ui, &mut self.email, "you@example.com");
+                    let mut enter = widgets::submitted(ui, &f);
                     // a code belongs to the address it was sent to
                     let awaiting_code = self.code_sent_to.as_deref() == Some(self.email.trim());
                     if awaiting_code {
                         ui.add_space(6.0);
                         ui.label("Code from the email");
                         ui.add_space(2.0);
-                        widgets::text_field(ui, &mut self.code, "123456");
+                        let f = widgets::text_field(ui, &mut self.code, "123456");
+                        enter |= widgets::submitted(ui, &f);
                     }
                     ui.add_space(8.0);
                     ui.horizontal_wrapped(|ui| {
@@ -419,7 +425,7 @@ impl ExportDialog {
                             this.activation_msg = None;
                         };
                         if awaiting_code {
-                            if ui.add_enabled_ui(!busy, |ui| widgets::accent_button(ui, if busy { "Checking…" } else { "Confirm" })).inner.clicked() {
+                            if ui.add_enabled_ui(!busy, |ui| widgets::accent_button(ui, if busy { "Checking…" } else { "Confirm" })).inner.clicked() || (enter && !busy) {
                                 let (email, code) = (self.email.clone(), self.code.clone());
                                 start(self, Box::new(move || sf_license::confirm_code(&email, &code).map(sf_license::Activation::Done)));
                             }
@@ -427,7 +433,7 @@ impl ExportDialog {
                                 let email = self.email.clone();
                                 start(self, Box::new(move || sf_license::activate(&email, true)));
                             }
-                        } else if ui.add_enabled_ui(!busy && self.email.contains('@'), |ui| widgets::accent_button(ui, if busy { "Checking…" } else { "Email me a code" })).inner.clicked() {
+                        } else if ui.add_enabled_ui(!busy && self.email.contains('@'), |ui| widgets::accent_button(ui, if busy { "Checking…" } else { "Email me a code" })).inner.clicked() || (enter && !busy && self.email.contains('@')) {
                             let email = self.email.clone();
                             start(self, Box::new(move || sf_license::activate(&email, true)));
                         }

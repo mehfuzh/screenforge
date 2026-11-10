@@ -707,14 +707,16 @@ impl AgentPanel {
         let pal = theme::p();
         let Some(s) = self.sign_in.as_mut() else { return };
         let busy = s.rx.is_some();
-        let mut step = false;
+        let mut step;
         let mut cancel = false;
         if !s.code_sent {
             ui.label(RichText::new(if s.previous.is_some() { "Switch to the account with this email" } else { "Sign in with the email you subscribed with" }).size(12.5).color(pal.text_dim));
-            widgets::text_field(ui, &mut s.email, "you@example.com");
+            let f = widgets::text_field(ui, &mut s.email, "you@example.com");
+            step = widgets::submitted(ui, &f) && !busy && s.email.contains('@');
         } else {
             ui.label(RichText::new(format!("Enter the 6-digit code we emailed to {}", s.email.trim())).size(12.5).color(pal.text_dim));
-            widgets::text_field(ui, &mut s.code, "123456");
+            let f = widgets::text_field(ui, &mut s.code, "123456");
+            step = widgets::submitted(ui, &f) && !busy;
         }
         ui.add_space(6.0);
         ui.horizontal(|ui| {
@@ -863,9 +865,12 @@ impl AgentPanel {
             if self.promo_open {
                 ui.label(RichText::new("Coupon code").size(12.5).color(pal.text_dim));
                 ui.add_space(2.0);
-                widgets::text_field(ui, &mut self.promo, "CODE");
+                let f = widgets::text_field(ui, &mut self.promo, "CODE");
+                if widgets::submitted(ui, &f) && !opening && !self.promo.trim().is_empty() {
+                    self.buy("pro");
+                }
                 ui.add_space(2.0);
-                widgets::hint(ui, "Applied when checkout opens.");
+                widgets::hint(ui, "Press Enter or Upgrade to open checkout with it.");
             } else if quiet_link(ui, "Have a coupon code?").clicked() {
                 self.promo_open = true;
             }
