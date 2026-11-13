@@ -1888,7 +1888,7 @@ fn narration_ui(ed: &mut Editor, ui: &mut egui::Ui) {
             crate::my_voice::account_voice_name(&voice).unwrap_or_else(|| "This voice".into())
         )),
         Some(v) => widgets::hint(ui, &format!("{}, {}. Studio quality, read online: about 8 credits per 1,000 characters (around 7 a minute), from the credits you share with the agent.", v.name, v.style)),
-        None if sf_tts::clone::is_my_voice(&voice) => widgets::hint(ui, &format!("{}: your own voice, free and private, read on this computer by Chatterbox Turbo. It reads slower than the other voices.", crate::my_voice::name(&voice))),
+        None if sf_tts::clone::is_my_voice(&voice) => widgets::hint(ui, &format!("{}: your own voice, free and private, read on this computer by Chatterbox Turbo.", crate::my_voice::name(&voice))),
         None => widgets::hint(ui, "Free and private: read on this computer, works offline."),
     }
 
