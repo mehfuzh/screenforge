@@ -3,6 +3,7 @@
 #   icon-{256,512,1024}.png   macOS-style tile with margin and drop shadow
 #   icon.icns                 each size rendered from the vector, not downscaled from 1024
 #   icon-tile-256.png         Windows window/tray icon (same tile as icon.ico)
+#   tray-template.png         macOS menu-bar template (from tray-template.svg, 44 px for 22 pt)
 #   icon.ico                  Windows: no drop shadow, tile fills the frame, 16..256 px frames
 #   installer/*.bmp           Inno Setup wizard panel and header images
 #   dmg-background.tiff       DMG window background, 1x + 2x (from dmg-background.svg)
@@ -42,6 +43,7 @@ for w in 55 83 110; do
   magick -size ${w}x${w} xc:white \( "$TMP/tile-1024.png" -resize ${t}x${t} \) -gravity center -composite \
     -type TrueColor BMP3:installer/small-$w.bmp
 done
+render tray-template.svg 44 tray-template.png
 rsvg-convert -w 560 -h 360 dmg-background.svg -o "$TMP/bg.png"
 rsvg-convert -w 1120 -h 720 dmg-background.svg -o "$TMP/bg@2x.png"
 tiffutil -cathidpicheck "$TMP/bg.png" "$TMP/bg@2x.png" -out dmg-background.tiff >/dev/null 2>&1

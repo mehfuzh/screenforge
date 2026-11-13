@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="44" height="44" viewBox="0 0 44 44">
+  <!-- macOS menu-bar template (22 pt at 2x, one colour; the system tints it): the app icon's
+       round lens as its bezel ring, with the record dot at the same proportion (165 / 316) -->
+  <circle cx="22" cy="22" r="15.5" fill="none" stroke="#000" stroke-width="3.4"/>
+  <circle cx="22" cy="22" r="8.1" fill="#000"/>
+</svg>
