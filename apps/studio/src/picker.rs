@@ -450,6 +450,8 @@ impl Picker {
             for c in &self.inputs.microphones {
                 if crate::widgets::menu_item(ui, self.microphone.as_deref() == Some(&c.id), &c.name).clicked() {
                     self.microphone = Some(c.id.clone());
+                    // voice-overs of this recording start from the same microphone
+                    crate::voice_over::choose(Some(sf_recording::discover::AudioDevice { id: c.id.clone(), name: c.name.clone(), is_default: false }));
                 }
             }
         });

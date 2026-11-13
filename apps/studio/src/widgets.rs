@@ -96,11 +96,33 @@ pub fn segmented_with_tip(ui: &mut Ui, selected: usize, labels: &[&str], disable
 
 /// Small pill buttons (wallpaper categories). Returns the newly selected index.
 pub fn pills(ui: &mut Ui, selected: usize, labels: &[&str]) -> Option<usize> {
+    pills_then(ui, selected, labels, |_| {})
+}
+
+/// [`pills`] with more on the same (wrapping) row after them, such as an [`add_pill`].
+pub fn pills_then(ui: &mut Ui, selected: usize, labels: &[&str], then: impl FnOnce(&mut Ui)) -> Option<usize> {
     let mut out = None;
+    // a label too long for a line of its own is shortened with "…" (a pill never wraps inside)
+    let max_text = (ui.available_width() - 2.0 * ui.spacing().button_padding.x - 4.0).max(40.0);
+    let font = egui::FontId::proportional(13.0);
+    let fit = |ui: &Ui, l: &str| -> String {
+        let w = |t: &str| ui.painter().layout_no_wrap(t.to_string(), font.clone(), Color32::WHITE).size().x;
+        if w(l) <= max_text {
+            return l.to_string();
+        }
+        let mut chars: Vec<char> = l.chars().collect();
+        while !chars.is_empty() && w(&format!("{}…", chars.iter().collect::<String>().trim_end())) > max_text {
+            chars.pop();
+        }
+        format!("{}…", chars.iter().collect::<String>().trim_end())
+    };
     ui.horizontal_wrapped(|ui| {
         ui.spacing_mut().item_spacing.x = 6.0;
         for (i, l) in labels.iter().enumerate() {
             let sel = i == selected;
+            let full = *l;
+            let shown = fit(ui, full);
+            let l = &shown.as_str();
             // outlined chips; the selected one is filled with an accent border
             let stroke = if sel { Stroke::new(1.5, theme::p().accent_hover) } else { Stroke::new(1.0, theme::p().border) };
             let b = egui::Button::new(RichText::new(*l).size(13.0).color(if sel { theme::p().text } else { theme::p().text_dim }))
@@ -108,12 +130,36 @@ pub fn pills(ui: &mut Ui, selected: usize, labels: &[&str]) -> Option<usize> {
                 .stroke(stroke)
                 .corner_radius(CornerRadius::same(BUTTON_RADIUS))
                 .min_size(vec2(44.0, 30.0));
-            if ui.add(b).clicked() && !sel {
+            let r = ui.add(b);
+            let r = if *l != full { r.on_hover_text(full) } else { r };
+            if r.clicked() && !sel {
                 out = Some(i);
             }
         }
+        then(ui);
     });
     out
+}
+
+/// A pill that adds one more of what the [`pills`] beside it choose from: a plus and the text,
+/// outlined like an unselected pill.
+/// Disabled is drawn here rather than through `add_enabled_ui`: a child scope in a wrapping row
+/// does not move to the next line, so it would run past the edge.
+pub fn add_pill(ui: &mut Ui, text: &str, enabled: bool) -> Response {
+    let pal = theme::p();
+    let galley = ui.painter().layout_no_wrap(text.to_string(), egui::FontId::proportional(13.0), pal.text_dim);
+    let (rect, resp) = ui.allocate_exact_size(vec2(galley.size().x + 40.0, 30.0), if enabled { Sense::click() } else { Sense::hover() });
+    let resp = if enabled { resp.on_hover_cursor(egui::CursorIcon::PointingHand) } else { resp };
+    let enabled = enabled && ui.is_enabled();
+    let color = if resp.hovered() && enabled { pal.text } else if enabled { pal.text_dim } else { pal.text_faint };
+    let p = ui.painter();
+    if resp.hovered() && enabled {
+        p.rect_filled(rect, CornerRadius::same(BUTTON_RADIUS), pal.card_2);
+    }
+    p.rect_stroke(rect, CornerRadius::same(BUTTON_RADIUS), Stroke::new(1.0, pal.border), egui::StrokeKind::Inside);
+    paint_icon(p, Rect::from_center_size(pos2(rect.left() + 17.0, rect.center().y), vec2(12.0, 12.0)), Icon::Plus, color);
+    p.galley(pos2(rect.left() + 28.0, rect.center().y - galley.size().y / 2.0), galley, color);
+    resp
 }
 
 /// Result of [`labeled_slider`].

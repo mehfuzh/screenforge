@@ -221,7 +221,8 @@ impl Editor {
             selected_music: None,
             selected_voice_over: None,
             voice_rec: None,
-            voice_mic: None,
+            // the microphone picked for the recording (or the last voice-over)
+            voice_mic: crate::voice_over::chosen(),
             voice_mics: None,
             voice_hud: false,
             voice_meter: None,
@@ -604,13 +605,14 @@ impl Editor {
     /// Microphone rows for the voice-over menus: the system default, then each microphone.
     pub fn voice_mic_rows(&mut self, ui: &mut egui::Ui) {
         let mics = self.voice_mics.get_or_insert_with(crate::voice_over::microphones).clone();
-        if crate::widgets::menu_item(ui, self.voice_mic.is_none(), crate::voice_over::default_label(&mics)).clicked() {
-            self.voice_mic = None;
-        }
-        // Linux lists the system default as its own entry: that is the row above
-        for m in mics.iter().filter(|m| m.id != "default") {
-            if crate::widgets::menu_item(ui, self.voice_mic.as_ref().is_some_and(|v| v.id == m.id), &m.name).clicked() {
-                self.voice_mic = Some(m.clone());
+        for m in crate::voice_over::menu_rows(&mics) {
+            let selected = match &self.voice_mic {
+                None => m.id == "default",
+                Some(v) => v.id == m.id,
+            };
+            if crate::widgets::menu_item(ui, selected, &m.name).clicked() {
+                self.voice_mic = (m.id != "default").then_some(m);
+                crate::voice_over::choose(self.voice_mic.clone());
             }
         }
     }

@@ -403,6 +403,8 @@ pub struct MyVoiceJob {
     pub progress: Option<(u64, u64)>,
     /// How far preparing the voice is (0–1).
     pub reading: Option<f32>,
+    /// The voice just made (or made again), for the panel to pick and keep in view.
+    pub made: Option<String>,
     pub error: Option<String>,
     /// The voice the form makes again (`None`: a new voice).
     pub editing: Option<String>,
@@ -752,7 +754,8 @@ impl MyVoiceJob {
         self.progress = None;
         self.reading = None;
         match r {
-            Ok(_) => {
+            Ok(id) => {
+                self.made = Some(id);
                 self.close();
                 self.consent = false;
                 self.picked.clear();

@@ -28,23 +28,14 @@ impl MicMeter {
         let channels = config.channels() as usize;
         let level = Arc::new(AtomicU32::new(0f32.to_bits()));
         let lvl = level.clone();
-        let stream = device
-            .build_input_stream(
-                config.into(),
-                move |data: &[f32], _| {
-                    let mut peak = 0f32;
-                    for frame in data.chunks(channels.max(1)) {
-                        peak = peak.max(frame[0].abs());
-                    }
-                    // fast attack, slow release
-                    let prev = f32::from_bits(lvl.load(Ordering::Relaxed));
-                    let next = if peak > prev { peak } else { prev * 0.85 + peak * 0.15 };
-                    lvl.store(next.to_bits(), Ordering::Relaxed);
-                },
-                |e| tracing::warn!("mic meter stream error: {e}"),
-                None,
-            )
-            .ok()?;
+        let on_err = |e| tracing::warn!("mic meter stream error: {e}");
+        // the same sample formats a voice-over take accepts
+        let stream = match config.sample_format() {
+            cpal::SampleFormat::F32 => device.build_input_stream(config.into(), move |d: &[f32], _| meter(&lvl, d.chunks(channels.max(1)).map(|f| f[0])), on_err, None),
+            cpal::SampleFormat::I16 => device.build_input_stream(config.into(), move |d: &[i16], _| meter(&lvl, d.chunks(channels.max(1)).map(|f| f[0] as f32 / 32768.0)), on_err, None),
+            _ => return None,
+        }
+        .ok()?;
         stream.play().ok()?;
         Some(MicMeter { device_name: name.to_string(), level, _stream: stream })
     }
@@ -54,4 +45,12 @@ impl MicMeter {
         let a = f32::from_bits(self.level.load(Ordering::Relaxed)).max(1e-6);
         ((20.0 * a.log10() + 50.0) / 50.0).clamp(0.0, 1.0)
     }
+}
+
+/// Fold one buffer's peak into the level: fast attack, slow release.
+fn meter(level: &AtomicU32, samples: impl Iterator<Item = f32>) {
+    let peak = samples.fold(0f32, |m, v| m.max(v.abs()));
+    let prev = f32::from_bits(level.load(Ordering::Relaxed));
+    let next = if peak > prev { peak } else { prev * 0.85 + peak * 0.15 };
+    level.store(next.to_bits(), Ordering::Relaxed);
 }

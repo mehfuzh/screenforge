@@ -100,6 +100,27 @@ pub fn default_label(mics: &[AudioDevice]) -> String {
     }
 }
 
+/// The microphone chosen last, in the recording toolbar or a voice-over menu: both start from it,
+/// so a microphone picked once (say because the system default is not the one you talk into)
+/// is the one used everywhere. `None` is the system default.
+static CHOSEN: Mutex<Option<AudioDevice>> = Mutex::new(None);
+
+pub fn chosen() -> Option<AudioDevice> {
+    CHOSEN.lock().clone()
+}
+
+pub fn choose(mic: Option<AudioDevice>) {
+    *CHOSEN.lock() = mic.filter(|m| m.id != "default");
+}
+
+/// Rows for a microphone menu: "System default (…)" first (id `default`), then each microphone.
+/// Linux lists the system default as its own entry, which becomes that first row.
+pub fn menu_rows(mics: &[AudioDevice]) -> Vec<AudioDevice> {
+    let mut rows = vec![AudioDevice { id: "default".into(), name: default_label(mics), is_default: true }];
+    rows.extend(mics.iter().filter(|m| m.id != "default").cloned());
+    rows
+}
+
 /// A saved take.
 pub struct Take {
     pub file_name: String,

@@ -318,13 +318,27 @@ mod mic {
     impl MicRecorder {
         /// Open the microphone and start streaming into the sink (nothing is written until
         /// [`begin_session`](Self::begin_session)).
+        ///
+        /// A microphone that is gone or will not open falls back to the system default, as a
+        /// voice-over does, so the recording still has sound.
         pub fn start(selector: &str, log: RecLog) -> Result<Self> {
+            match Self::open(selector, log.clone()) {
+                Err(e) if selector != "default" => {
+                    log.warning(COMPONENT, format!("Microphone {selector} did not open ({e}); using the system default"));
+                    Self::open("default", log)
+                }
+                r => r,
+            }
+        }
+
+        fn open(selector: &str, log: RecLog) -> Result<Self> {
             // Linux: a `pw:` id opens the default PCM pointed at that PipeWire source; the
             // guard holds the target only until the stream below is open
             let (open_as, pipewire_target) = crate::discover::alsa_selector(selector);
             let (device, device_name, device_id) = resolve_device(selector, open_as)?;
             let supported = device.default_input_config().map_err(|e| Error::Audio(e.to_string()))?;
             let sample_rate = supported.sample_rate();
+            let sample_format = supported.sample_format();
             let channels = supported.channels().clamp(1, 2);
             let config = cpal::StreamConfig { channels, sample_rate, buffer_size: cpal::BufferSize::Default };
             let in_channels = supported.channels() as usize;
@@ -341,35 +355,57 @@ mod mic {
             let thread = std::thread::Builder::new()
                 .name("sf-mic".into())
                 .spawn(move || {
-                    let stream = device.build_input_stream(
-                        full_config,
-                        move |data: &[f32], info: &cpal::InputCallbackInfo| {
-                            let now_ms = clock::process_time_ms();
-                            let ts = info.timestamp();
-                            let latency_ms = ts.callback.duration_since(ts.capture).as_secs_f64() * 1000.0;
-                            let chunk_ms = (data.len() / in_channels.max(1)) as f64 / sample_rate as f64 * 1000.0;
-                            let capture_start_ms = now_ms - latency_ms - chunk_ms;
-                            // level meter: fast attack, slow release
-                            let peak = data.iter().step_by(in_channels.max(1)).fold(0f32, |m, v| m.max(v.abs()));
-                            let prev = f32::from_bits(cb_level.load(Ordering::Relaxed));
-                            let next = if peak > prev { peak } else { prev * 0.85 + peak * 0.15 };
-                            cb_level.store(next.to_bits(), Ordering::Relaxed);
-                            let samples = if in_channels > 2 {
-                                // keep the first two channels of multi-channel interfaces
-                                let mut v = Vec::with_capacity(data.len() / in_channels * 2);
-                                for frame in data.chunks_exact(in_channels) {
-                                    v.push(frame[0]);
-                                    v.push(frame[1]);
-                                }
-                                v
-                            } else {
-                                data.to_vec()
-                            };
-                            sink.push(samples, capture_start_ms);
-                        },
-                        move |e| err_log.error(COMPONENT, format!("Microphone stream error: {e}")),
-                        None,
-                    );
+                    let on_data = move |data: &[f32], info: &cpal::InputCallbackInfo| {
+                        let now_ms = clock::process_time_ms();
+                        let ts = info.timestamp();
+                        let latency_ms = ts.callback.duration_since(ts.capture).as_secs_f64() * 1000.0;
+                        let chunk_ms = (data.len() / in_channels.max(1)) as f64 / sample_rate as f64 * 1000.0;
+                        let capture_start_ms = now_ms - latency_ms - chunk_ms;
+                        // level meter: fast attack, slow release
+                        let peak = data.iter().step_by(in_channels.max(1)).fold(0f32, |m, v| m.max(v.abs()));
+                        let prev = f32::from_bits(cb_level.load(Ordering::Relaxed));
+                        let next = if peak > prev { peak } else { prev * 0.85 + peak * 0.15 };
+                        cb_level.store(next.to_bits(), Ordering::Relaxed);
+                        let samples = if in_channels > 2 {
+                            // keep the first two channels of multi-channel interfaces
+                            let mut v = Vec::with_capacity(data.len() / in_channels * 2);
+                            for frame in data.chunks_exact(in_channels) {
+                                v.push(frame[0]);
+                                v.push(frame[1]);
+                            }
+                            v
+                        } else {
+                            data.to_vec()
+                        };
+                        sink.push(samples, capture_start_ms);
+                    };
+                    let on_err = move |e| err_log.error(COMPONENT, format!("Microphone stream error: {e}"));
+                    // some inputs (USB mics, Linux ALSA hw devices) only offer integer samples
+                    let stream = match sample_format {
+                        cpal::SampleFormat::F32 => device.build_input_stream(full_config, on_data, on_err, None),
+                        cpal::SampleFormat::I16 => device.build_input_stream(
+                            full_config,
+                            move |d: &[i16], i: &cpal::InputCallbackInfo| on_data(&d.iter().map(|&v| v as f32 / 32768.0).collect::<Vec<_>>(), i),
+                            on_err,
+                            None,
+                        ),
+                        cpal::SampleFormat::I32 => device.build_input_stream(
+                            full_config,
+                            move |d: &[i32], i: &cpal::InputCallbackInfo| on_data(&d.iter().map(|&v| v as f32 / 2_147_483_648.0).collect::<Vec<_>>(), i),
+                            on_err,
+                            None,
+                        ),
+                        cpal::SampleFormat::U16 => device.build_input_stream(
+                            full_config,
+                            move |d: &[u16], i: &cpal::InputCallbackInfo| on_data(&d.iter().map(|&v| (v as f32 - 32768.0) / 32768.0).collect::<Vec<_>>(), i),
+                            on_err,
+                            None,
+                        ),
+                        f => {
+                            let _ = ready_tx.send(Err(Error::Audio(format!("unsupported microphone sample format {f:?}"))));
+                            return;
+                        }
+                    };
                     let stream = match stream.and_then(|s| s.play().map(|_| s)) {
                         Ok(s) => s,
                         Err(e) => {
