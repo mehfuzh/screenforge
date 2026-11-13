@@ -1372,11 +1372,19 @@ fn my_voice_ui(ed: &mut Editor, ui: &mut egui::Ui) {
             widgets::hint(ui, &format!("Downloading the voice model… {:.0}% (once, about {:.1} GB)", done as f64 * 100.0 / total.max(1) as f64, total as f64 / 1e9));
             ui.add(egui::ProgressBar::new((done as f64 / total.max(1) as f64) as f32).desired_height(6.0).corner_radius(2.0).fill(pal.accent));
         }
-        (Some(Work::Preparing), _) => {
-            let f = ed.my_voice.reading.unwrap_or(0.0);
-            widgets::hint(ui, &format!("Preparing your voice: reading a first line with it… {:.0}%", f * 100.0));
-            ui.add(egui::ProgressBar::new(f).desired_height(6.0).corner_radius(2.0).fill(pal.accent));
-        }
+        // the model loads (a few seconds) before the first line is read with the new voice
+        (Some(Work::Preparing), _) => match ed.my_voice.reading {
+            Some(f) => {
+                widgets::hint(ui, &format!("Getting your voice ready… {:.0}%", f * 100.0));
+                ui.add(egui::ProgressBar::new(f).desired_height(6.0).corner_radius(2.0).fill(pal.accent));
+            }
+            None => {
+                ui.horizontal(|ui| {
+                    ui.spinner();
+                    widgets::hint(ui, "Loading the voice model…");
+                });
+            }
+        },
         (Some(_), _) => {
             ui.horizontal(|ui| {
                 ui.spinner();
