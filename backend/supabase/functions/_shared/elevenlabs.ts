@@ -32,8 +32,15 @@ export const isVoice = (voice: unknown): voice is string => typeof voice === "st
 export async function voiceIdFor(db: SupabaseClient, payer: Payer, voice: string): Promise<string | Response> {
   if (voice !== MY_VOICE) return VOICES[voice];
   if (!payer.email) return fail("My voice needs ScreenForge Pro activated on this computer.", 402, { code: "pro_required" });
-  const { data } = await db.from("voice_clones").select("voice_id").eq("email", payer.email.toLowerCase()).maybeSingle();
-  return data?.voice_id ?? fail("You have not made your voice yet. Create it under Narration → My voice.", 404, { code: "no_clone" });
+  const email = payer.email.toLowerCase();
+  const { data } = await db.from("voice_clones").select("voice_id").eq("email", email).maybeSingle();
+  if (!data) return fail("You have not made your voice yet. Create it under Narration → My voice.", 404, { code: "no_clone" });
+  // put away by the cleanup (my-voice): the app makes it again from its recordings and retries
+  if (!data.voice_id) return fail("Your voice was put away after a while unused. Make it again under Narration → My voice.", 409, { code: "voice_parked" });
+  // how recently it was used decides which clones the cleanup puts away
+  const { error } = await db.from("voice_clones").update({ last_used_at: new Date().toISOString() }).eq("email", email);
+  if (error) console.error("voice_clones last_used_at", error.message);
+  return data.voice_id;
 }
 
 const DEVICE_DAILY_USD = Number(Deno.env.get("AGENT_DEVICE_DAILY_USD") ?? "0");
@@ -88,7 +95,20 @@ export async function elevenLabsFailed(r: Response | null, what: string): Promis
   const detail = r ? await r.text().catch(() => "") : "";
   console.error("elevenlabs", r?.status, detail.slice(0, 500));
   if (r?.status === 429) return fail("Too many requests right now. Wait a moment and try again.", 429);
-  return fail(`ElevenLabs could not ${what} right now. Try again in a moment.`, 502);
+  // ElevenLabs' own reason ({ detail: { status } }), so a failure that keeps happening says why
+  let reason = "";
+  try {
+    const d = JSON.parse(detail)?.detail;
+    reason = typeof d?.code === "string" ? d.code : typeof d?.status === "string" ? d.status : typeof d === "string" ? d.slice(0, 80) : "";
+  } catch {
+    // not JSON
+  }
+  // ElevenLabs flagged the voice (a clone it wants verified): only made-again recordings help
+  if (r && /voice_access_denied/.test(reason)) return fail("ElevenLabs has blocked this voice: it flagged the clone for verification. Make your voice again under Narration → My voice with other recordings of only you speaking, or pick another voice.", 403, { code: "voice_blocked" });
+  if (r && /voice_not_found/.test(reason)) return fail("ElevenLabs no longer has this voice. Make your voice again under Narration → My voice.", 404, { code: "no_clone" });
+  if (r && /quota_exceeded|insufficient|payment|subscription/i.test(reason)) return fail(`ElevenLabs could not ${what}: ScreenForge's voice service is out of capacity. Please try again later. (${reason})`, 503);
+  const code = r ? ` (ElevenLabs ${r.status}${reason ? `: ${reason}` : ""})` : " (ElevenLabs did not answer)";
+  return fail(`ElevenLabs could not ${what} right now. Try again in a moment.${code}`, 502);
 }
 
 /** Seconds of 16-bit mono PCM in a WAV file, or an error for anything else. */

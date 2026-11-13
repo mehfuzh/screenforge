@@ -1142,7 +1142,7 @@ fn enhance_take_ui(ed: &mut Editor, ui: &mut egui::Ui, id: &str, take_ms: f64) {
     let file_ms = ed.audio.voice_over_ms(&take.file_name).unwrap_or(take_ms);
     ui.add_space(8.0);
     widgets::title(ui, "Enhance with ElevenLabs");
-    widgets::hint(ui, "Keeps your timing, delivery and accent. Clean up takes out background noise, echo and hum; Re-voice says it in a studio voice, or in a clean version of your own (My voice, under Narration). The recording is kept.");
+    widgets::hint(ui, "Keeps your timing, delivery and accent. Clean up takes out background noise, echo and hum; Re-voice says it in a studio voice. The recording is kept.");
     if let Some(how) = &enhanced {
         let what = match sf_tts::cloud::cloud_voice(how) {
             Some(c) => format!("Re-voiced as {}", c.name),
@@ -1176,9 +1176,6 @@ fn enhance_take_ui(ed: &mut Editor, ui: &mut egui::Ui, id: &str, take_ms: f64) {
                 if let Some(i) = widgets::pills(ui, row.iter().position(|v| v.id == voice).unwrap_or(usize::MAX), &names) {
                     voice = row[i].id.to_string();
                 }
-            }
-            if crate::my_voice::has() && my_voice_row(ui, voice == sf_tts::cloud::MY_VOICE.id) {
-                voice = sf_tts::cloud::MY_VOICE.id.to_string();
             }
         }
     });
@@ -1288,7 +1285,7 @@ const CLOUD_LOCKED_TIP: &str = "Upgrade to Pro for ElevenLabs' studio-quality vo
 /// when `pick_on_switch` (the panel's voice, nothing is read); otherwise (a take, where a pick
 /// reads it again) it only shows the other engine's voices until one is picked. Without Pro,
 /// ElevenLabs is greyed out and the voices on this computer are shown.
-fn voice_picker(ui: &mut egui::Ui, id_salt: &str, current: &str, pick_on_switch: bool) -> Option<&'static str> {
+fn voice_picker(ui: &mut egui::Ui, id_salt: &str, current: &str, pick_on_switch: bool) -> Option<String> {
     let id = ui.id().with(("voice_engine", id_salt));
     let locked = crate::narration::cloud_locked();
     let current_online = sf_tts::cloud::cloud_voice(current).is_some();
@@ -1299,7 +1296,7 @@ fn voice_picker(ui: &mut egui::Ui, id_salt: &str, current: &str, pick_on_switch:
     if let Some(i) = widgets::segmented_with_tip(ui, online as usize, &["On this computer", "ElevenLabs"], disabled, CLOUD_LOCKED_TIP) {
         let online = i == 1;
         ui.data_mut(|d| d.insert_temp(id, (current.to_string(), online)));
-        return pick_on_switch.then(|| if online { sf_tts::cloud::CLOUD_VOICES[0].id } else { sf_tts::DEFAULT_VOICE });
+        return pick_on_switch.then(|| if online { sf_tts::cloud::CLOUD_VOICES[0].id } else { sf_tts::DEFAULT_VOICE }.to_string());
     }
     let voices: Vec<(&'static str, &'static str, bool)> = if online {
         sf_tts::cloud::CLOUD_VOICES.iter().map(|v| (v.id, v.name, v.female)).collect()
@@ -1314,81 +1311,279 @@ fn voice_picker(ui: &mut egui::Ui, id_salt: &str, current: &str, pick_on_switch:
         ui.label(RichText::new(if female { "Female" } else { "Male" }).size(13.0).color(theme::p().text_dim));
         let idx = row.iter().position(|v| v.0 == current).unwrap_or(usize::MAX);
         if let Some(i) = widgets::pills(ui, idx, &names) {
-            picked = Some(row[i].0);
+            picked = Some(row[i].0.to_string());
         }
     }
-    if online && crate::my_voice::has() && my_voice_row(ui, current == sf_tts::cloud::MY_VOICE.id) {
-        picked = Some(sf_tts::cloud::MY_VOICE.id);
+    if !online {
+        if let Some(v) = my_voice_row(ui, current) {
+            picked = Some(v);
+        }
     }
     picked
 }
 
-/// "Yours: My voice" under the ElevenLabs voices, once the user has made theirs. True when picked.
-fn my_voice_row(ui: &mut egui::Ui, selected: bool) -> bool {
+/// "Yours": the user's own voices under the voices on this computer, once they made one. The
+/// one picked, if any.
+fn my_voice_row(ui: &mut egui::Ui, current: &str) -> Option<String> {
+    let voices = crate::my_voice::list();
+    if voices.is_empty() {
+        return None;
+    }
     ui.add_space(4.0);
     ui.label(RichText::new("Yours").size(13.0).color(theme::p().text_dim));
-    widgets::pills(ui, if selected { 0 } else { usize::MAX }, &[sf_tts::cloud::MY_VOICE.name]).is_some()
+    let names: Vec<&str> = voices.iter().map(|v| v.name.as_str()).collect();
+    // `my_voice` alone is the first
+    let idx = voices.iter().position(|v| v.id == current).or((current == sf_tts::clone::MY_VOICE).then_some(0)).unwrap_or(usize::MAX);
+    widgets::pills(ui, idx, &names).map(|i| voices[i].id.clone())
 }
 
-/// Narration → My voice: the user's own voice cloned by ElevenLabs from voice-overs they
-/// recorded (with their consent), or deleted again.
+/// Narration → My voices: the user's own voices, read on this computer from short recordings of
+/// them (with their consent), one compact row each, and Add a voice (record one, or bring one
+/// from their ElevenLabs).
 fn my_voice_ui(ed: &mut Editor, ui: &mut egui::Ui) {
     use crate::my_voice::Work;
     let pal = theme::p();
-    widgets::title(ui, "My voice");
-    if crate::narration::cloud_locked() {
-        widgets::hint(ui, "With Pro, ElevenLabs can clone your own voice from a minute of recording, so narration speaks in your voice and accent.");
-        return;
-    }
-    ed.my_voice.ensure_checked();
+    widgets::title(ui, "My voices");
     let work = ed.my_voice.working();
-    if work == Some(Work::Checking) {
-        widgets::hint(ui, "Checking…");
-        return;
-    }
     let busy = work.is_some();
-    match crate::my_voice::current() {
-        Some(c) if !ed.my_voice.open => {
-            widgets::hint(ui, &format!("Made from {:.0} s of your recordings. Pick My voice under ElevenLabs above to narrate in it, or Re-voice a voice-over in it.", c.seconds));
-            let confirm_id = ui.id().with("delete_my_voice");
-            let confirming: bool = ui.data(|d| d.get_temp(confirm_id)).unwrap_or(false);
-            ui.horizontal_wrapped(|ui| {
-                ui.add_enabled_ui(!busy, |ui| {
-                    if widgets::secondary_button(ui, "Make it again").on_hover_text("Replace it with a clone of other recordings").clicked() {
-                        ed.my_voice.open = true;
-                    }
-                    let label = if confirming { "Delete it: are you sure?" } else { "Delete my voice" };
-                    if widgets::secondary_button(ui, label).on_hover_text("Deletes the clone at ElevenLabs; takes already read keep their audio").clicked() {
-                        if confirming {
-                            ed.my_voice.delete();
-                        }
-                        ui.data_mut(|d| d.insert_temp(confirm_id, !confirming));
-                    }
-                });
-            });
+    let voices = crate::my_voice::list();
+    if ed.my_voice.open {
+        if let Some(v) = ed.my_voice.editing.as_ref().and_then(|id| voices.iter().find(|v| &v.id == id)) {
+            widgets::hint(ui, &format!("Making {} again from other recordings.", v.name));
         }
-        None if !ed.my_voice.open => {
-            widgets::hint(ui, "Narrate in your own voice and accent: ElevenLabs clones it from about a minute of voice-over you record. Speaking in it costs the same credits as the other ElevenLabs voices.");
-            if ui.add_enabled_ui(!busy, |ui| widgets::secondary_button(ui, "Make my voice")).inner.clicked() {
-                ed.my_voice.open = true;
-            }
+        egui::Frame::NONE.fill(pal.card).stroke(egui::Stroke::new(1.0, pal.border)).corner_radius(egui::CornerRadius::same(2)).inner_margin(egui::Margin::same(12)).show(ui, |ui| {
+            my_voice_form(ed, ui, busy);
+        });
+    } else {
+        if voices.is_empty() {
+            widgets::hint(ui, "Narrate in your own voice and accent from about 20 seconds of recording. It is read on this computer: free, and your voice is never uploaded.");
         }
-        _ => {
-            // the form, one card in three steps: record, choose recordings, confirm
-            egui::Frame::NONE.fill(pal.card).stroke(egui::Stroke::new(1.0, pal.border)).corner_radius(egui::CornerRadius::same(2)).inner_margin(egui::Margin::same(12)).show(ui, |ui| {
-                my_voice_form(ed, ui, busy);
-            });
+        for v in &voices {
+            my_voice_list_row(ed, ui, v, busy);
+        }
+        ui.add_space(4.0);
+        if ui.add_enabled_ui(!busy, |ui| widgets::secondary_button(ui, "Add a voice")).inner.on_hover_text("Record a voice, or bring one you cloned in ElevenLabs").clicked() {
+            ed.my_voice.editing = None;
+            ed.my_voice.open = true;
         }
     }
-    if let Some(w) = work {
-        ui.horizontal(|ui| {
-            ui.spinner();
-            widgets::hint(ui, if w == Work::Creating { "ElevenLabs is making your voice…" } else { "Deleting your voice…" });
-        });
+    match (work, ed.my_voice.progress) {
+        (Some(Work::Downloading), Some((done, total))) if done < total => {
+            widgets::hint(ui, &format!("Downloading the voice model… {:.0}% (once, about {:.1} GB)", done as f64 * 100.0 / total.max(1) as f64, total as f64 / 1e9));
+            ui.add(egui::ProgressBar::new((done as f64 / total.max(1) as f64) as f32).desired_height(6.0).corner_radius(2.0).fill(pal.accent));
+        }
+        (Some(Work::Preparing), _) => {
+            let f = ed.my_voice.reading.unwrap_or(0.0);
+            widgets::hint(ui, &format!("Preparing your voice: reading a first line with it… {:.0}%", f * 100.0));
+            ui.add(egui::ProgressBar::new(f).desired_height(6.0).corner_radius(2.0).fill(pal.accent));
+        }
+        (Some(_), _) => {
+            ui.horizontal(|ui| {
+                ui.spinner();
+                widgets::hint(ui, "Getting the voice model ready…");
+            });
+        }
+        (None, _) => {}
     }
     if let Some(e) = &ed.my_voice.error {
         ui.label(RichText::new(e).size(13.0).color(pal.danger));
     }
+}
+
+/// One of the user's voices on one row, like a music track: a tile with its initial, its name
+/// over how it was made, and on hover Rename, Make it again and Delete as icons. Renaming swaps
+/// the name for a field (saved on Enter or when it is left); Delete asks once more.
+fn my_voice_list_row(ed: &mut Editor, ui: &mut egui::Ui, v: &crate::my_voice::VoiceClone, busy: bool) {
+    let pal = theme::p();
+    const H: f32 = 48.0;
+    const TILE: f32 = 36.0;
+    let renaming_id = ui.id().with(("my_voice_renaming", &v.id));
+    let confirm_id = ui.id().with(("my_voice_delete", &v.id));
+    let renaming: Option<String> = ui.data(|d| d.get_temp(renaming_id));
+    let confirming: bool = ui.data(|d| d.get_temp(confirm_id)).unwrap_or(false);
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(ui.available_width(), H), egui::Sense::hover());
+    let radius = egui::CornerRadius::same(widgets::BUTTON_RADIUS);
+    let hovered = resp.hovered() || ui.rect_contains_pointer(rect);
+    if hovered || confirming {
+        ui.painter().rect_filled(rect, radius, pal.card_2);
+    }
+    let tile = egui::Rect::from_min_size(egui::pos2(rect.left() + 6.0, rect.center().y - TILE / 2.0), egui::vec2(TILE, TILE));
+    ui.painter().rect_filled(tile, radius, pal.card_3);
+    let initial: String = v.name.chars().next().map(|c| c.to_uppercase().collect()).unwrap_or_default();
+    ui.painter().text(tile.center(), egui::Align2::CENTER_CENTER, initial, egui::FontId::proportional(16.0), pal.text_dim);
+    // the icons on the right: shown while hovered, asking, or renaming
+    let icons_w = if confirming { 150.0 } else { 3.0 * 26.0 };
+    let icons = egui::Rect::from_min_max(egui::pos2(rect.right() - 6.0 - icons_w, rect.top()), egui::pos2(rect.right() - 6.0, rect.bottom()));
+    let text_left = tile.right() + 10.0;
+    let text_w = icons.left() - 8.0 - text_left;
+    match renaming {
+        Some(mut name) => {
+            let field = egui::Rect::from_min_size(egui::pos2(text_left, rect.center().y - 18.0), egui::vec2(rect.right() - 6.0 - text_left, 36.0));
+            let r = ui.scope_builder(egui::UiBuilder::new().max_rect(field), |ui| widgets::text_field(ui, &mut name, sf_tts::clone_name())).inner;
+            crate::my_voice::limit_name(&mut name);
+            if r.lost_focus() {
+                if name.trim() != v.name {
+                    ed.my_voice.error = crate::my_voice::rename(&v.id, &name).err();
+                }
+                ui.data_mut(|d| d.remove::<String>(renaming_id));
+            } else {
+                if !r.has_focus() {
+                    r.request_focus();
+                }
+                ui.data_mut(|d| d.insert_temp(renaming_id, name));
+            }
+            return;
+        }
+        None => {
+            let title = one_line(ui, &v.name, 14.0, pal.text, text_w);
+            let sub = one_line(ui, &format!("{:.0} s of voice · on this computer", v.seconds), 12.5, pal.text_dim, text_w);
+            let top = rect.center().y - (title.size().y + 2.0 + sub.size().y) / 2.0;
+            let th = title.size().y;
+            ui.painter().galley(egui::pos2(text_left, top), title, pal.text);
+            ui.painter().galley(egui::pos2(text_left, top + th + 2.0), sub, pal.text_dim);
+        }
+    }
+    if !(hovered || confirming) || busy {
+        return;
+    }
+    ui.scope_builder(egui::UiBuilder::new().max_rect(icons).layout(egui::Layout::right_to_left(egui::Align::Center)), |ui| {
+        if confirming {
+            if widgets::secondary_button(ui, "Cancel").clicked() {
+                ui.data_mut(|d| d.insert_temp(confirm_id, false));
+            }
+            if widgets::secondary_button(ui, "Delete").on_hover_text("Takes already read keep their audio").clicked() {
+                ed.my_voice.error = crate::my_voice::delete(&v.id).err();
+                ui.data_mut(|d| d.insert_temp(confirm_id, false));
+            }
+            return;
+        }
+        if widgets::icon_button(ui, widgets::Icon::Trash, 14.0, "Delete this voice").clicked() {
+            ui.data_mut(|d| d.insert_temp(confirm_id, true));
+        }
+        if widgets::icon_button(ui, widgets::Icon::Restart, 14.0, "Make it again from other recordings").clicked() {
+            ed.my_voice.editing = Some(v.id.clone());
+            ed.my_voice.name = v.name.clone();
+            ed.my_voice.open = true;
+        }
+        if widgets::icon_button(ui, widgets::Icon::Pencil, 14.0, "Rename").clicked() {
+            ui.data_mut(|d| d.insert_temp(renaming_id, v.name.clone()));
+        }
+    });
+}
+
+/// The My voice form's From ElevenLabs tab: the voices the user cloned in their own ElevenLabs
+/// account, listed like music tracks (a row plays ElevenLabs' sample; its + brings in the
+/// recordings the voice was made from, back on the Record tab). The API key is saved on this
+/// computer once ElevenLabs accepts it.
+fn elevenlabs_voices_ui(ed: &mut Editor, ui: &mut egui::Ui) {
+    let pal = theme::p();
+    let busy = ed.my_voice.working().is_some();
+    let job = &mut ed.my_voice;
+    job.ensure_elevenlabs();
+    let loading = job.is_importing();
+    if crate::my_voice::saved_key().is_none() {
+        widgets::hint(ui, "Use a voice you cloned in ElevenLabs. Paste your API key (Developers → API Keys; under Endpoints, set Voices to Read); it is kept on this computer only.");
+        let field = ui.add_enabled_ui(!loading, |ui| widgets::secret_field(ui, &mut job.el_key, "ElevenLabs API key")).inner;
+        ui.add_space(4.0);
+        let go = ui.add_enabled_ui(!loading && !job.el_key.trim().is_empty(), |ui| widgets::accent_button(ui, "Connect")).inner.clicked();
+        if go || widgets::submitted(ui, &field) {
+            job.connect_elevenlabs();
+        }
+    } else {
+        widgets::hint(ui, "Your cloned voices. Click one to hear it, + to use it.");
+        if let Some(voices) = job.el_voices.clone() {
+            let playing = job.elevenlabs_playing().map(String::from);
+            for v in &voices {
+                let row = elevenlabs_voice_row(ui, v, playing.as_deref() == Some(v.id.as_str()), job.el_busy.as_deref() == Some(v.id.as_str()), !busy && !loading);
+                if row.use_it {
+                    job.import_elevenlabs(v.clone());
+                } else if row.response.clicked() {
+                    job.toggle_elevenlabs_preview(v);
+                }
+            }
+        }
+        // the connection, in words: list again, or take the key off this computer
+        ui.add_space(4.0);
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing.x = 4.0;
+            ui.label(RichText::new("Connected to ElevenLabs ·").size(12.5).color(pal.text_faint));
+            if ui.add_enabled_ui(!loading, |ui| ui.link(RichText::new("Refresh").size(12.5).color(pal.text_dim))).inner.on_hover_text("List your ElevenLabs voices again").clicked() {
+                job.refresh_elevenlabs();
+            }
+            ui.label(RichText::new("·").size(12.5).color(pal.text_faint));
+            if ui.link(RichText::new("Disconnect").size(12.5).color(pal.text_dim)).on_hover_text("Remove your ElevenLabs API key from this computer (your voices stay in ElevenLabs)").clicked() {
+                job.forget_elevenlabs();
+            }
+        });
+    }
+    if loading && job.el_busy.is_none() {
+        ui.horizontal(|ui| {
+            ui.spinner();
+            widgets::hint(ui, "Asking ElevenLabs…");
+        });
+    }
+    if let Some(e) = &job.el_error {
+        ui.label(RichText::new(e).size(12.5).color(pal.danger));
+    }
+}
+
+/// What happened on an [`elevenlabs_voice_row`].
+struct VoiceRow {
+    response: egui::Response,
+    /// The + was clicked (the row itself was not).
+    use_it: bool,
+}
+
+/// A voice of the user's ElevenLabs, laid out like a music track: a tile with the voice's
+/// initial (a play mark on hover, a waveform while its sample plays, a ring while busy), its name
+/// over how many recordings it has, and a + to use it.
+fn elevenlabs_voice_row(ui: &mut egui::Ui, v: &crate::my_voice::ElevenLabsVoice, playing: bool, busy: bool, enabled: bool) -> VoiceRow {
+    let pal = theme::p();
+    const H: f32 = 48.0;
+    const TILE: f32 = 36.0;
+    const PAD: f32 = 6.0;
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(ui.available_width(), H), egui::Sense::click());
+    let resp = resp.on_hover_text(if playing { "Stop" } else { "Hear this voice" }).on_hover_cursor(egui::CursorIcon::PointingHand);
+    let plus = egui::Rect::from_center_size(egui::pos2(rect.right() - PAD - 13.0, rect.center().y), egui::vec2(26.0, 26.0));
+    let use_resp = ui.interact(plus, resp.id.with("use"), if enabled { egui::Sense::click() } else { egui::Sense::hover() }).on_hover_text("Use this voice: brings in the recordings you made it from").on_hover_cursor(egui::CursorIcon::PointingHand);
+    let hovered = resp.hovered() || use_resp.hovered();
+    let painter = ui.painter();
+    let radius = egui::CornerRadius::same(widgets::BUTTON_RADIUS);
+    if playing {
+        painter.rect_filled(rect, radius, pal.card_3);
+    } else if hovered {
+        painter.rect_filled(rect, radius, pal.card_2);
+    }
+    let tile = egui::Rect::from_min_size(egui::pos2(rect.left() + PAD, rect.center().y - TILE / 2.0), egui::vec2(TILE, TILE));
+    painter.rect_filled(tile, radius, pal.card_3);
+    let initial: String = v.name.chars().next().map(|c| c.to_uppercase().collect()).unwrap_or_default();
+    if busy {
+        download_ring(ui, tile, None);
+    } else if playing {
+        widgets::paint_icon(ui.painter(), tile.shrink(10.0), widgets::Icon::Waveform, pal.accent);
+    } else if resp.hovered() {
+        widgets::paint_icon(ui.painter(), tile.shrink(10.0), widgets::Icon::Play, pal.text);
+    } else {
+        ui.painter().text(tile.center(), egui::Align2::CENTER_CENTER, initial, egui::FontId::proportional(16.0), pal.text_dim);
+    }
+    if enabled && !busy {
+        if use_resp.hovered() {
+            ui.painter().rect_filled(plus, radius, pal.card_3);
+        }
+        widgets::paint_icon(ui.painter(), plus.shrink(7.0), widgets::Icon::Plus, if use_resp.hovered() { pal.accent } else if hovered { pal.text } else { pal.text_faint });
+    }
+    let text_left = tile.right() + 10.0;
+    let text_w = plus.left() - 8.0 - text_left;
+    let n = v.samples.len();
+    let sub = if busy { "Working…".to_string() } else { format!("Cloned · {n} recording{}", if n == 1 { "" } else { "s" }) };
+    let title = one_line(ui, &v.name, 14.0, if playing { pal.accent } else { pal.text }, text_w);
+    let sub = one_line(ui, &sub, 12.5, pal.text_dim, text_w);
+    let top = rect.center().y - (title.size().y + 2.0 + sub.size().y) / 2.0;
+    let th = title.size().y;
+    let painter = ui.painter();
+    painter.galley(egui::pos2(text_left, top), title, pal.text);
+    painter.galley(egui::pos2(text_left, top + th + 2.0), sub, pal.text_dim);
+    VoiceRow { response: resp, use_it: enabled && !busy && use_resp.clicked() }
 }
 
 /// A numbered step of the My voice form.
@@ -1404,7 +1599,7 @@ fn step(ui: &mut egui::Ui, n: u32, text: &str) {
     ui.add_space(4.0);
 }
 
-/// Narration → My voice → Make my voice: record a minute (with a live meter), pick what the
+/// Narration → My voice → Make my voice: record about 20 seconds (with a live meter), pick what the
 /// voice is made from, confirm it is your voice.
 fn my_voice_form(ed: &mut Editor, ui: &mut egui::Ui, busy: bool) {
     use crate::my_voice::{BEST_MS, MIN_MS};
@@ -1414,6 +1609,20 @@ fn my_voice_form(ed: &mut Editor, ui: &mut egui::Ui, busy: bool) {
         Some(m) => m.name.clone(),
         None => crate::voice_over::default_label(ed.voice_mics.get_or_insert_with(crate::voice_over::microphones)),
     };
+
+    // Record, or bring a voice from the user's ElevenLabs
+    if let Some(i) = widgets::segmented(ui, ed.my_voice.tab, &["Record", "From ElevenLabs"]) {
+        ed.my_voice.tab = i;
+    }
+    ui.add_space(8.0);
+    if ed.my_voice.tab == 1 {
+        elevenlabs_voices_ui(ed, ui);
+        ui.add_space(8.0);
+        if ui.add_enabled_ui(!busy, |ui| widgets::secondary_button(ui, "Cancel")).inner.clicked() {
+            ed.my_voice.close();
+        }
+        return;
+    }
 
     // ── 1. record ──
     step(ui, 1, "Read this aloud");
@@ -1467,7 +1676,7 @@ fn my_voice_form(ed: &mut Editor, ui: &mut egui::Ui, busy: bool) {
         .enumerate()
         .map(|(i, r)| {
             let note = if r.silent { " · silent" } else if r.clipped { " · too loud" } else { "" };
-            (r.path.clone(), format!("Recording {}{note}", i + 1), r.ms, true)
+            (r.path.clone(), format!("{}{note}", r.label.clone().unwrap_or_else(|| format!("Recording {}", i + 1))), r.ms, true)
         })
         .collect();
     for v in ed.session.pkg.project.scenes[0].voice_overs.iter().filter(|v| v.spoken_voice().is_none()) {
@@ -1481,24 +1690,26 @@ fn my_voice_form(ed: &mut Editor, ui: &mut egui::Ui, busy: bool) {
     ui.add_space(10.0);
     step(ui, 2, "Choose recordings");
     if files.is_empty() {
-        widgets::hint(ui, "Your recordings show here.");
+        widgets::hint(ui, "Your recordings show here. You can also drop audio files of your voice on the window.");
     }
     let mut discard = None;
     for (path, label, ms, own) in &files {
-        ui.horizontal(|ui| {
-            let mut on = ed.my_voice.picked.contains(path);
-            if widgets::check_circle(ui, &mut on, RichText::new(label.as_str()).size(13.0).color(pal.text)).changed() {
-                if on {
-                    ed.my_voice.picked.push(path.clone());
-                } else {
-                    ed.my_voice.picked.retain(|p| p != path);
-                }
+        // the length and the bin on the right first; the name gets what is left, on one line
+        ui.allocate_ui_with_layout(egui::vec2(ui.available_width(), 24.0), egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if *own && !mic.recording && widgets::icon_button(ui, widgets::Icon::Trash, 13.0, "Throw this recording away").clicked() {
+                discard = Some(path.clone());
             }
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if *own && !mic.recording && widgets::icon_button(ui, widgets::Icon::Trash, 13.0, "Throw this recording away").clicked() {
-                    discard = Some(path.clone());
+            ui.label(RichText::new(crate::editor::fmt_clock(*ms)).size(12.5).color(pal.text_dim));
+            ui.add_space(6.0);
+            ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                let mut on = ed.my_voice.picked.contains(path);
+                if widgets::check_circle_line(ui, &mut on, RichText::new(label.as_str()).size(13.0).color(pal.text)).on_hover_text(label.as_str()).changed() {
+                    if on {
+                        ed.my_voice.picked.push(path.clone());
+                    } else {
+                        ed.my_voice.picked.retain(|p| p != path);
+                    }
                 }
-                ui.label(RichText::new(crate::editor::fmt_clock(*ms)).size(12.5).color(pal.text_dim));
             });
         });
     }
@@ -1506,16 +1717,16 @@ fn my_voice_form(ed: &mut Editor, ui: &mut egui::Ui, busy: bool) {
         ed.my_voice.discard(&p);
     }
     let total: f64 = files.iter().filter(|(p, ..)| ed.my_voice.picked.contains(p)).map(|(_, _, ms, _)| ms).sum();
-    // how far towards a minute (10 s is the least)
+    // how far towards 20 s (10 s is the least)
     ui.add_space(4.0);
     let fill = if total < MIN_MS { pal.text_faint } else { pal.accent };
     ui.add(egui::ProgressBar::new((total / BEST_MS).min(1.0) as f32).desired_height(6.0).corner_radius(2.0).fill(fill));
     let note = if total <= 0.0 {
-        "About a minute of your voice sounds best; at least 10 seconds.".to_string()
+        "About 20 seconds of your voice sounds best; at least 10 seconds.".to_string()
     } else if total < MIN_MS {
         format!("{} of at least 0:10", crate::editor::fmt_clock(total))
     } else if total < BEST_MS {
-        format!("{}: enough, a full minute sounds better", crate::editor::fmt_clock(total))
+        format!("{}: enough, 20 seconds sounds better", crate::editor::fmt_clock(total))
     } else {
         format!("{}: plenty", crate::editor::fmt_clock(total))
     };
@@ -1523,13 +1734,13 @@ fn my_voice_form(ed: &mut Editor, ui: &mut egui::Ui, busy: bool) {
 
     // ── 3. confirm ──
     ui.add_space(10.0);
-    step(ui, 3, "Confirm");
-    let mut clean = ed.my_voice.clean;
-    if widgets::check_circle(ui, &mut clean, RichText::new("Remove background noise").size(13.0).color(pal.text)).on_hover_text("Only for a noisy room: it can make a clean recording sound worse").changed() {
-        ed.my_voice.clean = clean;
-    }
+    step(ui, 3, "Name it and confirm");
+    ui.label(RichText::new("Name").size(13.0).color(pal.text_dim));
+    widgets::text_field(ui, &mut ed.my_voice.name, sf_tts::clone_name());
+    crate::my_voice::limit_name(&mut ed.my_voice.name);
+    ui.add_space(6.0);
     widgets::check_circle(ui, &mut ed.my_voice.consent, RichText::new("This is my own voice").size(13.0).color(pal.text)).on_hover_text(crate::my_voice::CONSENT);
-    widgets::hint(ui, "ElevenLabs makes a clone of it for your narration. Don't use it to imitate anyone else.");
+    widgets::hint(ui, "Your voice is kept on this computer and never uploaded. Don't use it to imitate anyone else.");
     ui.add_space(8.0);
     ui.horizontal(|ui| {
         ui.add_enabled_ui(!busy && !mic.recording && ed.my_voice.consent && total >= MIN_MS, |ui| {
@@ -1591,7 +1802,7 @@ fn narration_ui(ed: &mut Editor, ui: &mut egui::Ui) {
     let voice = audio
         .narration_voice
         .clone()
-        .filter(|v| sf_tts::voice(v).is_some() || (sf_tts::cloud::cloud_voice(v).is_some() && !crate::narration::cloud_locked() && (v != sf_tts::cloud::MY_VOICE.id || crate::my_voice::has())))
+        .filter(|v| sf_tts::voice(v).is_some() || (sf_tts::clone::is_my_voice(v) && crate::my_voice::get(v).is_some()) || (sf_tts::cloud::cloud_voice(v).is_some() && !crate::narration::cloud_locked()))
         .unwrap_or_else(|| sf_tts::DEFAULT_VOICE.to_string());
     let online = sf_tts::cloud::cloud_voice(&voice);
     let speed = audio.narration_speed();
@@ -1602,6 +1813,7 @@ fn narration_ui(ed: &mut Editor, ui: &mut egui::Ui) {
     ui.add_space(4.0);
     match online {
         Some(v) => widgets::hint(ui, &format!("{}, {}. Studio quality, read online: about 8 credits per 1,000 characters (around 7 a minute), from the credits you share with the agent.", v.name, v.style)),
+        None if sf_tts::clone::is_my_voice(&voice) => widgets::hint(ui, &format!("{}: your own voice, free and private, read on this computer. It reads slower than the other voices.", crate::my_voice::name(&voice))),
         None => widgets::hint(ui, "Free and private: read on this computer, works offline."),
     }
 
@@ -1620,10 +1832,10 @@ fn narration_ui(ed: &mut Editor, ui: &mut egui::Ui) {
     }
     let r = sf_project::v4::AudioConfig::NARRATION_SPEEDS;
     cfg_slider(ed, ui, "Speed", |p| p.config.audio.narration_speed(), |p, v| p.config.audio.narration_speed = Some((v * 20.0).round() / 20.0), r, Some(1.0), "×");
-    my_voice_ui(ed, ui);
 
     // ── the on-device model ──
-    if online.is_none() || downloading {
+    let own = sf_tts::clone::is_my_voice(&voice);
+    if (online.is_none() && !own) || downloading {
         widgets::title(ui, "Voice model");
         let size_mb = sf_tts::download_size() as f64 / 1e6;
         if downloading {
@@ -1672,7 +1884,7 @@ fn narration_ui(ed: &mut Editor, ui: &mut egui::Ui) {
     if !takes.is_empty() {
         widgets::title(ui, "Narration takes");
         let other = takes.iter().filter(|t| t.1 != voice).count();
-        let name = sf_tts::voice_name(&voice).map_or(voice.clone(), str::to_string);
+        let name = if sf_tts::clone::is_my_voice(&voice) { crate::my_voice::name(&voice) } else { sf_tts::voice_name(&voice).map_or(voice.clone(), str::to_string) };
         widgets::hint(ui, &match (takes.len(), other) {
             (n, 0) => format!("{n} take{} read by {name}. Select one on the timeline to change its script or voice.", if n == 1 { "" } else { "s" }),
             (n, o) => format!("{o} of {n} takes use another voice."),
@@ -1691,6 +1903,9 @@ fn narration_ui(ed: &mut Editor, ui: &mut egui::Ui) {
         ui.add_space(6.0);
         ui.label(RichText::new(e).size(13.0).color(pal.danger));
     }
+
+    // ── the user's own voices ──
+    my_voice_ui(ed, ui);
 }
 
 fn audio_ui(ed: &mut Editor, ui: &mut egui::Ui) {

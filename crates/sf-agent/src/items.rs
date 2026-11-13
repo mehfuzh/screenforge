@@ -119,13 +119,14 @@ pub fn definitions() -> Vec<Value> {
         }),
         json!({
             "name": "add_narration",
-            "description": "Read text aloud with an AI voice (made on this computer) and add it as a voice-over take starting at start_ms; its words become captions. Write it as spoken sentences, and use one call per passage you place (one per section of the video); the result gives the take's end, so the next starts after it. Keep each passage within the part of the video it describes. On this computer, free: am_fenrir male, am_michael male, am_puck male, af_heart female, af_bella female, af_nicole female. ElevenLabs (studio quality, read online, about 8 credits per 1,000 characters from the user's credits; only when the user chose one in the Narration panel or asks for ElevenLabs, studio quality or a more realistic voice): el_eric male (use this one when asked for studio quality or a more realistic voice without naming a voice), el_brian male, el_george male British, el_daniel male British, el_sarah female, el_matilda female, el_alice female British, el_jessica female; my_voice is the user's own voice cloned by ElevenLabs (use it when they ask for their own voice; it fails if they have not made it under Narration → My voice, so tell them to). Leave voice and speed out to use the ones the user chose in the Narration panel, and keep one voice for the whole video unless asked. speed 0.7–1.3 (1 = normal; ElevenLabs reads 0.7–1.2). The first on-device narration downloads the voice model (about 330 MB) and can take a minute. Lower the music (set_music volume 0.2–0.3) so the voice is heard.",
+            "description": "Read text aloud with an AI voice (made on this computer) and add it as a voice-over take starting at start_ms; its words become captions. Write it as spoken sentences, and use one call per passage you place (one per section of the video); the result gives the take's end, so the next starts after it. Keep each passage within the part of the video it describes. On this computer, free: am_fenrir male, am_michael male, am_puck male, af_heart female, af_bella female, af_nicole female. ElevenLabs (studio quality, read online, about 8 credits per 1,000 characters from the user's credits; only when the user chose one in the Narration panel or asks for ElevenLabs, studio quality or a more realistic voice): el_eric male (use this one when asked for studio quality or a more realistic voice without naming a voice), el_brian male, el_george male British, el_daniel male British, el_sarah female, el_matilda female, el_alice female British, el_jessica female. The user's own voices, read free on this computer, are in get_options myVoices by the names they gave them: when they ask for a voice by name (\"narrate with Ricky\"), use that entry's voice; my_voice alone is the one chosen in the Narration panel (use it when they ask for their own voice without a name; it fails if they have not made it under Narration → My voice, so tell them to; the first reading downloads its model, about 0.7 GB, and it reads slower than the other voices). Leave voice and speed out to use the ones the user chose in the Narration panel, and keep one voice for the whole video unless asked. speed 0.7–1.3 (1 = normal; ElevenLabs reads 0.7–1.2). The first on-device narration downloads the voice model (about 330 MB) and can take a minute. Lower the music (set_music volume 0.2–0.3) so the voice is heard.",
             "input_schema": {
                 "type": "object",
                 "properties": {
                     "text": { "type": "string" },
                     "start_ms": { "type": "number" },
-                    "voice": { "type": "string", "enum": crate::host::VOICES.iter().map(|(id, _)| *id).collect::<Vec<_>>() },
+                    // the user's own voices (get_options myVoices) are not a fixed list
+                    "voice": { "type": "string", "description": format!("One of {}, or a voice from get_options myVoices", crate::host::VOICES.iter().map(|(id, _)| *id).collect::<Vec<_>>().join(", ")) },
                     "speed": { "type": "number" }
                 },
                 "required": ["text", "start_ms"]
@@ -526,10 +527,15 @@ impl Workspace {
         let t = num(input, "start_ms")?;
         // the voice and speed chosen in the Narration panel, unless asked for another
         let audio = &self.project.config.audio;
-        let default_voice = audio.narration_voice.clone().filter(|v| crate::host::VOICES.iter().any(|(id, _)| id == v)).unwrap_or_else(|| crate::host::VOICES[0].0.to_string());
-        let voice = input.get("voice").and_then(Value::as_str).unwrap_or(&default_voice).to_string();
+        // the user's own voices are `my_voice:<id>`; the agent says `my_voice` for them
+        let own = |v: &str| v.starts_with("my_voice:");
+        let default_voice = audio.narration_voice.clone().filter(|v| own(v) || crate::host::VOICES.iter().any(|(id, _)| id == v)).unwrap_or_else(|| crate::host::VOICES[0].0.to_string());
+        let mut voice = input.get("voice").and_then(Value::as_str).unwrap_or(&default_voice).to_string();
+        if voice == "my_voice" && own(&default_voice) {
+            voice = default_voice.clone();
+        }
         let voice = voice.as_str();
-        if !crate::host::VOICES.iter().any(|(id, _)| *id == voice) {
+        if !own(&voice) && !crate::host::VOICES.iter().any(|(id, _)| *id == voice) {
             return Err(format!("unknown voice {voice}"));
         }
         let speed = opt_num(input, "speed")?.unwrap_or(audio.narration_speed());
@@ -674,6 +680,18 @@ mod tests {
         assert_eq!(w.project.scenes[0].voice_overs[1].spoken_voice(), Some("am_fenrir"));
         assert!(w.run("add_narration", &json!({ "text": "Hi", "start_ms": 1000, "voice": "nobody" })).is_err());
         assert!(w.run("add_narration", &json!({ "text": "Hi", "start_ms": 9000 })).is_err(), "the timeline is 8 s");
+        // one of the user's own voices, by its id from get_options myVoices
+        w.run("add_narration", &json!({ "text": "Mine", "start_ms": 1000, "voice": "my_voice:20261112" })).unwrap();
+        assert_eq!(w.project.scenes[0].voice_overs.last().unwrap().spoken_voice(), Some("my_voice:20261112"));
+    }
+
+    #[test]
+    fn my_voice_alone_is_the_one_chosen_in_the_panel() {
+        let mut w = ws();
+        w.host = Some(std::sync::Arc::new(Voice));
+        w.project.config.audio.narration_voice = Some("my_voice:7".into());
+        w.run("add_narration", &json!({ "text": "Hi", "start_ms": 1000, "voice": "my_voice" })).unwrap();
+        assert_eq!(w.project.scenes[0].voice_overs[0].spoken_voice(), Some("my_voice:7"));
     }
 
     #[test]

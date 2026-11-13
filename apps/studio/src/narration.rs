@@ -10,6 +10,7 @@ use std::sync::{Arc, Mutex};
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use sf_project::transcript::{Generator, TranscriptFile, TranscriptItem};
+use sf_tts::clone::is_my_voice;
 use sf_tts::Progress;
 
 /// What the preview says.
@@ -187,6 +188,9 @@ impl NarrationJob {
             if sf_tts::cloud::cloud_voice(&voice).is_some() {
                 return cloud_preview(&voice, speed).map(Finished::Preview);
             }
+            if is_my_voice(&voice) {
+                return my_voice_preview(&voice, cancel, progress).map(Finished::Preview);
+            }
             let v = sf_tts::voice(&voice).ok_or("unknown voice")?;
             let dir = sf_tts::ensure(cancel, progress).map_err(|e| format!("{e:#}"))?;
             sf_tts::Kokoro::shared(&dir).and_then(|k| k.speak(PREVIEW, v, speed as f32)).map(Finished::Preview).map_err(|e| format!("{e:#}"))
@@ -201,8 +205,12 @@ impl NarrationJob {
         self.for_take = if let [t] = takes.as_slice() { t.replaces.clone() } else { None };
         self.online = takes.iter().all(|t| sf_tts::cloud::cloud_voice(&t.voice).is_some());
         self.start(Work::Takes(takes.len()), move |cancel, progress| {
-            if takes.iter().any(|t| sf_tts::cloud::cloud_voice(&t.voice).is_none()) {
+            // the models the takes need, downloaded first (with progress)
+            if takes.iter().any(|t| sf_tts::voice(&t.voice).is_some()) {
                 sf_tts::ensure(cancel, progress).map_err(|e| format!("{e:#}"))?;
+            }
+            if takes.iter().any(|t| is_my_voice(&t.voice)) {
+                sf_tts::clone::ensure(cancel, progress).map_err(|e| format!("{e:#}"))?;
             }
             let mut made = vec![];
             for t in takes {
@@ -297,6 +305,8 @@ pub fn place(project: &mut sf_project::Project, made: Vec<Made>) -> Vec<String> 
 pub fn speak_into(project: &Path, text: &str, voice: &str, speed: f64) -> Result<sf_agent::host::Spoken, String> {
     let (speech, kind) = if sf_tts::cloud::cloud_voice(voice).is_some() {
         (cloud_speak(text, voice, speed)?, "elevenlabs")
+    } else if is_my_voice(voice) {
+        (my_voice_speak(voice, text, &AtomicBool::new(false), |_| {})?, "chatterbox")
     } else {
         let v = sf_tts::voice(voice).ok_or_else(|| format!("unknown voice {voice}"))?;
         // the first narration downloads the model
@@ -325,6 +335,65 @@ fn cloud_speak(text: &str, voice: &str, speed: f64) -> Result<sf_tts::Speech, St
     sf_tts::cloud::speech_from_pcm(&pcm, &alignment).map_err(|e| format!("{e:#}"))
 }
 
+/// Read `text` in the user's own voice `voice` on this computer (downloading the model first).
+fn my_voice_speak(voice: &str, text: &str, cancel: &AtomicBool, progress: impl FnMut(Progress)) -> Result<sf_tts::Speech, String> {
+    let reference = crate::my_voice::reference(voice)?;
+    speak_with(text, &reference, cancel, progress)
+}
+
+fn speak_with(text: &str, reference: &[f32], cancel: &AtomicBool, progress: impl FnMut(Progress)) -> Result<sf_tts::Speech, String> {
+    speak_reporting(text, reference, cancel, progress, |_| {})
+}
+
+/// [`speak_with`], telling `reading` how far the reading is (0–1).
+fn speak_reporting(text: &str, reference: &[f32], cancel: &AtomicBool, progress: impl FnMut(Progress), reading: impl FnMut(f32)) -> Result<sf_tts::Speech, String> {
+    let dir = sf_tts::clone::ensure(cancel, progress).map_err(|e| format!("{e:#}"))?;
+    sf_tts::clone::Chatterbox::shared(&dir).and_then(|c| c.speak_with_progress(text, reference, cancel, reading)).map_err(|e| format!("{e:#}"))
+}
+
+/// Where the preview of My voice `v` is kept (per voice and per making of it).
+fn my_voice_preview_file(v: &crate::my_voice::VoiceClone) -> Option<PathBuf> {
+    let made: String = v.created_at.chars().filter(char::is_ascii_alphanumeric).collect();
+    previews_dir().map(|d| d.join(format!("{}-{made}.pcm", preview_key(&v.id))))
+}
+
+fn keep_preview(file: &Path, speech: &sf_tts::Speech) {
+    let pcm: Vec<u8> = speech.samples.iter().flat_map(|s| ((s.clamp(-1.0, 1.0) * 32767.0) as i16).to_le_bytes()).collect();
+    let _ = file.parent().map(std::fs::create_dir_all);
+    let _ = std::fs::write(file, pcm);
+}
+
+/// Read My voice `v`'s preview from `reference` and keep it, as the voice is made: the voice is
+/// known to work, and its Preview plays at once.
+/// `reading` hears how far it is (0–1).
+pub fn prepare_my_voice(v: &crate::my_voice::VoiceClone, reference: &[f32], reading: impl FnMut(f32)) -> Result<(), String> {
+    forget_previews(&v.id);
+    let speech = speak_reporting(PREVIEW, reference, &AtomicBool::new(false), |_| {}, reading).map_err(|e| format!("Could not read with your voice: {e}"))?;
+    if let Some(f) = my_voice_preview_file(v) {
+        keep_preview(&f, &speech);
+    }
+    Ok(())
+}
+
+/// The preview of My voice `voice`: the one kept when it was made, or read now.
+fn my_voice_preview(voice: &str, cancel: &AtomicBool, progress: impl FnMut(Progress)) -> Result<sf_tts::Speech, String> {
+    let v = crate::my_voice::get(voice).ok_or("You have not made your voice yet. Make it under Narration → My voice.")?;
+    let file = my_voice_preview_file(&v);
+    if let Some(pcm) = file.as_ref().and_then(|f| std::fs::read(f).ok()) {
+        return sf_tts::cloud::speech_from_pcm(&pcm, &Default::default()).map_err(|e| format!("{e:#}"));
+    }
+    let speech = my_voice_speak(&v.id, PREVIEW, cancel, progress)?;
+    if let Some(f) = file {
+        keep_preview(&f, &speech);
+    }
+    Ok(speech)
+}
+
+/// A voice id as part of a file name (`my_voice:123` has a colon, which Windows refuses).
+fn preview_key(voice: &str) -> String {
+    voice.replace(':', "_")
+}
+
 fn previews_dir() -> Option<PathBuf> {
     directories::ProjectDirs::from("dev", "screenforge", "ScreenForge").map(|d| d.cache_dir().join("voice-previews"))
 }
@@ -333,7 +402,7 @@ fn previews_dir() -> Option<PathBuf> {
 pub fn forget_previews(voice: &str) {
     let Some(dir) = previews_dir() else { return };
     for f in std::fs::read_dir(dir).into_iter().flatten().flatten() {
-        if f.file_name().to_string_lossy().starts_with(&format!("{voice}-")) {
+        if f.file_name().to_string_lossy().starts_with(&format!("{}-", preview_key(voice))) {
             let _ = std::fs::remove_file(f.path());
         }
     }
@@ -354,14 +423,14 @@ fn cloud_preview(voice: &str, speed: f64) -> Result<sf_tts::Speech, String> {
     Ok(speech)
 }
 
-/// Plays a preview on the default output once.
-struct Player {
+/// Plays a preview (mono at [`sf_tts::SAMPLE_RATE`]) on the default output once.
+pub(crate) struct Player {
     _stream: cpal::Stream,
     finished: Arc<AtomicBool>,
 }
 
 impl Player {
-    fn play(samples: Vec<f32>) -> anyhow::Result<Player> {
+    pub(crate) fn play(samples: Vec<f32>) -> anyhow::Result<Player> {
         use anyhow::Context;
         let device = cpal::default_host().default_output_device().context("no speaker or headphones")?;
         let config = device.default_output_config()?;
@@ -395,7 +464,7 @@ impl Player {
         Ok(Player { _stream: stream, finished })
     }
 
-    fn is_playing(&self) -> bool {
+    pub(crate) fn is_playing(&self) -> bool {
         !self.finished.load(Ordering::Relaxed)
     }
 }

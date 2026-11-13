@@ -9,8 +9,11 @@
 //! first and where they are published if that fails, and kept only if their
 //! SHA-256 matches.
 //!
-//! ElevenLabs voices ([`cloud`]) are offered beside Kokoro's: read online, paid in credits.
+//! ElevenLabs voices ([`cloud`]) are offered beside Kokoro's: read online, paid in credits. The
+//! user's own voice ([`clone`]) is read on this computer by Chatterbox Turbo.
 
+pub mod bpe;
+pub mod clone;
 pub mod cloud;
 pub mod g2p;
 
@@ -117,9 +120,14 @@ pub fn voice(id: &str) -> Option<&'static Voice> {
     VOICES.iter().find(|v| v.id == id)
 }
 
-/// A voice's name, Kokoro's or ElevenLabs'.
+/// A voice's name, Kokoro's, ElevenLabs' or the user's own ([`clone_name`]).
 pub fn voice_name(id: &str) -> Option<&'static str> {
-    voice(id).map(|v| v.name).or_else(|| cloud::cloud_voice(id).map(|v| v.name))
+    voice(id).map(|v| v.name).or_else(|| cloud::cloud_voice(id).map(|v| v.name)).or_else(|| clone::is_my_voice(id).then(clone_name))
+}
+
+/// What the user's own voice is called until they name it.
+pub fn clone_name() -> &'static str {
+    "My voice"
 }
 
 /// Where the model, dictionaries and voices are kept.
@@ -363,7 +371,7 @@ fn split_long(p: g2p::Phrase) -> Vec<g2p::Phrase> {
 
 /// Cut the silence around a sentence (keeping a little), returning the audio and the voiced
 /// part of it in ms.
-fn trim(audio: Vec<f32>) -> (Vec<f32>, (f64, f64)) {
+pub(crate) fn trim(audio: Vec<f32>) -> (Vec<f32>, (f64, f64)) {
     const QUIET: f32 = 1e-3;
     let keep = |ms: f64| (ms * SAMPLE_RATE as f64 / 1000.0) as usize;
     let first = audio.iter().position(|v| v.abs() > QUIET).unwrap_or(0);

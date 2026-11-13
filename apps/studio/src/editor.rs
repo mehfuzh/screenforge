@@ -1230,7 +1230,7 @@ impl Editor {
         self.my_voice.poll();
         if self.my_voice.listening() {
             ctx.request_repaint_after(std::time::Duration::from_millis(50));
-        } else if self.my_voice.working().is_some() {
+        } else if self.my_voice.working().is_some() || self.my_voice.is_importing() {
             ctx.request_repaint_after(std::time::Duration::from_millis(150));
         }
 

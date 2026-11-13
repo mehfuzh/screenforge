@@ -33,9 +33,18 @@ pub fn hint(ui: &mut Ui, text: &str) {
 /// An option that is on or off, drawn as a circle instead of a tick box: filled with the accent
 /// colour when on, an empty ring when off. Clicking the circle or its label flips `on`.
 pub fn check_circle(ui: &mut Ui, on: &mut bool, text: impl Into<egui::WidgetText>) -> Response {
+    check_circle_wrapped(ui, on, text, egui::TextWrapMode::Wrap)
+}
+
+/// A [`check_circle`] on one line, its label cut short with "…" to the width it is given.
+pub fn check_circle_line(ui: &mut Ui, on: &mut bool, text: impl Into<egui::WidgetText>) -> Response {
+    check_circle_wrapped(ui, on, text, egui::TextWrapMode::Truncate)
+}
+
+fn check_circle_wrapped(ui: &mut Ui, on: &mut bool, text: impl Into<egui::WidgetText>, wrap: egui::TextWrapMode) -> Response {
     let pal = theme::p();
     let d = 16.0;
-    let galley = text.into().into_galley(ui, Some(egui::TextWrapMode::Wrap), (ui.available_width() - d - 8.0).max(1.0), egui::TextStyle::Body);
+    let galley = text.into().into_galley(ui, Some(wrap), (ui.available_width() - d - 8.0).max(1.0), egui::TextStyle::Body);
     let size = vec2(d + 8.0 + galley.size().x, galley.size().y.max(d) + 4.0);
     let (rect, mut resp) = ui.allocate_exact_size(size, Sense::click());
     let resp_hover = ui.is_enabled() && resp.hovered();
@@ -259,6 +268,15 @@ pub fn submitted(ui: &Ui, field: &Response) -> bool {
 }
 
 pub fn text_field(ui: &mut Ui, text: &mut String, hint: &str) -> Response {
+    field(ui, text, hint, false)
+}
+
+/// A [`text_field`] that shows dots, for a key or password.
+pub fn secret_field(ui: &mut Ui, text: &mut String, hint: &str) -> Response {
+    field(ui, text, hint, true)
+}
+
+fn field(ui: &mut Ui, text: &mut String, hint: &str, secret: bool) -> Response {
     let pal = theme::p();
     let id = ui.next_auto_id().with("text_field");
     let focused = ui.memory(|m| m.has_focus(id));
@@ -272,6 +290,7 @@ pub fn text_field(ui: &mut Ui, text: &mut String, hint: &str) -> Response {
                 vec2(ui.available_width(), 36.0),
                 egui::TextEdit::singleline(text)
                     .id(id)
+                    .password(secret)
                     .hint_text(RichText::new(hint).color(pal.text_faint))
                     .font(egui::FontId::proportional(14.0))
                     .text_color(pal.text)
