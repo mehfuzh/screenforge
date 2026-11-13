@@ -11,7 +11,7 @@ cd "$(dirname "$0")/.."
 VERSION=${1:?usage: scripts/release.sh <version> [--draft]}
 VERSION=${VERSION#v}
 DRAFT=""; [ "${2:-}" = "--draft" ] && DRAFT="--draft"
-REPO=${REPO:-mehfuzh/screenforge}
+REPO=${REPO:-smartloop-labs/screenforge}
 PROFILE=${NOTARY_PROFILE:-screenforge}
 
 for t in gh xcrun codesign hdiutil; do command -v $t >/dev/null || { echo "missing: $t"; exit 1; }; done

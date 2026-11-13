@@ -131,7 +131,8 @@ pub struct Chatterbox {
 
 impl Chatterbox {
     pub fn load(dir: &Path) -> Result<Chatterbox> {
-        let env = ort::init().with_name("screenforge-my-voice").build().map_err(|e| anyhow::anyhow!("starting ONNX Runtime: {e}"))?;
+        // shared with Kokoro: one ONNX Runtime environment per process
+        let env = crate::onnx_env()?;
         // every core: reading is bound by the language model's many small steps
         let threads = std::thread::available_parallelism().map_or(4, |n| n.get());
         let open = |name: &str| -> Result<Mutex<Session>> {

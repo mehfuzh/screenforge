@@ -12,7 +12,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-REPO=${REPO:-mehfuzh/screenforge}
+REPO=${REPO:-smartloop-labs/screenforge}
 ENVIRONMENT=${ENVIRONMENT:-release}
 TENANT=${AZ_TENANT:-d0707627-32b7-4dfc-9a8d-7e4ba80a7276}          # Documentum (holds the Pay-As-You-Go sub)
 SUBSCRIPTION=${SUBSCRIPTION:-eed8c51e-bb6b-4be4-98f3-3c1feef4a77c}
@@ -52,7 +52,7 @@ echo "  client id $APP_ID"
 # claim format, as repo:owner@<owner id>/name@<repo id>:environment:x; register both.
 OWNER_ID=$(gh api "users/${REPO%%/*}" -q .id)
 REPO_ID=$(gh api "repos/$REPO" -q .id)
-BASE="github-$(basename "$REPO")-$ENVIRONMENT-env"
+BASE="github-${REPO%%/*}-$(basename "$REPO")-$ENVIRONMENT-env"   # with the owner: names are unique per app
 add_cred() { # add_cred <name> <subject>
   if az ad app federated-credential list --id "$APP_ID" --query "[?subject=='$2'].name" -o tsv | grep -q .; then
     echo "  federated credential for $2 already present"

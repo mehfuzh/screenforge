@@ -222,6 +222,20 @@ impl Speech {
 }
 
 /// The loaded model and dictionaries.
+/// The ONNX Runtime environment every model here runs in. ONNX Runtime allows one per process,
+/// ever (a second fails even after the first is dropped), so Kokoro and Chatterbox share this
+/// one, made on first use and kept for the life of the process.
+pub(crate) fn onnx_env() -> Result<ort::environment::Environment> {
+    static ENV: Mutex<Option<ort::environment::Environment>> = Mutex::new(None);
+    let mut env = ENV.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(e) = env.as_ref() {
+        return Ok(e.clone());
+    }
+    let e = ort::init().with_name("screenforge").build().map_err(|e| anyhow::anyhow!("starting ONNX Runtime: {e}"))?;
+    *env = Some(e.clone());
+    Ok(e)
+}
+
 pub struct Kokoro {
     session: Mutex<ort::session::Session>,
     dict: g2p::Dict,
@@ -239,7 +253,7 @@ impl Kokoro {
         let dict = g2p::Dict::from_json(&read("us_gold.json")?, &read("us_silver.json")?)?;
         let vocab: serde_json::Map<String, serde_json::Value> = serde_json::from_str(VOCAB)?;
         let vocab = vocab.into_iter().filter_map(|(k, v)| Some((k.chars().next()?, v.as_i64()?))).collect();
-        let env = ort::init().with_name("screenforge-tts").build().map_err(|e| anyhow::anyhow!("starting ONNX Runtime: {e}"))?;
+        let env = onnx_env()?;
         let threads = std::thread::available_parallelism().map_or(4, |n| n.get().min(8));
         let session = ort::session::Session::builder(&env)
             .and_then(|b| b.with_intra_threads(threads).map_err(Into::into))
@@ -394,6 +408,16 @@ fn time_words(p: &g2p::Phrase, (from, to): (f64, f64)) -> Vec<SpokenWord> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Kokoro and Chatterbox in one process: ONNX Runtime refuses a second environment, so both
+    /// must get the shared one ("update_narration: starting ONNX Runtime: only one environment
+    /// is allowed per process").
+    #[test]
+    fn one_onnx_environment_serves_every_model() {
+        let first = onnx_env();
+        let second = onnx_env();
+        assert!(first.is_ok() && second.is_ok(), "{:?} {:?}", first.err(), second.err());
+    }
 
     #[test]
     fn the_mirror_comes_first_with_flat_names() {
