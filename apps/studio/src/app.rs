@@ -746,7 +746,7 @@ fn can_open(p: &std::path::Path) -> bool {
     sf_recording::import::is_video(p) || ext == sf_project::PACKAGE_EXTENSION || ext == sf_project::SCREEN_STUDIO_EXTENSION
 }
 
-fn drop_hint(ctx: &egui::Context, editing: bool) {
+fn drop_hint(ctx: &egui::Context, editing: bool, voice_form: bool) {
     let hovered: Vec<PathBuf> = ctx.input(|i| i.raw.hovered_files.iter().filter_map(|f| f.path.clone()).collect());
     if hovered.is_empty() {
         return;
@@ -754,8 +754,11 @@ fn drop_hint(ctx: &egui::Context, editing: bool) {
     let pal = crate::theme::p();
     let video = hovered.iter().any(|p| sf_recording::import::is_video(p));
     let project = hovered.iter().any(|p| can_join(p));
-    let refused = !hovered.iter().any(|p| can_open(p));
+    // audio is taken while the My voice form is open: recordings of the user's voice
+    let voice = voice_form && hovered.iter().any(|p| crate::my_voice::is_audio(p));
+    let refused = !voice && !hovered.iter().any(|p| can_open(p));
     let text = match (video, editing) {
+        _ if voice => "Drop to use the recording for My voice",
         _ if refused => "Only projects and videos (MP4, MOV, M4V) can be opened here",
         (true, true) => "Drop to add the video to the end of this project",
         (true, false) => "Drop the video to make a project",
@@ -933,9 +936,15 @@ impl eframe::App for App {
         self.tray_tick(ctx, &mut open_request);
         let editing = matches!(self.screen, Screen::Editor(_));
         let mut append_request: Option<PathBuf> = None;
+        let voice_form = matches!(&self.screen, Screen::Editor(ed) if ed.my_voice.open);
+        let mut voice_files: Vec<PathBuf> = vec![];
         ctx.input(|i| {
             for f in &i.raw.dropped_files {
                 let p = f.path().to_path_buf();
+                if voice_form && crate::my_voice::is_audio(&p) {
+                    voice_files.push(p);
+                    continue;
+                }
                 // anything else (an image, a document) is not taken
                 if !can_open(&p) {
                     continue;
@@ -948,7 +957,10 @@ impl eframe::App for App {
                 }
             }
         });
-        drop_hint(ctx, editing);
+        drop_hint(ctx, editing, voice_form);
+        if let (false, Screen::Editor(ed)) = (voice_files.is_empty(), &mut self.screen) {
+            ed.my_voice.add_files(&voice_files);
+        }
         if let Some(v) = append_request {
             self.begin_append(v, ctx);
         }

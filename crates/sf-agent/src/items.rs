@@ -10,6 +10,9 @@ use sf_project::{MusicClip, SceneAudioExt, SceneMusicExt, SceneTracksExt, Track,
 
 use crate::tools::{clock, num, opt_num, Outcome, Workspace};
 
+/// What a narration tool's `voice` can be.
+const VOICE_ARG: &str = "A voice id from the list above, a voice from get_options myVoices or elevenLabsVoices (its voice, or simply its name, e.g. \"Ricky\"), my_voice for the user's own voice chosen in the Narration panel, or a voice's name (\"Heart\", \"Eric\"). Left out: the voice chosen in the Narration panel.";
+
 pub const LAYOUT_TYPES: [&str; 5] = ["screen-only", "camera-overlay", "split-screen", "fullscreen-camera", "cutout-camera"];
 
 pub fn definitions() -> Vec<Value> {
@@ -119,16 +122,31 @@ pub fn definitions() -> Vec<Value> {
         }),
         json!({
             "name": "add_narration",
-            "description": "Read text aloud with an AI voice (made on this computer) and add it as a voice-over take starting at start_ms; its words become captions. Write it as spoken sentences, and use one call per passage you place (one per section of the video); the result gives the take's end, so the next starts after it. Keep each passage within the part of the video it describes. On this computer, free: am_fenrir male, am_michael male, am_puck male, af_heart female, af_bella female, af_nicole female. ElevenLabs (studio quality, read online, about 8 credits per 1,000 characters from the user's credits; only when the user chose one in the Narration panel or asks for ElevenLabs, studio quality or a more realistic voice): el_eric male (use this one when asked for studio quality or a more realistic voice without naming a voice), el_brian male, el_george male British, el_daniel male British, el_sarah female, el_matilda female, el_alice female British, el_jessica female; my_voice is the user's own voice cloned by ElevenLabs (use it when they ask for their own voice; it fails if they have not made it under Narration → My voice, so tell them to). Leave voice and speed out to use the ones the user chose in the Narration panel, and keep one voice for the whole video unless asked. speed 0.7–1.3 (1 = normal; ElevenLabs reads 0.7–1.2). The first on-device narration downloads the voice model (about 330 MB) and can take a minute. Lower the music (set_music volume 0.2–0.3) so the voice is heard.",
+            "description": "Read text aloud with an AI voice (made on this computer) and add it as a voice-over take starting at start_ms; its words become captions. Write it as spoken sentences, and use one call per passage you place (one per section of the video); the result gives the take's end, so the next starts after it. Keep each passage within the part of the video it describes. On this computer, free: am_fenrir male, am_michael male, am_puck male, af_heart female, af_bella female, af_nicole female. ElevenLabs (studio quality, read online, about 8 credits per 1,000 characters from the user's credits; only when the user chose one in the Narration panel or asks for ElevenLabs, studio quality or a more realistic voice): el_eric male (use this one when asked for studio quality or a more realistic voice without naming a voice), el_brian male, el_george male British, el_daniel male British, el_sarah female, el_matilda female, el_alice female British, el_jessica female. The user's own voices are in get_options by name: myVoices are read free on this computer; elevenLabsVoices are voices in the user's own ElevenLabs account, read online with their key (their ElevenLabs credits, not ScreenForge's). When they ask for a voice by name (\"narrate with Ricky\"), use that entry's voice (a name in both lists means myVoices); my_voice alone is the one chosen in the Narration panel (use it when they ask for their own voice without a name; it fails if they have not made it under Narration → My voice, so tell them to; the first reading downloads its model, about 0.7 GB, and it reads slower than the other voices). Leave voice and speed out to use the ones the user chose in the Narration panel, and keep one voice for the whole video unless asked. speed 0.7–1.3 (1 = normal; ElevenLabs reads 0.7–1.2). The first on-device narration downloads the voice model (about 330 MB) and can take a minute. Lower the music (set_music volume 0.2–0.3) so the voice is heard.",
             "input_schema": {
                 "type": "object",
                 "properties": {
                     "text": { "type": "string" },
                     "start_ms": { "type": "number" },
-                    "voice": { "type": "string", "enum": crate::host::VOICES.iter().map(|(id, _)| *id).collect::<Vec<_>>() },
+                    // the user's own voices (get_options myVoices) are not a fixed list
+                    "voice": { "type": "string", "description": VOICE_ARG },
                     "speed": { "type": "number" }
                 },
                 "required": ["text", "start_ms"]
+            }
+        }),
+        json!({
+            "name": "update_narration",
+            "description": "Read a narration take again, in the same place: new text, another voice, or another speed (give any of them; what is left out stays). id is a voice-over from get_project that has aiVoice (one recorded with a microphone cannot be read again). Use it when the user asks to change what a narration says, or to narrate it in another voice (\"make the intro Ricky's voice\"); to change every take's voice, call it once per take.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "id": { "type": "string" },
+                    "text": { "type": "string" },
+                    "voice": { "type": "string", "description": VOICE_ARG },
+                    "speed": { "type": "number" }
+                },
+                "required": ["id"]
             }
         }),
         json!({
@@ -293,6 +311,7 @@ impl Workspace {
             })(),
             "update_audio" => self.update_audio(input),
             "add_narration" => self.add_narration(input),
+            "update_narration" => self.update_narration(input),
             "set_music" => (|| {
                 let audio = &mut self.project.config.audio;
                 let mut changed = vec![];
@@ -521,17 +540,92 @@ impl Workspace {
         Err(format!("no audio clip, voice-over or music part {id}"))
     }
 
+    /// The voice `asked` for, as an id: a [`crate::host::VOICES`] id, one of the user's own
+    /// voices (`my_voice:<id>`), `my_voice` (the one chosen in the Narration panel, or their
+    /// first), or a voice's name ("Ricky" from get_options myVoices, "Heart", "Eric"). `None`:
+    /// the voice chosen in the Narration panel.
+    fn voice(&self, asked: Option<&str>) -> Result<String, String> {
+        let own = |v: &str| v.starts_with("my_voice:");
+        let known = |v: &str| own(v) || v.starts_with("el_user:") || crate::host::VOICES.iter().any(|(id, _)| *id == v);
+        let chosen = self.project.config.audio.narration_voice.clone().filter(|v| known(v));
+        let options = self.host.as_deref().map(|h| h.options()).unwrap_or_default();
+        let listed = |key: &str| -> Vec<(String, String)> {
+            options.get(key).and_then(Value::as_array).into_iter().flatten().filter_map(|v| Some((v.get("voice")?.as_str()?.to_string(), v.get("name")?.as_str()?.to_string()))).collect()
+        };
+        // made on this computer, then in the user's own ElevenLabs
+        let mine = listed("myVoices");
+        let account = listed("elevenLabsVoices");
+        let Some(asked) = asked.map(str::trim).filter(|a| !a.is_empty()) else {
+            return Ok(chosen.unwrap_or_else(|| crate::host::VOICES[0].0.to_string()));
+        };
+        if asked == "my_voice" {
+            return chosen.filter(|v| own(v)).or_else(|| mine.first().map(|m| m.0.clone())).ok_or_else(|| "the user has not made their voice yet: they can under Narration → My voices".to_string());
+        }
+        if known(asked) {
+            return Ok(asked.to_string());
+        }
+        // by name: the user's own voices first, then the others ("Heart" is af_heart)
+        let name = asked.to_lowercase();
+        if let Some((id, _)) = mine.iter().chain(&account).find(|(_, n)| n.to_lowercase() == name) {
+            return Ok(id.clone());
+        }
+        if let Some((id, _)) = crate::host::VOICES.iter().find(|(id, _)| id.split_once('_').is_some_and(|(_, n)| n == name)) {
+            return Ok(id.to_string());
+        }
+        let names: Vec<&str> = mine.iter().chain(&account).map(|m| m.1.as_str()).collect();
+        Err(if names.is_empty() { format!("unknown voice {asked}") } else { format!("unknown voice {asked}; the user's own voices are {}", names.join(", ")) })
+    }
+
+    /// Read an AI-voiced take again with new text, another voice or speed, in the same place
+    /// (its lane, volume and boost stay).
+    fn update_narration(&mut self, input: &Value) -> Result<Outcome, String> {
+        let id = input.get("id").and_then(Value::as_str).ok_or("`id` is required (a voice-over from get_project)")?;
+        let take = self.project.scenes[0].voice_overs.iter().find(|v| v.id == id).ok_or_else(|| format!("no voice-over {id}"))?;
+        let old_voice = take.spoken_voice().ok_or("that take was recorded with a microphone, not read by an AI voice; only narration takes can be read again")?.to_string();
+        let old_text = take.source.get("text").and_then(Value::as_str).unwrap_or_default().to_string();
+        let source = take.source_start_ms;
+        let text = input.get("text").and_then(Value::as_str).map(str::trim).filter(|t| !t.is_empty());
+        let asked_voice = input.get("voice").and_then(Value::as_str);
+        let speed = opt_num(input, "speed")?;
+        if text.is_none() && asked_voice.is_none() && speed.is_none() {
+            return Err("give the new text, voice or speed".into());
+        }
+        let voice = match asked_voice {
+            Some(v) => self.voice(Some(v))?,
+            None => old_voice,
+        };
+        let speed = speed.unwrap_or(self.project.config.audio.narration_speed());
+        if !(0.5..=2.0).contains(&speed) {
+            return Err("`speed` is 0.7–1.3 (1 = normal)".into());
+        }
+        let text = text.map(str::to_string).unwrap_or(old_text);
+        if text.is_empty() {
+            return Err("this take has no text to read; give `text`".into());
+        }
+        let spoken = self.host.as_deref().ok_or("not available here (no editor)")?.speak(&text, &voice, speed)?;
+        let fresh = sf_project::v4::VoiceOver::spoken(source, spoken.duration_ms, spoken.file_name, &text, &voice);
+        let take = self.project.scenes[0].voice_overs.iter_mut().find(|v| v.id == id).ok_or_else(|| format!("no voice-over {id}"))?;
+        take.file_name = fresh.file_name;
+        take.voiceover_duration_ms = fresh.voiceover_duration_ms;
+        take.file_offset_ms = 0.0;
+        take.source = fresh.source;
+        let tl = self.timeline();
+        let start = tl.source_to_output(source).unwrap_or(0.0);
+        let end = start + spoken.duration_ms;
+        let mut result = json!({ "id": id, "startMs": start.round(), "endMs": end.round(), "voice": voice });
+        if end > tl.duration_ms() {
+            result["note"] = json!(format!("The narration now runs {:.1} s past the end of the video and is cut there.", (end - tl.duration_ms()) / 1000.0));
+        }
+        Ok(Outcome::edit(result, format!("Narration at {} read again", clock(start))))
+    }
+
     fn add_narration(&mut self, input: &Value) -> Result<Outcome, String> {
         let text = input.get("text").and_then(Value::as_str).map(str::trim).filter(|t| !t.is_empty()).ok_or("`text` is required")?;
         let t = num(input, "start_ms")?;
         // the voice and speed chosen in the Narration panel, unless asked for another
-        let audio = &self.project.config.audio;
-        let default_voice = audio.narration_voice.clone().filter(|v| crate::host::VOICES.iter().any(|(id, _)| id == v)).unwrap_or_else(|| crate::host::VOICES[0].0.to_string());
-        let voice = input.get("voice").and_then(Value::as_str).unwrap_or(&default_voice).to_string();
+        let voice = self.voice(input.get("voice").and_then(Value::as_str))?;
         let voice = voice.as_str();
-        if !crate::host::VOICES.iter().any(|(id, _)| *id == voice) {
-            return Err(format!("unknown voice {voice}"));
-        }
+        let audio = &self.project.config.audio;
         let speed = opt_num(input, "speed")?.unwrap_or(audio.narration_speed());
         if !(0.5..=2.0).contains(&speed) {
             return Err("`speed` is 0.7–1.3 (1 = normal)".into());
@@ -630,7 +724,7 @@ mod tests {
     struct Voice;
     impl crate::Host for Voice {
         fn options(&self) -> Value {
-            json!({})
+            json!({ "myVoices": [{ "voice": "my_voice:7", "name": "Ricky" }], "elevenLabsVoices": [{ "voice": "el_user:abc", "name": "Pavan" }, { "voice": "el_user:dup", "name": "Ricky" }] })
         }
         fn apply_preset(&self, _: &str, _: &mut Project) -> Result<(), String> {
             Err("no".into())
@@ -674,6 +768,51 @@ mod tests {
         assert_eq!(w.project.scenes[0].voice_overs[1].spoken_voice(), Some("am_fenrir"));
         assert!(w.run("add_narration", &json!({ "text": "Hi", "start_ms": 1000, "voice": "nobody" })).is_err());
         assert!(w.run("add_narration", &json!({ "text": "Hi", "start_ms": 9000 })).is_err(), "the timeline is 8 s");
+        // one of the user's own voices, by its id from get_options myVoices
+        w.run("add_narration", &json!({ "text": "Mine", "start_ms": 1000, "voice": "my_voice:20261112" })).unwrap();
+        assert_eq!(w.project.scenes[0].voice_overs.last().unwrap().spoken_voice(), Some("my_voice:20261112"));
+    }
+
+    #[test]
+    fn voices_can_be_asked_for_by_name() {
+        let mut w = ws();
+        w.host = Some(std::sync::Arc::new(Voice));
+        w.run("add_narration", &json!({ "text": "Hi", "start_ms": 1000, "voice": "ricky" })).unwrap();
+        w.run("add_narration", &json!({ "text": "Hi", "start_ms": 2000, "voice": "Heart" })).unwrap();
+        // a voice in the user's ElevenLabs, by name
+        w.run("add_narration", &json!({ "text": "Hi", "start_ms": 3000, "voice": "Pavan" })).unwrap();
+        let voices: Vec<_> = w.project.scenes[0].voice_overs.iter().map(|v| v.spoken_voice().unwrap().to_string()).collect();
+        assert_eq!(voices, ["my_voice:7", "af_heart", "el_user:abc"], "a name in both lists is the one made here");
+        let e = w.run("add_narration", &json!({ "text": "Hi", "start_ms": 1000, "voice": "Bob" })).unwrap_err();
+        assert!(e.contains("Ricky"), "{e}");
+    }
+
+    #[test]
+    fn a_narration_take_is_read_again_in_place() {
+        let mut w = ws();
+        w.host = Some(std::sync::Arc::new(Voice));
+        let id = id(&w.run("add_narration", &json!({ "text": "Hello there", "start_ms": 1000, "voice": "af_heart" })).unwrap(), "id");
+        w.project.scenes[0].voice_overs[0].volume = 0.5;
+        // another voice, the same words
+        w.run("update_narration", &json!({ "id": id, "voice": "Ricky" })).unwrap();
+        let v = &w.project.scenes[0].voice_overs[0];
+        assert_eq!((v.spoken_voice(), v.source.get("text").and_then(Value::as_str), v.source_start_ms, v.volume, v.file_name.as_str()), (Some("my_voice:7"), Some("Hello there"), 1000.0, 0.5, "my_voice:7.wav"));
+        // new words, the same voice
+        w.run("update_narration", &json!({ "id": id, "text": "Bye now" })).unwrap();
+        let v = &w.project.scenes[0].voice_overs[0];
+        assert_eq!((v.spoken_voice(), v.source.get("text").and_then(Value::as_str)), (Some("my_voice:7"), Some("Bye now")));
+        assert_eq!(w.project.scenes[0].voice_overs.len(), 1);
+        assert!(w.run("update_narration", &json!({ "id": id })).is_err(), "nothing to change");
+        assert!(w.run("update_narration", &json!({ "id": "nope", "text": "x" })).is_err());
+    }
+
+    #[test]
+    fn my_voice_alone_is_the_one_chosen_in_the_panel() {
+        let mut w = ws();
+        w.host = Some(std::sync::Arc::new(Voice));
+        w.project.config.audio.narration_voice = Some("my_voice:7".into());
+        w.run("add_narration", &json!({ "text": "Hi", "start_ms": 1000, "voice": "my_voice" })).unwrap();
+        assert_eq!(w.project.scenes[0].voice_overs[0].spoken_voice(), Some("my_voice:7"));
     }
 
     #[test]

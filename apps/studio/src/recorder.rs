@@ -26,7 +26,8 @@ pub fn device_inputs() -> Inputs {
     Inputs {
         cameras: sf_recording::discover::cameras().iter().map(|c| InputDevice { id: c.id.clone(), name: c.name.clone() }).collect(),
         phones: sf_recording::device::devices().into_iter().map(|d| InputDevice { id: d.id, name: d.name }).collect(),
-        microphones: sf_recording::discover::microphones().iter().map(|m| InputDevice { id: m.id.clone(), name: m.name.clone() }).collect(),
+        // the same rows as the voice-over menu: the system default first, then each microphone
+        microphones: crate::voice_over::menu_rows(&crate::voice_over::microphones()).into_iter().map(|m| InputDevice { id: m.id, name: m.name }).collect(),
         windows: discover_windows(),
         ..Inputs::default()
     }

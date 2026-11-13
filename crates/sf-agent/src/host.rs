@@ -84,7 +84,7 @@ pub const VOICES: [(&str, &str); 15] = [
     ("el_matilda", "female, knowledgeable, professional (ElevenLabs)"),
     ("el_alice", "female, clear British educator (ElevenLabs)"),
     ("el_jessica", "female, playful, bright (ElevenLabs)"),
-    ("my_voice", "the user's own voice, cloned by ElevenLabs (only once they made it under Narration → My voice)"),
+    ("my_voice", "the user's own voice, read on this computer: the one chosen in the Narration panel, or the first they made (only once they made one under Narration → My voice)"),
 ];
 
 /// Something only the editor can do, asked for by a tool and run when the round's edits are
