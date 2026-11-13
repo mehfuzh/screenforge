@@ -67,6 +67,9 @@ pub struct App {
     /// Windows: the toolbar window is clipped to the pill and whatever is open above it.
     #[cfg(target_os = "windows")]
     window_shape: Option<crate::os::WindowShape>,
+    /// Cloud share links being made (rendered and uploaded in the background); a finished one
+    /// copies its link and sends a notification, then leaves the list.
+    shares: Vec<crate::share::ShareJob>,
 }
 
 #[derive(PartialEq, Eq, Clone, Copy)]
@@ -148,7 +151,7 @@ impl App {
         let mut picker = Picker::default();
         picker.load_inputs();
         let perm_setup = (crate::permissions::PermissionsSetup::needed() || std::env::var_os("SF_SHOW_PERMISSIONS").is_some()).then(crate::permissions::PermissionsSetup::start);
-        let app = App { gpu, screen: Screen::Picker(picker), error: None, prefs, window_mode: WindowMode::Picker, picker_height: crate::picker::BAR_WINDOW_H, placed_once: false, tray: None, tray_tried: false, area_select: None, window_select: None, titlebar_fix: 0, perm_setup, confirm_close: None, quitting: false, fresh_open: None, last_size: None, last_pointer: None, #[cfg(target_os = "linux")] input_region: crate::os::InputRegion::new(cc), #[cfg(target_os = "windows")] window_shape: crate::os::WindowShape::new(cc), appending: false, append_failed: Default::default(), started_new: false, picking: None, pending_open: std::env::args().nth(1).map(PathBuf::from).filter(|p| p.is_dir() || sf_recording::import::is_video(p) || p.extension().is_some_and(|e| e == sf_project::PACKAGE_EXTENSION || e == sf_project::SCREEN_STUDIO_EXTENSION)) };
+        let app = App { gpu, screen: Screen::Picker(picker), error: None, prefs, window_mode: WindowMode::Picker, picker_height: crate::picker::BAR_WINDOW_H, placed_once: false, tray: None, tray_tried: false, area_select: None, window_select: None, titlebar_fix: 0, perm_setup, confirm_close: None, quitting: false, fresh_open: None, last_size: None, last_pointer: None, #[cfg(target_os = "linux")] input_region: crate::os::InputRegion::new(cc), #[cfg(target_os = "windows")] window_shape: crate::os::WindowShape::new(cc), appending: false, shares: Vec::new(), append_failed: Default::default(), started_new: false, picking: None, pending_open: std::env::args().nth(1).map(PathBuf::from).filter(|p| p.is_dir() || sf_recording::import::is_video(p) || p.extension().is_some_and(|e| e == sf_project::PACKAGE_EXTENSION || e == sf_project::SCREEN_STUDIO_EXTENSION)) };
         crate::open_docs::set_context(&cc.egui_ctx);
         // a project on the command line opens on the first frame (`pending_open`)
         app
@@ -403,6 +406,77 @@ impl App {
         self.appending = true;
         self.screen = Screen::Opening(dropped, rx, progress);
         ctx.request_repaint();
+    }
+
+    /// Render and upload `project` for a share link in the background (one job per project:
+    /// a newer request replaces a running one).
+    fn start_share(&mut self, project: PathBuf, settings: crate::share::ShareSettings, ctx: &egui::Context) {
+        for job in self.shares.iter().filter(|j| j.project == project) {
+            job.cancel();
+        }
+        self.shares.retain(|j| j.project != project);
+        let title = ed_name(&project);
+        self.shares.push(crate::share::ShareJob::start(project, title, settings, ctx.clone()));
+    }
+
+    /// Follow the share jobs: a finished one copies its link and says so in a notification
+    /// (the app may be in the background by then), and in the editor's status line.
+    fn poll_shares(&mut self, ctx: &egui::Context) {
+        if let Screen::Editor(ed) = &mut self.screen {
+            if let Some(s) = ed.export.share_request.take() {
+                let path = ed.path.clone();
+                ed.save();
+                self.start_share(path, s, ctx);
+            }
+        }
+        let mut finished = Vec::new();
+        for job in &mut self.shares {
+            if job.poll() {
+                finished.push(job.project.clone());
+            }
+        }
+        let editor = match &mut self.screen {
+            Screen::Editor(ed) => Some(ed),
+            _ => None,
+        };
+        let editor_path = editor.as_ref().map(|ed| ed.path.clone());
+        let mut status: Option<String> = None;
+        let mut last_link: Option<Result<String, String>> = None;
+        for job in &self.shares {
+            let mine = editor_path.as_ref() == Some(&job.project);
+            match &job.result {
+                None if mine => status = Some(job.label()),
+                Some(Ok(url)) if finished.contains(&job.project) => {
+                    ctx.copy_text(url.clone());
+                    crate::os::notify("Your share link is ready", &format!("“{}” is uploaded. The link is on your clipboard: {url}", job.title));
+                    if mine {
+                        status = Some(format!("Share link copied: {url}"));
+                        last_link = Some(Ok(url.clone()));
+                    }
+                }
+                Some(Err(e)) if finished.contains(&job.project) && !crate::share::is_cancel(e) => {
+                    crate::os::notify("Share link failed", &format!("“{}”: {e}", job.title));
+                    if mine {
+                        status = Some(format!("Share link failed: {e}"));
+                        last_link = Some(Err(e.clone()));
+                    }
+                }
+                _ => {}
+            }
+        }
+        if let Some(ed) = editor {
+            ed.export.share_running = self.shares.iter().find(|j| Some(&j.project) == editor_path.as_ref() && j.is_running()).map(|j| j.fraction());
+            if let Some(l) = last_link {
+                ed.export.last_link = Some(l);
+            }
+            if let Some(s) = status {
+                ed.set_status(s);
+            }
+        }
+        self.shares.retain(|j| j.is_running());
+        if !self.shares.is_empty() {
+            ctx.request_repaint_after(std::time::Duration::from_millis(500));
+        }
     }
 
     fn begin_open(&mut self, path: PathBuf, ctx: &egui::Context) {
@@ -917,6 +991,7 @@ impl eframe::App for App {
             open_request = crate::open_docs::take();
         }
         self.poll_dialog(&mut open_request);
+        self.poll_shares(ctx);
         crate::theme::sync(ctx);
         if let Some(setup) = self.perm_setup.as_mut() {
             if setup.show(ctx) {
@@ -1046,6 +1121,10 @@ impl eframe::App for App {
         }
         match outcome {
             Some(RecordingOutcome::Finished(p)) => {
+                // Pro: the recording gets its share link by itself, while the editor opens
+                if crate::share::on_stop_enabled() && sf_license::saved_status().is_pro() {
+                    self.start_share(p.clone(), crate::share::ShareSettings::ON_STOP, ctx);
+                }
                 self.fresh_open = Some(p.clone());
                 open_request = Some(p);
             }

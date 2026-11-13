@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - "site/**"
+      - "functions/**"
       - "scripts/gen-releases.py"
       - "scripts/site_partials.py"
       - "scripts/site/**"

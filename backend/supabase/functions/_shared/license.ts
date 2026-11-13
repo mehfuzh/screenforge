@@ -23,6 +23,25 @@ export async function signLicense(payload: Payload): Promise<string> {
 
 export function isoDate(d: Date): string { return d.toISOString().slice(0, 10); }
 
+/** The issuer's public key (the same one embedded in `crates/sf-license`). */
+const ISSUER_PUBLIC_KEY_B64 = "fq9T9G8fJeZSPJtnjCsgO1V0BzXYds8UxAqAEjir4CM";
+
+/** The payload of a key this backend signed, or null when it is malformed or forged. Says
+ *  nothing about expiry or which computer is active now: callers check those. */
+export async function verifyKey(key: unknown): Promise<Payload | null> {
+  if (typeof key !== "string" || key.length > 4096) return null;
+  const parts = key.split(".");
+  if (parts.length !== 3 || parts[0] !== "SF1") return null;
+  try {
+    const json = fromB64url(parts[1]);
+    if (!(await ed.verifyAsync(fromB64url(parts[2]), json, fromB64url(ISSUER_PUBLIC_KEY_B64)))) return null;
+    const p = JSON.parse(new TextDecoder().decode(json));
+    return typeof p?.email === "string" && typeof p?.plan === "string" ? p as Payload : null;
+  } catch {
+    return null;
+  }
+}
+
 // The purchase email: how to activate with this address. The key itself is never shown; the
 // app fetches one bound to the computer once the emailed 6-digit code is entered.
 export async function emailLicense(email: string, plan: string) {

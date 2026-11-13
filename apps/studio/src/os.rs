@@ -26,6 +26,39 @@ pub fn open(target: impl AsRef<std::ffi::OsStr>) {
     }
 }
 
+/// A desktop notification (macOS Notification Center, a Windows toast, freedesktop
+/// `notify-send`). Fire and forget: shown from a helper process, so nothing waits on it.
+pub fn notify(title: &str, body: &str) {
+    #[cfg(target_os = "macos")]
+    {
+        // AppleScript string literals: backslashes and quotes escaped
+        let q = |s: &str| format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""));
+        let script = format!("display notification {} with title \"ScreenForge\" subtitle {} sound name \"Glass\"", q(body), q(title));
+        let _ = std::process::Command::new("osascript").args(["-e", &script]).spawn();
+    }
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        // XML-escaped, then single-quoted for PowerShell
+        let x = |s: &str| s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('\'', "''");
+        let script = format!(
+            "[Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] > $null;\
+             [Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom.XmlDocument, ContentType = WindowsRuntime] > $null;\
+             $d = New-Object Windows.Data.Xml.Dom.XmlDocument;\
+             $d.LoadXml('<toast><visual><binding template=\"ToastGeneric\"><text>{}</text><text>{}</text></binding></visual></toast>');\
+             [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier('{{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}}\\WindowsPowerShell\\v1.0\\powershell.exe').Show([Windows.UI.Notifications.ToastNotification]::new($d))",
+            x(title),
+            x(body)
+        );
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        let _ = std::process::Command::new("powershell").args(["-NoProfile", "-NonInteractive", "-Command", &script]).creation_flags(CREATE_NO_WINDOW).spawn();
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        let _ = std::process::Command::new("notify-send").args(["--app-name=ScreenForge", title, body]).spawn();
+    }
+}
+
 #[cfg(target_os = "windows")]
 mod windows_shell {
     use std::ffi::OsStr;

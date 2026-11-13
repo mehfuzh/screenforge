@@ -182,6 +182,35 @@ offers **Switch account**, **Sign out** and, for Pro, **Manage subscription**:
   goes; default the pricing page).
 
 
+## Cloud share links (Pro)
+
+When a recording stops on a Pro computer, the app renders it (1080p, 30 fps, H.264) in the
+background, uploads it and puts a `https://screenforge.studio/s/<id>` link on the clipboard
+with a desktop notification. Export → Get share link does the same at the dialog's settings,
+and Export → Share link → Your links lists, copies and deletes them. The on-stop upload can be
+turned off there (`share-on-stop` in the app's config folder).
+
+```
+ app ──{ device, key, bytes, poster }──▶ share (create) ──▶ presigned PUT URLs (R2, 6 h)
+ app ──PUT video.mp4 / poster.jpg──▶ R2 bucket screenforge-shares (never through Supabase)
+ app ──{ device, key, id }──▶ share (complete): object size checked → link ready
+ viewer ──▶ screenforge.studio/s/<id> (functions/s/[id].js, Pages Function)
+        ──{ action: get }──▶ share  ·  video from media.screenforge.studio (R2 public domain)
+```
+
+- Setup: `backend/setup-share.sh` (bucket, public domain, migration
+  `20261113000000_share_links.sql`, secrets, deploy). The page deploys with the site.
+- Who: `create` needs an active Pro license or a staff email (`proOrStaff`, as the agent).
+  `list` and `delete` only need the owner, so links can still be removed after Pro ends.
+- Owner requests carry the computer's license key as well as its device id: the function
+  checks the key's signature, that it is bound to that device, and that the device is still
+  the license's active computer. A device id alone (not secret) is not enough.
+- Limits: `SHARE_MAX_BYTES` per video (default 2 GiB; Content-Length is signed into the upload
+  URL, and `complete` checks the stored size), `SHARE_MAX_ACCOUNT_BYTES` per account (default
+  100 GiB). Uploads not completed within a day are removed on the owner's next `create`.
+- Links are unlisted: 12 random base62 characters, `noindex` on the page. Views are counted
+  by the page (`share_view`). Deleting a link removes both R2 objects and the row.
+
 ## ElevenLabs voices
 
 Narration (and the agent's `add_narration`) offers ElevenLabs voices beside the on-device Kokoro

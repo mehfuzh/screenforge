@@ -75,6 +75,19 @@ pub struct ExportDialog {
     progress: Option<sf_export::Progress>,
     result: Option<Result<PathBuf, String>>,
     started: Option<std::time::Instant>,
+    /// "Get share link" was pressed: the app takes this and starts the share job.
+    pub share_request: Option<crate::share::ShareSettings>,
+    /// This project's share job, while one runs (0..1; set by the app every frame).
+    pub share_running: Option<f32>,
+    /// This project's last share link, or why it failed (set by the app).
+    pub last_link: Option<Result<String, String>>,
+    /// Make a share link whenever a recording stops (Pro; `share::on_stop_enabled`).
+    share_on_stop: bool,
+    /// "Your links": the account's links once loaded, and the list being fetched or a delete
+    /// running.
+    links_open: bool,
+    links: Option<Result<Vec<crate::share::Link>, String>>,
+    links_rx: Option<Receiver<Result<Vec<crate::share::Link>, String>>>,
 }
 
 /// An empty dialog: no file reads, no network. `std::mem::take` puts one in place every frame
@@ -82,7 +95,7 @@ pub struct ExportDialog {
 /// that loads the license and talks to the backend.
 impl Default for ExportDialog {
     fn default() -> Self {
-        ExportDialog { open: false, license: sf_license::Status::Invalid("no key".into()), email: String::new(), activation: None, check_in: None, activation_msg: None, code_sent_to: None, code: String::new(), signing_in: false, promo: String::new(), promo_open: false, checkout: None, claim_until: None, next_claim: None, claim: None, free_left: None, free_rx: None, was_open: false, license_seen: 0, free_job: false, format: Format::Mp4, fps: 60.0, height: 1080, quality: QualityPreset::SocialMedia, codec: VideoCodec::H264, audio: true, job: None, progress: None, result: None, started: None }
+        ExportDialog { open: false, license: sf_license::Status::Invalid("no key".into()), email: String::new(), activation: None, check_in: None, activation_msg: None, code_sent_to: None, code: String::new(), signing_in: false, promo: String::new(), promo_open: false, checkout: None, claim_until: None, next_claim: None, claim: None, free_left: None, free_rx: None, was_open: false, license_seen: 0, free_job: false, format: Format::Mp4, fps: 60.0, height: 1080, quality: QualityPreset::SocialMedia, codec: VideoCodec::H264, audio: true, job: None, progress: None, result: None, started: None, share_request: None, share_running: None, last_link: None, share_on_stop: true, links_open: false, links: None, links_rx: None }
     }
 }
 
@@ -106,7 +119,7 @@ impl ExportDialog {
             None
         };
         // a checkout from an earlier session, paid after quitting: look for it a while
-        let mut d = ExportDialog { license, email, check_in, license_seen: sf_license::license_generation(), ..Default::default() };
+        let mut d = ExportDialog { license, email, check_in, license_seen: sf_license::license_generation(), share_on_stop: crate::share::on_stop_enabled(), ..Default::default() };
         // known before the dialog first opens
         if !d.license.is_valid() {
             d.fetch_free_exports();
@@ -266,6 +279,16 @@ impl ExportDialog {
         }
         self.poll_checkout(ctx);
         self.poll_free_exports(ctx);
+        if let Some(rx) = &self.links_rx {
+            match rx.try_recv() {
+                Ok(r) => {
+                    self.links = Some(r);
+                    self.links_rx = None;
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => ctx.request_repaint_after(std::time::Duration::from_millis(200)),
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => self.links_rx = None,
+            }
+        }
         if let Some(rx) = &self.check_in {
             match rx.try_recv() {
                 Ok(r) => {
@@ -470,6 +493,109 @@ impl ExportDialog {
         show
     }
 
+    /// The video quality a "Get share link" from this dialog renders at: its frame rate,
+    /// resolution and compression, always as H.264 MP4 (what browsers play).
+    fn share_settings(&self) -> crate::share::ShareSettings {
+        let quality = match self.quality {
+            QualityPreset::Studio => 0.95,
+            QualityPreset::SocialMedia => 0.75,
+            QualityPreset::WebHigh => 0.45,
+            QualityPreset::WebLow => 0.2,
+        };
+        let (fps, max_height) = if self.format == Format::Gif { (30.0, 1080) } else { (self.fps, self.height) };
+        crate::share::ShareSettings { fps, max_height, quality, include_audio: self.audio }
+    }
+
+    fn load_links(&mut self, delete: Option<String>) {
+        let (tx, rx) = channel();
+        std::thread::spawn(move || {
+            let r = match delete {
+                Some(id) => crate::share::delete(&id).and_then(|_| crate::share::list()),
+                None => crate::share::list(),
+            };
+            let _ = tx.send(r);
+        });
+        self.links_rx = Some(rx);
+    }
+
+    /// Cloud share links: Pro gets a link for every recording; others see what it is.
+    fn share_ui(&mut self, ui: &mut egui::Ui) {
+        let pal = theme::p();
+        widgets::title(ui, "Share link");
+        if !self.license.is_pro() {
+            widgets::hint(ui, "Pro uploads every recording when you stop and puts a link on your clipboard, ready to paste anywhere.");
+            ui.add_space(4.0);
+            ui.separator();
+            return;
+        }
+        if let Some(f) = self.share_running {
+            widgets::hint(ui, &format!("Making this project's link… {:.0}%", f * 100.0));
+        } else {
+            match self.last_link.clone() {
+                Some(Ok(url)) => {
+                    ui.horizontal(|ui| {
+                        ui.label(RichText::new(&url).size(13.0).color(pal.text)).on_hover_text("The link to this project's latest share");
+                        if widgets::secondary_button(ui, "Copy").clicked() {
+                            ui.ctx().copy_text(url.clone());
+                        }
+                        if widgets::secondary_button(ui, "Open").clicked() {
+                            crate::os::open(&url);
+                        }
+                    });
+                }
+                Some(Err(e)) => {
+                    ui.add(egui::Label::new(RichText::new(format!("The last link failed: {e}")).size(13.0).color(pal.danger)).wrap());
+                }
+                None => widgets::hint(ui, "Get share link uploads the video and copies a link anyone can watch in a browser."),
+            }
+        }
+        ui.add_space(2.0);
+        if ui.checkbox(&mut self.share_on_stop, "Make a link when a recording stops").on_hover_text("Uploads at 1080p, 30 fps in the background and notifies you when the link is on your clipboard").changed() {
+            crate::share::set_on_stop(self.share_on_stop);
+        }
+        let label = if self.links_open { "Hide your links" } else { "Your links" };
+        if ui.link(RichText::new(label).color(pal.text_dim)).clicked() {
+            self.links_open = !self.links_open;
+            if self.links_open && self.links_rx.is_none() {
+                self.load_links(None);
+            }
+        }
+        if self.links_open {
+            let busy = self.links_rx.is_some();
+            match &self.links {
+                _ if busy && self.links.is_none() => widgets::hint(ui, "Loading…"),
+                Some(Err(e)) => {
+                    ui.add(egui::Label::new(RichText::new(e).size(13.0).color(pal.danger)).wrap());
+                }
+                Some(Ok(links)) if links.is_empty() => widgets::hint(ui, "No links yet."),
+                Some(Ok(links)) => {
+                    let mut delete: Option<String> = None;
+                    for l in links.clone() {
+                        ui.horizontal(|ui| {
+                            let title = if l.title.is_empty() { "Untitled".to_string() } else { l.title.clone() };
+                            ui.label(RichText::new(title).size(13.0).color(pal.text)).on_hover_text(&l.url);
+                            widgets::hint(ui, &format!("{} · {} view{}", l.created, l.views, if l.views == 1 { "" } else { "s" }));
+                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                if ui.add_enabled_ui(!busy, |ui| widgets::icon_button_tinted(ui, widgets::Icon::Trash, 13.0, "Delete this link and its video", pal.danger)).inner.clicked() {
+                                    delete = Some(l.id.clone());
+                                }
+                                if widgets::secondary_button(ui, "Copy").clicked() {
+                                    ui.ctx().copy_text(l.url.clone());
+                                }
+                            });
+                        });
+                    }
+                    if let Some(id) = delete {
+                        self.load_links(Some(id));
+                    }
+                }
+                None => {}
+            }
+        }
+        ui.add_space(4.0);
+        ui.separator();
+    }
+
     pub fn settings_ui(&mut self, ed: &mut Editor, ui: &mut egui::Ui) {
             ui.label(RichText::new("Export").size(18.0).strong());
             ui.add_space(4.0);
@@ -559,6 +685,9 @@ impl ExportDialog {
                     ui.add_space(6.0);
                     ui.separator();
                 }
+                if self.license.is_valid() {
+                    self.share_ui(ui);
+                }
                 widgets::title(ui, "Format");
                 if let Some(i) = widgets::segmented(ui, if self.format == Format::Mp4 { 0 } else { 1 }, &["MP4", "GIF"]) {
                     self.format = if i == 0 { Format::Mp4 } else { Format::Gif };
@@ -626,6 +755,14 @@ impl ExportDialog {
                         };
                         if let Some(out) = out {
                             self.start(ed, out);
+                        }
+                    }
+                    if self.license.is_pro() {
+                        let idle = self.share_running.is_none();
+                        let b = ui.add_enabled_ui(idle, |ui| widgets::secondary_button(ui, "Get share link")).inner;
+                        if b.on_hover_text("Upload as H.264 MP4 and copy a link anyone can watch").clicked() {
+                            self.share_request = Some(self.share_settings());
+                            self.open = false;
                         }
                     }
                     if widgets::secondary_button(ui, "Cancel").clicked() {

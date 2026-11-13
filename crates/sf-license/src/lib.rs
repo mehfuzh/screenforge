@@ -338,6 +338,11 @@ impl Status {
     pub fn is_valid(&self) -> bool {
         matches!(self, Status::Valid(_))
     }
+
+    /// A valid Pro key (the monthly plan): export, the agent and cloud share links.
+    pub fn is_pro(&self) -> bool {
+        matches!(self, Status::Valid(p) if p.plan == "monthly")
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -461,6 +466,20 @@ fn hex(bytes: &[u8]) -> String {
 
 pub fn load_saved() -> Option<String> {
     std::fs::read_to_string(key_file()?).ok().map(|s| s.trim().to_string()).filter(|s| !s.is_empty())
+}
+
+/// The saved key verified for this computer (`Invalid` when there is none).
+pub fn saved_status() -> Status {
+    load_saved().map(|k| verify(&k)).unwrap_or_else(|| Status::Invalid("no key".into()))
+}
+
+/// What the backend needs to know a request comes from this computer's license: its device id
+/// and the key signed for it (`share` checks both). `None` when this computer is not signed in.
+/// An expired Pro key still counts, so its owner can list and delete old links.
+pub fn owner_auth() -> Option<serde_json::Value> {
+    let key = load_saved()?;
+    (!matches!(verify(&key), Status::Invalid(_))).then_some(())?;
+    Some(serde_json::json!({ "device": device_id()?, "key": key }))
 }
 
 /// Sign this computer out of its license: the backend forgets the activation (so the computer
