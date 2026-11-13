@@ -228,11 +228,93 @@ fn elevenlabs_voices(key: &str) -> Result<Vec<ElevenLabsVoice>, String> {
         .map_err(elevenlabs_error)?
         .into_json()
         .map_err(|e| format!("ElevenLabs sent something unexpected: {e}"))?;
+    set_account_voices(account_voices_in(&reply));
     let voices = cloned_voices(&reply);
     if voices.is_empty() {
         return Err("This ElevenLabs account has no cloned voices with recordings to import.".into());
     }
     Ok(voices)
+}
+
+/// Voice ids of the user's own ElevenLabs voices, read online with their key: `el_user:<id>`.
+pub const ACCOUNT: &str = "el_user:";
+
+/// `id` is a voice of the user's own ElevenLabs account.
+pub fn is_account_voice(id: &str) -> bool {
+    id.strip_prefix(ACCOUNT).is_some_and(|v| !v.is_empty() && v.chars().all(|c| c.is_ascii_alphanumeric()))
+}
+
+/// The user's own voices in their ElevenLabs account (cloned, professional or designed ones;
+/// not ElevenLabs' own, which ScreenForge offers already): `(el_user:<id>, name)`.
+static ACCOUNT_VOICES: std::sync::Mutex<Vec<(String, String)>> = std::sync::Mutex::new(Vec::new());
+
+pub fn account_voices() -> Vec<(String, String)> {
+    ACCOUNT_VOICES.lock().map(|v| v.clone()).unwrap_or_default()
+}
+
+fn set_account_voices(v: Vec<(String, String)>) {
+    if let Ok(mut a) = ACCOUNT_VOICES.lock() {
+        *a = v;
+    }
+}
+
+/// The name of account voice `id`, when it is known.
+pub fn account_voice_name(id: &str) -> Option<String> {
+    account_voices().into_iter().find(|(v, _)| v == id).map(|(_, n)| n)
+}
+
+fn account_voices_in(reply: &serde_json::Value) -> Vec<(String, String)> {
+    reply["voices"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|v| matches!(v["category"].as_str(), Some("cloned" | "professional" | "generated")))
+        .filter_map(|v| Some((format!("{ACCOUNT}{}", v["voice_id"].as_str().filter(|i| i.chars().all(|c| c.is_ascii_alphanumeric()))?), v["name"].as_str().unwrap_or("Voice").to_string())))
+        .collect()
+}
+
+/// List the account's voices in the background when a key is saved (at start), so narration
+/// and the agent know them.
+pub fn load_account_voices() {
+    let Some(key) = saved_key() else { return };
+    std::thread::spawn(move || {
+        let _ = elevenlabs_voices(&key);
+    });
+}
+
+/// ElevenLabs' model for the user's own voices (the one ScreenForge's voices are read with).
+const ACCOUNT_MODEL: &str = "eleven_v4";
+
+/// Read `text` with account voice `voice` through ElevenLabs, with the user's own key (their
+/// ElevenLabs credits, nothing through ScreenForge).
+pub fn speak_account_voice(voice: &str, text: &str, speed: f64) -> Result<sf_tts::Speech, String> {
+    if !is_account_voice(voice) {
+        return Err(format!("unknown voice {voice}"));
+    }
+    let key = saved_key().ok_or("Connect your ElevenLabs under Narration → My voices → Add a voice → From ElevenLabs to read with your ElevenLabs voices.")?;
+    let id = &voice[ACCOUNT.len()..];
+    let body = serde_json::json!({ "text": text, "model_id": ACCOUNT_MODEL, "voice_settings": { "speed": speed.clamp(0.7, 1.2) } });
+    let reply: serde_json::Value = ureq::post(&format!("{ELEVENLABS}/text-to-speech/{id}/with-timestamps?output_format=pcm_24000"))
+        .set("xi-api-key", &key)
+        .timeout(std::time::Duration::from_secs(180))
+        .send_json(body)
+        .map_err(|e| match e {
+            ureq::Error::Status(401 | 403, r) => {
+                let detail = r.into_string().unwrap_or_default();
+                if detail.contains("voice_access_denied") || detail.contains("verification") {
+                    "ElevenLabs will not read with this voice yet: it needs verifying in your ElevenLabs (open it under Voices there).".to_string()
+                } else {
+                    "ElevenLabs did not accept your key for reading: edit it in ElevenLabs → Developers → API Keys and set Text to Speech to Access.".to_string()
+                }
+            }
+            ureq::Error::Status(402, _) => "Your ElevenLabs account is out of credits for this reading.".to_string(),
+            other => elevenlabs_error(other),
+        })?
+        .into_json()
+        .map_err(|e| format!("ElevenLabs sent something unexpected: {e}"))?;
+    use base64::Engine;
+    let pcm = base64::engine::general_purpose::STANDARD.decode(reply["audio_base64"].as_str().ok_or("ElevenLabs returned no audio")?).map_err(|e| e.to_string())?;
+    sf_tts::cloud::speech_from_pcm(&pcm, &sf_tts::cloud::Alignment::from_json(&reply["alignment"])).map_err(|e| format!("{e:#}"))
 }
 
 /// The cloned voices with recordings in ElevenLabs' list of voices.
@@ -568,6 +650,7 @@ impl MyVoiceJob {
     /// Forget the saved key and the voices listed with it.
     pub fn forget_elevenlabs(&mut self) {
         forget_key();
+        set_account_voices(vec![]);
         self.el_key.clear();
         self.el_voices = None;
         self.el_error = None;
@@ -777,6 +860,19 @@ mod tests {
         }
         assert!(sf_tts::clone::is_my_voice("my_voice") && sf_tts::clone::is_my_voice("my_voice:1"));
         assert!(!sf_tts::clone::is_my_voice("my_voices") && !sf_tts::clone::is_my_voice("el_eric"));
+    }
+
+    #[test]
+    fn the_accounts_own_voices_are_offered_for_narration() {
+        let reply = serde_json::json!({ "voices": [
+            { "voice_id": "abc123", "name": "Ricky", "category": "cloned" },
+            { "voice_id": "def456", "name": "Eric", "category": "premade" },
+            { "voice_id": "ghi789", "name": "Designed", "category": "generated" },
+            { "voice_id": "../x", "name": "Bad", "category": "cloned" }
+        ]});
+        let v = account_voices_in(&reply);
+        assert_eq!(v, [("el_user:abc123".to_string(), "Ricky".to_string()), ("el_user:ghi789".to_string(), "Designed".to_string())]);
+        assert!(is_account_voice("el_user:abc123") && !is_account_voice("el_user:") && !is_account_voice("el_user:a/b") && !is_account_voice("el_eric"));
     }
 
     #[test]

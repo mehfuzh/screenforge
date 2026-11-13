@@ -191,6 +191,9 @@ impl NarrationJob {
             if is_my_voice(&voice) {
                 return my_voice_preview(&voice, cancel, progress).map(Finished::Preview);
             }
+            if crate::my_voice::is_account_voice(&voice) {
+                return account_preview(&voice, speed).map(Finished::Preview);
+            }
             let v = sf_tts::voice(&voice).ok_or("unknown voice")?;
             let dir = sf_tts::ensure(cancel, progress).map_err(|e| format!("{e:#}"))?;
             sf_tts::Kokoro::shared(&dir).and_then(|k| k.speak(PREVIEW, v, speed as f32)).map(Finished::Preview).map_err(|e| format!("{e:#}"))
@@ -203,7 +206,7 @@ impl NarrationJob {
             return;
         }
         self.for_take = if let [t] = takes.as_slice() { t.replaces.clone() } else { None };
-        self.online = takes.iter().all(|t| sf_tts::cloud::cloud_voice(&t.voice).is_some());
+        self.online = takes.iter().all(|t| sf_tts::cloud::cloud_voice(&t.voice).is_some() || crate::my_voice::is_account_voice(&t.voice));
         self.start(Work::Takes(takes.len()), move |cancel, progress| {
             // the models the takes need, downloaded first (with progress)
             if takes.iter().any(|t| sf_tts::voice(&t.voice).is_some()) {
@@ -307,6 +310,8 @@ pub fn speak_into(project: &Path, text: &str, voice: &str, speed: f64) -> Result
         (cloud_speak(text, voice, speed)?, "elevenlabs")
     } else if is_my_voice(voice) {
         (my_voice_speak(voice, text, &AtomicBool::new(false), |_| {})?, "chatterbox")
+    } else if crate::my_voice::is_account_voice(voice) {
+        (crate::my_voice::speak_account_voice(voice, text, speed)?, "elevenlabs")
     } else {
         let v = sf_tts::voice(voice).ok_or_else(|| format!("unknown voice {voice}"))?;
         // the first narration downloads the model
@@ -383,6 +388,20 @@ fn my_voice_preview(voice: &str, cancel: &AtomicBool, progress: impl FnMut(Progr
         return sf_tts::cloud::speech_from_pcm(&pcm, &Default::default()).map_err(|e| format!("{e:#}"));
     }
     let speech = my_voice_speak(&v.id, PREVIEW, cancel, progress)?;
+    if let Some(f) = file {
+        keep_preview(&f, &speech);
+    }
+    Ok(speech)
+}
+
+/// The preview of one of the user's own ElevenLabs voices, read once and kept (it costs their
+/// ElevenLabs credits).
+fn account_preview(voice: &str, speed: f64) -> Result<sf_tts::Speech, String> {
+    let file = previews_dir().map(|d| d.join(format!("{}-{:.0}.pcm", preview_key(voice), speed * 100.0)));
+    if let Some(pcm) = file.as_ref().and_then(|f| std::fs::read(f).ok()) {
+        return sf_tts::cloud::speech_from_pcm(&pcm, &Default::default()).map_err(|e| format!("{e:#}"));
+    }
+    let speech = crate::my_voice::speak_account_voice(voice, PREVIEW, speed)?;
     if let Some(f) = file {
         keep_preview(&f, &speech);
     }

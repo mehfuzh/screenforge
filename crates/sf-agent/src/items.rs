@@ -11,7 +11,7 @@ use sf_project::{MusicClip, SceneAudioExt, SceneMusicExt, SceneTracksExt, Track,
 use crate::tools::{clock, num, opt_num, Outcome, Workspace};
 
 /// What a narration tool's `voice` can be.
-const VOICE_ARG: &str = "A voice id from the list above, a voice from get_options myVoices (its voice, or simply its name, e.g. \"Ricky\"), my_voice for the user's own voice chosen in the Narration panel, or a voice's name (\"Heart\", \"Eric\"). Left out: the voice chosen in the Narration panel.";
+const VOICE_ARG: &str = "A voice id from the list above, a voice from get_options myVoices or elevenLabsVoices (its voice, or simply its name, e.g. \"Ricky\"), my_voice for the user's own voice chosen in the Narration panel, or a voice's name (\"Heart\", \"Eric\"). Left out: the voice chosen in the Narration panel.";
 
 pub const LAYOUT_TYPES: [&str; 5] = ["screen-only", "camera-overlay", "split-screen", "fullscreen-camera", "cutout-camera"];
 
@@ -122,7 +122,7 @@ pub fn definitions() -> Vec<Value> {
         }),
         json!({
             "name": "add_narration",
-            "description": "Read text aloud with an AI voice (made on this computer) and add it as a voice-over take starting at start_ms; its words become captions. Write it as spoken sentences, and use one call per passage you place (one per section of the video); the result gives the take's end, so the next starts after it. Keep each passage within the part of the video it describes. On this computer, free: am_fenrir male, am_michael male, am_puck male, af_heart female, af_bella female, af_nicole female. ElevenLabs (studio quality, read online, about 8 credits per 1,000 characters from the user's credits; only when the user chose one in the Narration panel or asks for ElevenLabs, studio quality or a more realistic voice): el_eric male (use this one when asked for studio quality or a more realistic voice without naming a voice), el_brian male, el_george male British, el_daniel male British, el_sarah female, el_matilda female, el_alice female British, el_jessica female. The user's own voices, read free on this computer, are in get_options myVoices by the names they gave them: when they ask for a voice by name (\"narrate with Ricky\"), use that entry's voice; my_voice alone is the one chosen in the Narration panel (use it when they ask for their own voice without a name; it fails if they have not made it under Narration → My voice, so tell them to; the first reading downloads its model, about 0.7 GB, and it reads slower than the other voices). Leave voice and speed out to use the ones the user chose in the Narration panel, and keep one voice for the whole video unless asked. speed 0.7–1.3 (1 = normal; ElevenLabs reads 0.7–1.2). The first on-device narration downloads the voice model (about 330 MB) and can take a minute. Lower the music (set_music volume 0.2–0.3) so the voice is heard.",
+            "description": "Read text aloud with an AI voice (made on this computer) and add it as a voice-over take starting at start_ms; its words become captions. Write it as spoken sentences, and use one call per passage you place (one per section of the video); the result gives the take's end, so the next starts after it. Keep each passage within the part of the video it describes. On this computer, free: am_fenrir male, am_michael male, am_puck male, af_heart female, af_bella female, af_nicole female. ElevenLabs (studio quality, read online, about 8 credits per 1,000 characters from the user's credits; only when the user chose one in the Narration panel or asks for ElevenLabs, studio quality or a more realistic voice): el_eric male (use this one when asked for studio quality or a more realistic voice without naming a voice), el_brian male, el_george male British, el_daniel male British, el_sarah female, el_matilda female, el_alice female British, el_jessica female. The user's own voices are in get_options by name: myVoices are read free on this computer; elevenLabsVoices are voices in the user's own ElevenLabs account, read online with their key (their ElevenLabs credits, not ScreenForge's). When they ask for a voice by name (\"narrate with Ricky\"), use that entry's voice (a name in both lists means myVoices); my_voice alone is the one chosen in the Narration panel (use it when they ask for their own voice without a name; it fails if they have not made it under Narration → My voice, so tell them to; the first reading downloads its model, about 0.7 GB, and it reads slower than the other voices). Leave voice and speed out to use the ones the user chose in the Narration panel, and keep one voice for the whole video unless asked. speed 0.7–1.3 (1 = normal; ElevenLabs reads 0.7–1.2). The first on-device narration downloads the voice model (about 330 MB) and can take a minute. Lower the music (set_music volume 0.2–0.3) so the voice is heard.",
             "input_schema": {
                 "type": "object",
                 "properties": {
@@ -546,17 +546,15 @@ impl Workspace {
     /// the voice chosen in the Narration panel.
     fn voice(&self, asked: Option<&str>) -> Result<String, String> {
         let own = |v: &str| v.starts_with("my_voice:");
-        let known = |v: &str| own(v) || crate::host::VOICES.iter().any(|(id, _)| *id == v);
+        let known = |v: &str| own(v) || v.starts_with("el_user:") || crate::host::VOICES.iter().any(|(id, _)| *id == v);
         let chosen = self.project.config.audio.narration_voice.clone().filter(|v| known(v));
-        let mine: Vec<(String, String)> = self
-            .host
-            .as_deref()
-            .map(|h| h.options())
-            .and_then(|o| o.get("myVoices").and_then(Value::as_array).cloned())
-            .unwrap_or_default()
-            .iter()
-            .filter_map(|v| Some((v.get("voice")?.as_str()?.to_string(), v.get("name")?.as_str()?.to_string())))
-            .collect();
+        let options = self.host.as_deref().map(|h| h.options()).unwrap_or_default();
+        let listed = |key: &str| -> Vec<(String, String)> {
+            options.get(key).and_then(Value::as_array).into_iter().flatten().filter_map(|v| Some((v.get("voice")?.as_str()?.to_string(), v.get("name")?.as_str()?.to_string()))).collect()
+        };
+        // made on this computer, then in the user's own ElevenLabs
+        let mine = listed("myVoices");
+        let account = listed("elevenLabsVoices");
         let Some(asked) = asked.map(str::trim).filter(|a| !a.is_empty()) else {
             return Ok(chosen.unwrap_or_else(|| crate::host::VOICES[0].0.to_string()));
         };
@@ -568,13 +566,13 @@ impl Workspace {
         }
         // by name: the user's own voices first, then the others ("Heart" is af_heart)
         let name = asked.to_lowercase();
-        if let Some((id, _)) = mine.iter().find(|(_, n)| n.to_lowercase() == name) {
+        if let Some((id, _)) = mine.iter().chain(&account).find(|(_, n)| n.to_lowercase() == name) {
             return Ok(id.clone());
         }
         if let Some((id, _)) = crate::host::VOICES.iter().find(|(id, _)| id.split_once('_').is_some_and(|(_, n)| n == name)) {
             return Ok(id.to_string());
         }
-        let names: Vec<&str> = mine.iter().map(|m| m.1.as_str()).collect();
+        let names: Vec<&str> = mine.iter().chain(&account).map(|m| m.1.as_str()).collect();
         Err(if names.is_empty() { format!("unknown voice {asked}") } else { format!("unknown voice {asked}; the user's own voices are {}", names.join(", ")) })
     }
 
@@ -726,7 +724,7 @@ mod tests {
     struct Voice;
     impl crate::Host for Voice {
         fn options(&self) -> Value {
-            json!({ "myVoices": [{ "voice": "my_voice:7", "name": "Ricky" }] })
+            json!({ "myVoices": [{ "voice": "my_voice:7", "name": "Ricky" }], "elevenLabsVoices": [{ "voice": "el_user:abc", "name": "Pavan" }, { "voice": "el_user:dup", "name": "Ricky" }] })
         }
         fn apply_preset(&self, _: &str, _: &mut Project) -> Result<(), String> {
             Err("no".into())
@@ -781,8 +779,10 @@ mod tests {
         w.host = Some(std::sync::Arc::new(Voice));
         w.run("add_narration", &json!({ "text": "Hi", "start_ms": 1000, "voice": "ricky" })).unwrap();
         w.run("add_narration", &json!({ "text": "Hi", "start_ms": 2000, "voice": "Heart" })).unwrap();
+        // a voice in the user's ElevenLabs, by name
+        w.run("add_narration", &json!({ "text": "Hi", "start_ms": 3000, "voice": "Pavan" })).unwrap();
         let voices: Vec<_> = w.project.scenes[0].voice_overs.iter().map(|v| v.spoken_voice().unwrap().to_string()).collect();
-        assert_eq!(voices, ["my_voice:7", "af_heart"]);
+        assert_eq!(voices, ["my_voice:7", "af_heart", "el_user:abc"], "a name in both lists is the one made here");
         let e = w.run("add_narration", &json!({ "text": "Hi", "start_ms": 1000, "voice": "Bob" })).unwrap_err();
         assert!(e.contains("Ricky"), "{e}");
     }

@@ -1288,7 +1288,7 @@ const CLOUD_LOCKED_TIP: &str = "Upgrade to Pro for ElevenLabs' studio-quality vo
 fn voice_picker(ui: &mut egui::Ui, id_salt: &str, current: &str, pick_on_switch: bool) -> Option<String> {
     let id = ui.id().with(("voice_engine", id_salt));
     let locked = crate::narration::cloud_locked();
-    let current_online = sf_tts::cloud::cloud_voice(current).is_some();
+    let current_online = sf_tts::cloud::cloud_voice(current).is_some() || crate::my_voice::is_account_voice(current);
     // the engine shown: the current voice's, unless switched here without picking yet
     let shown: Option<(String, bool)> = ui.data(|d| d.get_temp(id));
     let online = !locked && shown.filter(|(v, _)| v == current).map_or(current_online, |(_, o)| o);
@@ -1317,6 +1317,17 @@ fn voice_picker(ui: &mut egui::Ui, id_salt: &str, current: &str, pick_on_switch:
     if !online {
         if let Some(v) = my_voice_row(ui, current) {
             picked = Some(v);
+        }
+    } else {
+        // the voices in the user's own ElevenLabs (read with their key)
+        let mine = crate::my_voice::account_voices();
+        if !mine.is_empty() {
+            ui.add_space(4.0);
+            ui.label(RichText::new("Yours").size(13.0).color(theme::p().text_dim));
+            let names: Vec<&str> = mine.iter().map(|v| v.1.as_str()).collect();
+            if let Some(i) = widgets::pills(ui, mine.iter().position(|v| v.0 == current).unwrap_or(usize::MAX), &names) {
+                picked = Some(mine[i].0.clone());
+            }
         }
     }
     picked
@@ -1810,7 +1821,7 @@ fn narration_ui(ed: &mut Editor, ui: &mut egui::Ui) {
     let voice = audio
         .narration_voice
         .clone()
-        .filter(|v| sf_tts::voice(v).is_some() || (sf_tts::clone::is_my_voice(v) && crate::my_voice::get(v).is_some()) || (sf_tts::cloud::cloud_voice(v).is_some() && !crate::narration::cloud_locked()))
+        .filter(|v| sf_tts::voice(v).is_some() || (sf_tts::clone::is_my_voice(v) && crate::my_voice::get(v).is_some()) || (crate::my_voice::is_account_voice(v) && crate::my_voice::saved_key().is_some()) || (sf_tts::cloud::cloud_voice(v).is_some() && !crate::narration::cloud_locked()))
         .unwrap_or_else(|| sf_tts::DEFAULT_VOICE.to_string());
     let online = sf_tts::cloud::cloud_voice(&voice);
     let speed = audio.narration_speed();
@@ -1819,7 +1830,12 @@ fn narration_ui(ed: &mut Editor, ui: &mut egui::Ui) {
         ed.edit(move |p| p.config.audio.narration_voice = Some(v.to_string()));
     }
     ui.add_space(4.0);
+    let account = crate::my_voice::is_account_voice(&voice);
     match online {
+        _ if account => widgets::hint(ui, &format!(
+            "{}: your ElevenLabs voice, read online with your ElevenLabs account (your ElevenLabs credits, not ScreenForge's).",
+            crate::my_voice::account_voice_name(&voice).unwrap_or_else(|| "This voice".into())
+        )),
         Some(v) => widgets::hint(ui, &format!("{}, {}. Studio quality, read online: about 8 credits per 1,000 characters (around 7 a minute), from the credits you share with the agent.", v.name, v.style)),
         None if sf_tts::clone::is_my_voice(&voice) => widgets::hint(ui, &format!("{}: your own voice, free and private, read on this computer. It reads slower than the other voices.", crate::my_voice::name(&voice))),
         None => widgets::hint(ui, "Free and private: read on this computer, works offline."),
@@ -1843,7 +1859,7 @@ fn narration_ui(ed: &mut Editor, ui: &mut egui::Ui) {
 
     // ── the on-device model ──
     let own = sf_tts::clone::is_my_voice(&voice);
-    if (online.is_none() && !own) || downloading {
+    if (online.is_none() && !own && !account) || downloading {
         widgets::title(ui, "Voice model");
         let size_mb = sf_tts::download_size() as f64 / 1e6;
         if downloading {
@@ -1870,6 +1886,7 @@ fn narration_ui(ed: &mut Editor, ui: &mut egui::Ui) {
     let at = ed.playhead_ms;
     ui.add_enabled_ui(can, |ui| {
         let tip = match online {
+            _ if account => "Read the script with your ElevenLabs voice into a voice-over take starting at the playhead".to_string(),
             Some(_) => format!("Read the script into a voice-over take starting at the playhead (about {:.0} credits)", sf_tts::cloud::credits_for(ed.narration.draft.trim().chars().count()).ceil()),
             None => "Read the script into a voice-over take starting at the playhead".to_string(),
         };
@@ -1892,7 +1909,13 @@ fn narration_ui(ed: &mut Editor, ui: &mut egui::Ui) {
     if !takes.is_empty() {
         widgets::title(ui, "Narration takes");
         let other = takes.iter().filter(|t| t.1 != voice).count();
-        let name = if sf_tts::clone::is_my_voice(&voice) { crate::my_voice::name(&voice) } else { sf_tts::voice_name(&voice).map_or(voice.clone(), str::to_string) };
+        let name = if sf_tts::clone::is_my_voice(&voice) {
+            crate::my_voice::name(&voice)
+        } else if let Some(n) = crate::my_voice::account_voice_name(&voice) {
+            n
+        } else {
+            sf_tts::voice_name(&voice).map_or(voice.clone(), str::to_string)
+        };
         widgets::hint(ui, &match (takes.len(), other) {
             (n, 0) => format!("{n} take{} read by {name}. Select one on the timeline to change its script or voice.", if n == 1 { "" } else { "s" }),
             (n, o) => format!("{o} of {n} takes use another voice."),

@@ -67,6 +67,8 @@ impl StudioHost {
             "favoriteMusic": favorites.iter().map(track_value).collect::<Vec<_>>(),
             // the user's own voices, made on this computer, by the names they gave them
             "myVoices": crate::my_voice::list().iter().map(|v| json!({ "voice": v.id, "name": v.name })).collect::<Vec<_>>(),
+            // the voices in the user's own ElevenLabs, read online with their key
+            "elevenLabsVoices": crate::my_voice::account_voices().iter().map(|(id, name)| json!({ "voice": id, "name": name })).collect::<Vec<_>>(),
             "cursorSets": sf_session::cursor_sets::SETS.iter().map(|(id, label)| json!({ "id": id, "label": label })).collect::<Vec<_>>(),
             "cameraLooks": looks,
             "presets": presets.iter().map(|(n, _)| n).collect::<Vec<_>>(),

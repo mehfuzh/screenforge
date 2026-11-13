@@ -264,7 +264,11 @@ impl Editor {
             narration: Default::default(),
             enhance: Default::default(),
             // SF_MY_VOICE_FORM: open Narration → My voice → Make my voice (with SF_START_SECTION=narration)
-            my_voice: crate::my_voice::MyVoiceJob::with_form(std::env::var_os("SF_MY_VOICE_FORM").is_some()),
+            my_voice: {
+                // the user's own ElevenLabs voices, for narration and the agent, when a key is saved
+                crate::my_voice::load_account_voices();
+                crate::my_voice::MyVoiceJob::with_form(std::env::var_os("SF_MY_VOICE_FORM").is_some())
+            },
             // SF_START_CROP opens the crop tool straight away (for screenshots)
             crop: std::env::var_os("SF_START_CROP").map(|_| crop::CropEditor::new(session_crop)),
             preset_dialog: None,
