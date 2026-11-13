@@ -101,7 +101,18 @@ pub fn pills(ui: &mut Ui, selected: usize, labels: &[&str]) -> Option<usize> {
 
 /// [`pills`] with more on the same (wrapping) row after them, such as an [`add_pill`].
 pub fn pills_then(ui: &mut Ui, selected: usize, labels: &[&str], then: impl FnOnce(&mut Ui)) -> Option<usize> {
+    pills_inner(ui, selected, labels, false, then).0
+}
+
+/// [`pills_then`] whose pills show a small × on hover, to delete what they stand for. Returns
+/// the pill picked and the pill whose × was clicked.
+pub fn removable_pills_then(ui: &mut Ui, selected: usize, labels: &[&str], then: impl FnOnce(&mut Ui)) -> (Option<usize>, Option<usize>) {
+    pills_inner(ui, selected, labels, true, then)
+}
+
+fn pills_inner(ui: &mut Ui, selected: usize, labels: &[&str], removable: bool, then: impl FnOnce(&mut Ui)) -> (Option<usize>, Option<usize>) {
     let mut out = None;
+    let mut remove = None;
     // a label too long for a line of its own is shortened with "…" (a pill never wraps inside)
     let max_text = (ui.available_width() - 2.0 * ui.spacing().button_padding.x - 4.0).max(40.0);
     let font = egui::FontId::proportional(13.0);
@@ -132,13 +143,30 @@ pub fn pills_then(ui: &mut Ui, selected: usize, labels: &[&str], then: impl FnOn
                 .min_size(vec2(44.0, 30.0));
             let r = ui.add(b);
             let r = if *l != full { r.on_hover_text(full) } else { r };
-            if r.clicked() && !sel {
+            // the × sits on the pill's top-right corner and is there while the pointer is over
+            // the pill or the × itself (added after the pill, so it takes the click)
+            let mut x_clicked = false;
+            if removable && ui.is_enabled() {
+                let pal = theme::p();
+                let x = Rect::from_center_size(pos2(r.rect.right() - 2.0, r.rect.top() + 2.0), vec2(14.0, 14.0));
+                let xr = ui.interact(x, r.id.with("remove"), Sense::click());
+                if r.hovered() || xr.hovered() {
+                    let xr = xr.on_hover_cursor(egui::CursorIcon::PointingHand).on_hover_text(format!("Delete {full}"));
+                    let p = ui.painter();
+                    p.rect(x, CornerRadius::same(BUTTON_RADIUS), if xr.hovered() { pal.danger } else { pal.card_3 }, Stroke::new(1.0, pal.border), egui::StrokeKind::Inside);
+                    paint_icon(p, x.shrink(3.5), Icon::Close, if xr.hovered() { pal.text } else { pal.text_dim });
+                    x_clicked = xr.clicked();
+                }
+            }
+            if x_clicked {
+                remove = Some(i);
+            } else if r.clicked() && !sel {
                 out = Some(i);
             }
         }
         then(ui);
     });
-    out
+    (out, remove)
 }
 
 /// A pill that adds one more of what the [`pills`] beside it choose from: a plus and the text,
@@ -314,15 +342,10 @@ pub fn submitted(ui: &Ui, field: &Response) -> bool {
 }
 
 pub fn text_field(ui: &mut Ui, text: &mut String, hint: &str) -> Response {
-    field(ui, text, hint, false)
+    field(ui, text, hint)
 }
 
-/// A [`text_field`] that shows dots, for a key or password.
-pub fn secret_field(ui: &mut Ui, text: &mut String, hint: &str) -> Response {
-    field(ui, text, hint, true)
-}
-
-fn field(ui: &mut Ui, text: &mut String, hint: &str, secret: bool) -> Response {
+fn field(ui: &mut Ui, text: &mut String, hint: &str) -> Response {
     let pal = theme::p();
     let id = ui.next_auto_id().with("text_field");
     let focused = ui.memory(|m| m.has_focus(id));
@@ -336,7 +359,6 @@ fn field(ui: &mut Ui, text: &mut String, hint: &str, secret: bool) -> Response {
                 vec2(ui.available_width(), 36.0),
                 egui::TextEdit::singleline(text)
                     .id(id)
-                    .password(secret)
                     .hint_text(RichText::new(hint).color(pal.text_faint))
                     .font(egui::FontId::proportional(14.0))
                     .text_color(pal.text)

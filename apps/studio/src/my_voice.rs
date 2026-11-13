@@ -5,7 +5,6 @@
 //! Narration, the preview and the agent read in it as the voice `my_voice`.
 
 use std::collections::VecDeque;
-use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{channel, Receiver};
 use std::time::Instant;
@@ -164,222 +163,6 @@ fn new_id() -> String {
     format!("{MY_VOICE}:{}", chrono::Utc::now().format("%Y%m%d%H%M%S%3f"))
 }
 
-/// A voice the user cloned in their own ElevenLabs account, with the recordings they made it
-/// from: `(sample id, file name)`.
-#[derive(Debug, Clone)]
-pub struct ElevenLabsVoice {
-    pub id: String,
-    pub name: String,
-    pub samples: Vec<(String, String)>,
-    /// ElevenLabs' short sample of the voice, played from the list.
-    pub preview_url: Option<String>,
-}
-
-/// Where the user's ElevenLabs API key is kept on this computer (readable by them only).
-fn key_path() -> Option<PathBuf> {
-    directories::ProjectDirs::from("dev", "screenforge", "ScreenForge").map(|d| d.data_dir().join("elevenlabs.key"))
-}
-
-/// The ElevenLabs API key saved here, if any.
-pub fn saved_key() -> Option<String> {
-    key_path().and_then(|p| std::fs::read_to_string(p).ok()).map(|k| k.trim().to_string()).filter(|k| !k.is_empty())
-}
-
-fn save_key(key: &str) -> std::io::Result<()> {
-    let path = key_path().ok_or_else(|| std::io::Error::other("no folder for the key"))?;
-    if let Some(dir) = path.parent() {
-        std::fs::create_dir_all(dir)?;
-    }
-    std::fs::write(&path, key.trim())?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
-    }
-    Ok(())
-}
-
-fn forget_key() {
-    if let Some(p) = key_path() {
-        let _ = std::fs::remove_file(p);
-    }
-}
-
-/// Most of a voice's recordings imported (the voice is read from its first 15 s anyway).
-const IMPORT_SAMPLES: usize = 4;
-const ELEVENLABS: &str = "https://api.elevenlabs.io/v1";
-
-enum Imported {
-    /// The account's voices, for the key that listed them.
-    Voices(String, Result<Vec<ElevenLabsVoice>, String>),
-    /// A voice's recordings, and its name.
-    Samples(String, Result<Vec<Recorded>, String>),
-    /// A voice's preview, decoded: its id and samples.
-    Preview(String, Result<Vec<f32>, String>),
-}
-
-/// The voices cloned in the ElevenLabs account of `key` (not ElevenLabs' own voices), with
-/// the recordings each was made from.
-fn elevenlabs_voices(key: &str) -> Result<Vec<ElevenLabsVoice>, String> {
-    let reply: serde_json::Value = ureq::get(&format!("{ELEVENLABS}/voices"))
-        .set("xi-api-key", key)
-        .timeout(std::time::Duration::from_secs(30))
-        .call()
-        .map_err(elevenlabs_error)?
-        .into_json()
-        .map_err(|e| format!("ElevenLabs sent something unexpected: {e}"))?;
-    set_account_voices(account_voices_in(&reply));
-    let voices = cloned_voices(&reply);
-    if voices.is_empty() {
-        return Err("This ElevenLabs account has no cloned voices with recordings to import.".into());
-    }
-    Ok(voices)
-}
-
-/// Voice ids of the user's own ElevenLabs voices, read online with their key: `el_user:<id>`.
-pub const ACCOUNT: &str = "el_user:";
-
-/// `id` is a voice of the user's own ElevenLabs account.
-pub fn is_account_voice(id: &str) -> bool {
-    id.strip_prefix(ACCOUNT).is_some_and(|v| !v.is_empty() && v.chars().all(|c| c.is_ascii_alphanumeric()))
-}
-
-/// The user's own voices in their ElevenLabs account (cloned, professional or designed ones;
-/// not ElevenLabs' own, which ScreenForge offers already): `(el_user:<id>, name)`.
-static ACCOUNT_VOICES: std::sync::Mutex<Vec<(String, String)>> = std::sync::Mutex::new(Vec::new());
-
-pub fn account_voices() -> Vec<(String, String)> {
-    ACCOUNT_VOICES.lock().map(|v| v.clone()).unwrap_or_default()
-}
-
-fn set_account_voices(v: Vec<(String, String)>) {
-    if let Ok(mut a) = ACCOUNT_VOICES.lock() {
-        *a = v;
-    }
-}
-
-/// The name of account voice `id`, when it is known.
-pub fn account_voice_name(id: &str) -> Option<String> {
-    account_voices().into_iter().find(|(v, _)| v == id).map(|(_, n)| n)
-}
-
-fn account_voices_in(reply: &serde_json::Value) -> Vec<(String, String)> {
-    reply["voices"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter(|v| matches!(v["category"].as_str(), Some("cloned" | "professional" | "generated")))
-        .filter_map(|v| Some((format!("{ACCOUNT}{}", v["voice_id"].as_str().filter(|i| i.chars().all(|c| c.is_ascii_alphanumeric()))?), v["name"].as_str().unwrap_or("Voice").to_string())))
-        .collect()
-}
-
-/// List the account's voices in the background when a key is saved (at start), so narration
-/// and the agent know them.
-pub fn load_account_voices() {
-    let Some(key) = saved_key() else { return };
-    std::thread::spawn(move || {
-        let _ = elevenlabs_voices(&key);
-    });
-}
-
-/// ElevenLabs' model for the user's own voices (the one ScreenForge's voices are read with).
-const ACCOUNT_MODEL: &str = "eleven_v4";
-
-/// Read `text` with account voice `voice` through ElevenLabs, with the user's own key (their
-/// ElevenLabs credits, nothing through ScreenForge).
-pub fn speak_account_voice(voice: &str, text: &str, speed: f64) -> Result<sf_tts::Speech, String> {
-    if !is_account_voice(voice) {
-        return Err(format!("unknown voice {voice}"));
-    }
-    let key = saved_key().ok_or("Connect your ElevenLabs under Narration → My voices → Add a voice → From ElevenLabs to read with your ElevenLabs voices.")?;
-    let id = &voice[ACCOUNT.len()..];
-    let body = serde_json::json!({ "text": text, "model_id": ACCOUNT_MODEL, "voice_settings": { "speed": speed.clamp(0.7, 1.2) } });
-    let reply: serde_json::Value = ureq::post(&format!("{ELEVENLABS}/text-to-speech/{id}/with-timestamps?output_format=pcm_24000"))
-        .set("xi-api-key", &key)
-        .timeout(std::time::Duration::from_secs(180))
-        .send_json(body)
-        .map_err(|e| match e {
-            ureq::Error::Status(401 | 403, r) => {
-                let detail = r.into_string().unwrap_or_default();
-                if detail.contains("voice_access_denied") || detail.contains("verification") {
-                    "ElevenLabs will not read with this voice yet: it needs verifying in your ElevenLabs (open it under Voices there).".to_string()
-                } else {
-                    "ElevenLabs did not accept your key for reading: edit it in ElevenLabs → Developers → API Keys and set Text to Speech to Access.".to_string()
-                }
-            }
-            ureq::Error::Status(402, _) => "Your ElevenLabs account is out of credits for this reading.".to_string(),
-            other => elevenlabs_error(other),
-        })?
-        .into_json()
-        .map_err(|e| format!("ElevenLabs sent something unexpected: {e}"))?;
-    use base64::Engine;
-    let pcm = base64::engine::general_purpose::STANDARD.decode(reply["audio_base64"].as_str().ok_or("ElevenLabs returned no audio")?).map_err(|e| e.to_string())?;
-    sf_tts::cloud::speech_from_pcm(&pcm, &sf_tts::cloud::Alignment::from_json(&reply["alignment"])).map_err(|e| format!("{e:#}"))
-}
-
-/// The cloned voices with recordings in ElevenLabs' list of voices.
-fn cloned_voices(reply: &serde_json::Value) -> Vec<ElevenLabsVoice> {
-    reply["voices"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter(|v| matches!(v["category"].as_str(), Some("cloned" | "professional")))
-        .filter_map(|v| {
-            let samples: Vec<(String, String)> = v["samples"].as_array().into_iter().flatten().filter_map(|s| Some((s["sample_id"].as_str()?.to_string(), s["file_name"].as_str().unwrap_or("sample.mp3").to_string()))).collect();
-            (!samples.is_empty()).then(|| ElevenLabsVoice {
-                id: v["voice_id"].as_str().unwrap_or_default().to_string(),
-                name: v["name"].as_str().unwrap_or("Voice").to_string(),
-                samples,
-                preview_url: v["preview_url"].as_str().filter(|u| u.starts_with("https://")).map(String::from),
-            })
-        })
-        .collect()
-}
-
-/// ElevenLabs' sample of a voice, decoded at [`SAMPLE_RATE`] (kept in the cache after the first
-/// play).
-fn voice_preview(id: &str, url: &str) -> Result<Vec<f32>, String> {
-    let dir = recordings_dir().ok_or("no folder for previews")?.join("previews");
-    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-    let safe: String = id.chars().filter(char::is_ascii_alphanumeric).collect();
-    let path = dir.join(format!("{safe}.mp3"));
-    if !path.is_file() {
-        let resp = ureq::get(url).timeout(std::time::Duration::from_secs(60)).call().map_err(elevenlabs_error)?;
-        let mut bytes = vec![];
-        resp.into_reader().take(20_000_000).read_to_end(&mut bytes).map_err(|e| format!("Could not download the preview: {e}"))?;
-        std::fs::write(&path, bytes).map_err(|e| e.to_string())?;
-    }
-    sf_media::audio::decode(&path, SAMPLE_RATE, 1).map(|c| c.samples.to_vec()).map_err(|e| format!("Could not play the preview: {e}"))
-}
-
-fn elevenlabs_error(e: ureq::Error) -> String {
-    match e {
-        ureq::Error::Status(401 | 403, _) => "ElevenLabs did not accept that API key. In ElevenLabs → Developers → API Keys, edit the key and set Voices to Read (or turn off Restrict Key).".into(),
-        ureq::Error::Status(code, _) => format!("ElevenLabs answered {code}. Try again in a moment."),
-        ureq::Error::Transport(_) => "Could not reach ElevenLabs. Check your connection.".into(),
-    }
-}
-
-/// Download the recordings `voice` was made from into the form's recordings folder.
-fn import_samples(key: &str, voice: &ElevenLabsVoice) -> Result<Vec<Recorded>, String> {
-    let dir = recordings_dir().ok_or("no folder for recordings")?;
-    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-    let mut out = vec![];
-    for (i, (sample, file)) in voice.samples.iter().take(IMPORT_SAMPLES).enumerate() {
-        let resp = ureq::get(&format!("{ELEVENLABS}/voices/{}/samples/{sample}/audio", voice.id)).set("xi-api-key", key).timeout(std::time::Duration::from_secs(120)).call().map_err(elevenlabs_error)?;
-        let mut bytes = vec![];
-        resp.into_reader().take(50_000_000).read_to_end(&mut bytes).map_err(|e| format!("Could not download a recording: {e}"))?;
-        let ext = Path::new(file).extension().and_then(|e| e.to_str()).filter(|e| e.len() <= 4).unwrap_or("mp3");
-        let path = dir.join(format!("elevenlabs-{}-{}.{ext}", chrono::Local::now().format("%Y%m%d-%H%M%S"), i + 1));
-        std::fs::write(&path, bytes).map_err(|e| format!("Could not save a recording: {e}"))?;
-        let ms = sf_media::audio::decode(&path, 16_000, 1).map(|c| c.samples.len() as f64 / 16.0).map_err(|e| format!("Could not read a recording from ElevenLabs: {e}"))?;
-        let n = voice.samples.len().min(IMPORT_SAMPLES);
-        let label = if n > 1 { format!("{} {} · ElevenLabs", voice.name, i + 1) } else { format!("{} · ElevenLabs", voice.name) };
-        out.push(Recorded { path, label: Some(label), ms, silent: false, clipped: false });
-    }
-    Ok(out)
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Work {
     /// The voice model is downloaded first (once).
@@ -412,10 +195,11 @@ pub struct MyVoiceJob {
     /// here), the consent box and the name.
     pub picked: Vec<PathBuf>,
     pub consent: bool,
+    /// Leave background noise in the recordings (off: hiss and hum are taken out before the
+    /// voice is made from them, so the voice does not read with them).
+    pub keep_noise: bool,
     /// What to call the voice (empty: "My voice").
     pub name: String,
-    /// The form's tab: 0 Record, 1 From ElevenLabs.
-    pub tab: usize,
     /// The form is open (making the voice, or making it again).
     pub open: bool,
     /// Recordings made here, newest last.
@@ -430,17 +214,6 @@ pub struct MyVoiceJob {
     /// When the panel last drew the form (the meter lets go of the microphone soon after it
     /// stops being shown).
     shown_at: Option<Instant>,
-    /// The user's ElevenLabs: the API key being typed (saved once ElevenLabs accepts it), the
-    /// account's cloned voices once listed, the voice whose preview plays.
-    pub el_key: String,
-    pub el_voices: Option<Vec<ElevenLabsVoice>>,
-    pub el_error: Option<String>,
-    importing: Option<Receiver<Imported>>,
-    /// The voice whose recordings are being imported, or whose preview is loading.
-    pub el_busy: Option<String>,
-    el_player: Option<(String, crate::narration::Player)>,
-    /// The saved key was listed once this run (not again on every frame after an error).
-    el_listed: bool,
 }
 
 /// What the panel shows of the microphone.
@@ -564,106 +337,10 @@ impl MyVoiceJob {
         }
     }
 
-    /// List the cloned voices of the saved ElevenLabs account, once a run (the panel calls
-    /// this whenever it shows the list).
-    pub fn ensure_elevenlabs(&mut self) {
-        if self.el_listed || self.importing.is_some() {
-            return;
-        }
-        self.el_listed = true;
-        if let Some(key) = saved_key() {
-            self.start_listing(key);
-        }
-    }
-
-    /// Check the typed key with ElevenLabs by listing its voices; it is saved when that works.
-    pub fn connect_elevenlabs(&mut self) {
-        let key = self.el_key.trim().to_string();
-        if !key.is_empty() && self.importing.is_none() {
-            self.start_listing(key);
-        }
-    }
-
-    /// List the voices again.
-    pub fn refresh_elevenlabs(&mut self) {
-        self.el_listed = false;
-        self.ensure_elevenlabs();
-    }
-
-    fn start_listing(&mut self, key: String) {
-        let (tx, rx) = channel();
-        std::thread::spawn(move || {
-            let r = elevenlabs_voices(&key);
-            let _ = tx.send(Imported::Voices(key, r));
-        });
-        self.importing = Some(rx);
-        self.el_error = None;
-    }
-
-    /// Bring in the recordings `voice` was made from: the form opens with them ticked and the
-    /// voice's name.
-    pub fn import_elevenlabs(&mut self, voice: ElevenLabsVoice) {
-        let Some(key) = saved_key() else { return };
-        if self.importing.is_some() {
-            return;
-        }
-        let (tx, rx) = channel();
-        self.el_busy = Some(voice.id.clone());
-        std::thread::spawn(move || {
-            let r = import_samples(&key, &voice);
-            let _ = tx.send(Imported::Samples(voice.name.clone(), r));
-        });
-        self.importing = Some(rx);
-        self.el_error = None;
-    }
-
-    /// Play ElevenLabs' sample of `voice`, or stop it when it plays.
-    pub fn toggle_elevenlabs_preview(&mut self, voice: &ElevenLabsVoice) {
-        if self.el_player.take().is_some_and(|(id, _)| id == voice.id) {
-            return;
-        }
-        let Some(url) = voice.preview_url.clone() else {
-            self.el_error = Some(format!("ElevenLabs has no preview of {}.", voice.name));
-            return;
-        };
-        if self.importing.is_some() {
-            return;
-        }
-        let (tx, rx) = channel();
-        let id = voice.id.clone();
-        self.el_busy = Some(id.clone());
-        std::thread::spawn(move || {
-            let r = voice_preview(&id, &url);
-            let _ = tx.send(Imported::Preview(id, r));
-        });
-        self.importing = Some(rx);
-        self.el_error = None;
-    }
-
-    /// The voice whose preview plays.
-    pub fn elevenlabs_playing(&self) -> Option<&str> {
-        self.el_player.as_ref().filter(|(_, p)| p.is_playing()).map(|(id, _)| id.as_str())
-    }
-
-    pub fn is_importing(&self) -> bool {
-        self.importing.is_some()
-    }
-
-    /// Forget the saved key and the voices listed with it.
-    pub fn forget_elevenlabs(&mut self) {
-        forget_key();
-        set_account_voices(vec![]);
-        self.el_key.clear();
-        self.el_voices = None;
-        self.el_error = None;
-        self.el_player = None;
-    }
-
     /// The form closed: stop listening (a recording in progress is thrown away).
     pub fn close(&mut self) {
         self.open = false;
         self.editing = None;
-        self.tab = 0;
         self.rec = None;
         self.meter = None;
         self.levels.clear();
@@ -680,10 +357,10 @@ impl MyVoiceJob {
         if self.running.is_some() {
             return;
         }
-        let (files, name, id) = (self.picked.clone(), clean_name(&self.name), self.editing.clone());
+        let (files, name, id, denoise) = (self.picked.clone(), clean_name(&self.name), self.editing.clone(), !self.keep_noise);
         let (tx, rx) = channel();
         std::thread::spawn(move || {
-            let r = make(&files, name, id, &tx);
+            let r = make(&files, name, id, denoise, &tx);
             let _ = tx.send(Making::Done(r));
         });
         self.running = Some((rx, Work::Downloading));
@@ -698,40 +375,6 @@ impl MyVoiceJob {
         if self.meter.is_some() && self.shown_at.is_none_or(|t| t.elapsed().as_millis() > 500) {
             self.meter = None;
             self.levels.clear();
-        }
-        if self.el_player.as_ref().is_some_and(|(_, p)| !p.is_playing()) {
-            self.el_player = None;
-        }
-        if let Some(Ok(r)) = self.importing.as_ref().map(|rx| rx.try_recv()) {
-            self.importing = None;
-            self.el_busy = None;
-            match r {
-                Imported::Voices(key, Ok(v)) => {
-                    // a key ElevenLabs accepted is kept for next time
-                    if saved_key().as_deref() != Some(key.as_str()) {
-                        if let Err(e) = save_key(&key) {
-                            self.el_error = Some(format!("Could not save the key: {e}"));
-                        }
-                    }
-                    self.el_key.clear();
-                    self.el_voices = Some(v);
-                }
-                Imported::Voices(_, Err(e)) | Imported::Samples(_, Err(e)) | Imported::Preview(_, Err(e)) => self.el_error = Some(e),
-                Imported::Samples(name, Ok(recs)) => {
-                    self.picked.extend(recs.iter().map(|r| r.path.clone()));
-                    self.recorded.extend(recs);
-                    if self.name.trim().is_empty() {
-                        self.name = name;
-                    }
-                    // back to the Record tab, where they are ticked
-                    self.open = true;
-                    self.tab = 0;
-                }
-                Imported::Preview(id, Ok(samples)) => match crate::narration::Player::play(samples) {
-                    Ok(p) => self.el_player = Some((id, p)),
-                    Err(e) => self.el_error = Some(format!("Could not play the preview: {e}")),
-                },
-            }
         }
         let Some((rx, _)) = &self.running else { return };
         let messages: Vec<Making> = rx.try_iter().collect();
@@ -772,8 +415,8 @@ impl MyVoiceJob {
 /// Make the voice from `files` (blocking): the model is downloaded first, the voice is read
 /// once (its preview, kept) to be sure it works, and only then saved, as voice `id` (made again)
 /// or a new one. Returns its id.
-fn make(files: &[PathBuf], name: String, id: Option<String>, tx: &std::sync::mpsc::Sender<Making>) -> Result<String, String> {
-    let reference = joined_voice(files)?;
+fn make(files: &[PathBuf], name: String, id: Option<String>, denoise: bool, tx: &std::sync::mpsc::Sender<Making>) -> Result<String, String> {
+    let reference = joined_voice(files, denoise)?;
     let _ = tx.send(Making::Stage(Work::Downloading));
     sf_tts::clone::ensure(&std::sync::atomic::AtomicBool::new(false), |p| {
         let _ = tx.send(Making::Progress(p));
@@ -794,15 +437,17 @@ fn make(files: &[PathBuf], name: String, id: Option<String>, tx: &std::sync::mps
 
 /// The picked recordings' voice, trimmed of silence at both ends, joined with short pauses and
 /// cut off at [`MAX_REFERENCE_S`].
-fn joined_voice(files: &[PathBuf]) -> Result<Vec<f32>, String> {
+fn joined_voice(files: &[PathBuf], denoise: bool) -> Result<Vec<f32>, String> {
     let max = (MAX_REFERENCE_S * SAMPLE_RATE as f64) as usize;
+    // the microphone's Noise reduction preset: rumble cut and FFT noise reduction
+    let filter = denoise.then(|| sf_media::audio::microphone_filter("noise-reduction", 0.0)).flatten();
     let mut out: Vec<f32> = vec![];
     let mut voiced = 0usize;
     for f in files {
         if out.len() >= max {
             break;
         }
-        let clip = sf_media::audio::decode(f, SAMPLE_RATE, 1).map_err(|e| format!("Could not read {}: {e}", f.display()))?;
+        let clip = sf_media::audio::decode_filtered(f, SAMPLE_RATE, 1, filter.as_deref()).map_err(|e| format!("Could not read {}: {e}", f.display()))?;
         let s = trim_silence(&clip.samples);
         // a second or less is a slip, not a sample of the voice
         if s.len() < SAMPLE_RATE as usize {
@@ -842,20 +487,6 @@ mod tests {
     }
 
     #[test]
-    fn only_cloned_voices_with_recordings_are_offered() {
-        let reply = serde_json::json!({ "voices": [
-            { "voice_id": "a", "name": "Me", "category": "cloned", "samples": [{ "sample_id": "s1", "file_name": "take.m4a" }] },
-            { "voice_id": "b", "name": "Eric", "category": "premade", "samples": [{ "sample_id": "s2", "file_name": "x.mp3" }] },
-            { "voice_id": "c", "name": "Empty", "category": "cloned", "samples": null },
-            { "voice_id": "d", "name": "Pro", "category": "professional", "samples": [{ "sample_id": "s3" }] }
-        ]});
-        let v = cloned_voices(&reply);
-        assert_eq!(v.iter().map(|v| v.name.as_str()).collect::<Vec<_>>(), ["Me", "Pro"]);
-        assert_eq!(v[0].samples, [("s1".to_string(), "take.m4a".to_string())]);
-        assert_eq!(v[1].samples[0].1, "sample.mp3");
-    }
-
-    #[test]
     fn only_voice_ids_made_here_have_a_folder() {
         assert!(voice_dir("my_voice:20261112093000123").is_some_and(|d| d.ends_with("20261112093000123")));
         for bad in ["my_voice", "my_voice:", "my_voice:../x", "my_voice:a/b", "am_fenrir", "my_voicex:1"] {
@@ -863,19 +494,6 @@ mod tests {
         }
         assert!(sf_tts::clone::is_my_voice("my_voice") && sf_tts::clone::is_my_voice("my_voice:1"));
         assert!(!sf_tts::clone::is_my_voice("my_voices") && !sf_tts::clone::is_my_voice("el_eric"));
-    }
-
-    #[test]
-    fn the_accounts_own_voices_are_offered_for_narration() {
-        let reply = serde_json::json!({ "voices": [
-            { "voice_id": "abc123", "name": "Ricky", "category": "cloned" },
-            { "voice_id": "def456", "name": "Eric", "category": "premade" },
-            { "voice_id": "ghi789", "name": "Designed", "category": "generated" },
-            { "voice_id": "../x", "name": "Bad", "category": "cloned" }
-        ]});
-        let v = account_voices_in(&reply);
-        assert_eq!(v, [("el_user:abc123".to_string(), "Ricky".to_string()), ("el_user:ghi789".to_string(), "Designed".to_string())]);
-        assert!(is_account_voice("el_user:abc123") && !is_account_voice("el_user:") && !is_account_voice("el_user:a/b") && !is_account_voice("el_eric"));
     }
 
     #[test]
