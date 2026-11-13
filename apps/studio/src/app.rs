@@ -151,6 +151,8 @@ impl App {
         let mut picker = Picker::default();
         picker.load_inputs();
         let perm_setup = (crate::permissions::PermissionsSetup::needed() || std::env::var_os("SF_SHOW_PERMISSIONS").is_some()).then(crate::permissions::PermissionsSetup::start);
+        // whether this account may make share links (staff without Pro): known before a stop
+        let _ = crate::share::allowed();
         let app = App { gpu, screen: Screen::Picker(picker), error: None, prefs, window_mode: WindowMode::Picker, picker_height: crate::picker::BAR_WINDOW_H, placed_once: false, tray: None, tray_tried: false, area_select: None, window_select: None, titlebar_fix: 0, perm_setup, confirm_close: None, quitting: false, fresh_open: None, last_size: None, last_pointer: None, #[cfg(target_os = "linux")] input_region: crate::os::InputRegion::new(cc), #[cfg(target_os = "windows")] window_shape: crate::os::WindowShape::new(cc), appending: false, shares: Vec::new(), append_failed: Default::default(), started_new: false, picking: None, pending_open: std::env::args().nth(1).map(PathBuf::from).filter(|p| p.is_dir() || sf_recording::import::is_video(p) || p.extension().is_some_and(|e| e == sf_project::PACKAGE_EXTENSION || e == sf_project::SCREEN_STUDIO_EXTENSION)) };
         crate::open_docs::set_context(&cc.egui_ctx);
         // a project on the command line opens on the first frame (`pending_open`)
@@ -1122,7 +1124,7 @@ impl eframe::App for App {
         match outcome {
             Some(RecordingOutcome::Finished(p)) => {
                 // Pro: the recording gets its share link by itself, while the editor opens
-                if crate::share::on_stop_enabled() && sf_license::saved_status().is_pro() {
+                if crate::share::on_stop_enabled() && crate::share::allowed() {
                     self.start_share(p.clone(), crate::share::ShareSettings::ON_STOP, ctx);
                 }
                 self.fresh_open = Some(p.clone());

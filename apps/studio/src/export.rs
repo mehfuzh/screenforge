@@ -522,8 +522,13 @@ impl ExportDialog {
     fn share_ui(&mut self, ui: &mut egui::Ui) {
         let pal = theme::p();
         widgets::title(ui, "Share link");
-        if !self.license.is_pro() {
+        if !crate::share::allowed() {
             widgets::hint(ui, "Pro uploads every recording when you stop and puts a link on your clipboard, ready to paste anywhere.");
+            ui.add_space(2.0);
+            let opening = self.checkout.is_some();
+            if ui.add_enabled(!opening, egui::Link::new(RichText::new(format!("Get Pro · {}", sf_license::PRICE_PRO)).color(pal.accent))).clicked() {
+                self.buy("pro");
+            }
             ui.add_space(4.0);
             ui.separator();
             return;
@@ -757,7 +762,7 @@ impl ExportDialog {
                             self.start(ed, out);
                         }
                     }
-                    if self.license.is_pro() {
+                    if crate::share::allowed() {
                         let idle = self.share_running.is_none();
                         let b = ui.add_enabled_ui(idle, |ui| widgets::secondary_button(ui, "Get share link")).inner;
                         if b.on_hover_text("Upload as H.264 MP4 and copy a link anyone can watch").clicked() {

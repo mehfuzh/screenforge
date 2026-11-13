@@ -9,6 +9,7 @@
 //       Pro only → { id, url, upload: { video, poster? } }: presigned PUT URLs (video/mp4, and
 //       image/jpeg for the poster) the app uploads to, signed for exactly `bytes` / `poster` bytes.
 //   { action: "complete", device, key, id }  → { id, url } once the upload is in R2 at its size
+//   { action: "allowed", device, key }       → { allowed }: may make links (Pro or staff)
 //   { action: "list", device, key }          → { links: [...] } newest first (also after Pro ends)
 //   { action: "delete", device, key, id }    → { ok: true }: the link and its files are gone
 //   { action: "get", id }                    → public: what the share page shows (404: none)
@@ -80,6 +81,12 @@ serve(async (req) => {
       case "view": {
         if (isId(body.id)) await client.rpc("share_view", { p_id: body.id });
         return json({ ok: true });
+      }
+      case "allowed": {
+        // may this computer's account make links (Pro or staff)? The app asks once per license
+        const email = await owner(client, body.device, body.key);
+        if (email instanceof Response) return email;
+        return json({ allowed: await proOrStaff(client, email) });
       }
       case "create": {
         const email = await owner(client, body.device, body.key);

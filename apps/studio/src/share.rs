@@ -111,6 +111,51 @@ impl ShareJob {
 
 const CANCELLED: &str = "cancelled";
 
+/// One `share` request. Its 404 means the link is gone (not that the service is missing).
+fn call(req: serde_json::Value) -> Result<serde_json::Value, String> {
+    sf_license::call_backend_status("share", req).map_err(|(code, e)| if code == 404 && e == "not found" { "That link no longer exists.".into() } else { e })
+}
+
+/// Whether this computer's account may make share links (Pro, or staff on any license), as
+/// the server last said, for the license generation it was asked about.
+static ALLOWED: std::sync::Mutex<Option<(u64, bool)>> = std::sync::Mutex::new(None);
+static ASKING: AtomicBool = AtomicBool::new(false);
+
+/// May this computer make share links? A Pro key says yes offline; otherwise the server's last
+/// answer for the current license (staff), asked for in the background when there is none yet.
+pub fn allowed() -> bool {
+    if sf_license::saved_status().is_pro() {
+        return true;
+    }
+    let generation = sf_license::license_generation();
+    match *ALLOWED.lock().unwrap_or_else(|e| e.into_inner()) {
+        Some((g, ok)) if g == generation => return ok,
+        _ => {}
+    }
+    ask_allowed(generation);
+    false
+}
+
+fn ask_allowed(generation: u64) {
+    if ASKING.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    std::thread::spawn(move || {
+        let answer = sf_license::owner_auth().map(|mut req| {
+            req["action"] = "allowed".into();
+            sf_license::call_backend_status("share", req).ok().and_then(|v| v["allowed"].as_bool())
+        });
+        match answer {
+            // not signed in: no links
+            None => *ALLOWED.lock().unwrap_or_else(|e| e.into_inner()) = Some((generation, false)),
+            Some(Some(ok)) => *ALLOWED.lock().unwrap_or_else(|e| e.into_inner()) = Some((generation, ok)),
+            // offline or a server error: asked again next time
+            Some(None) => {}
+        }
+        ASKING.store(false, Ordering::SeqCst);
+    });
+}
+
 fn run(project: &Path, title: &str, s: ShareSettings, cancel: &AtomicBool, stage: &dyn Fn(Stage)) -> Result<String, String> {
     let auth = sf_license::owner_auth().ok_or("Sign in to ScreenForge Pro on this computer to share links (Export → Sign in).")?;
     let dir = directories::ProjectDirs::from("dev", "screenforge", "ScreenForge").map(|d| d.cache_dir().join("shares")).ok_or("no cache folder")?;
@@ -177,7 +222,7 @@ fn upload(project: &Path, video: &Path, title: &str, (width, height, duration_ms
     if let Some(p) = &poster {
         req["poster"] = p.len().into();
     }
-    let created = sf_license::call_backend("share", req)?;
+    let created = call(req)?;
     let id = created["id"].as_str().ok_or("The share server sent no link id.")?.to_string();
     let video_url = created["upload"]["video"].as_str().ok_or("The share server sent no upload address.")?;
     let agent = ureq::AgentBuilder::new().timeout_connect(std::time::Duration::from_secs(15)).timeout_read(std::time::Duration::from_secs(120)).timeout_write(std::time::Duration::from_secs(120)).build();
@@ -196,7 +241,7 @@ fn upload(project: &Path, video: &Path, title: &str, (width, height, duration_ms
     let mut req = auth;
     req["action"] = "complete".into();
     req["id"] = id.into();
-    let done = sf_license::call_backend("share", req)?;
+    let done = call(req)?;
     done["url"].as_str().map(String::from).ok_or_else(|| "The share server sent no link.".into())
 }
 
@@ -239,7 +284,7 @@ pub struct Link {
 pub fn list() -> Result<Vec<Link>, String> {
     let mut req = sf_license::owner_auth().ok_or("Sign in to see your share links.")?;
     req["action"] = "list".into();
-    let r = sf_license::call_backend("share", req)?;
+    let r = call(req)?;
     Ok(r["links"]
         .as_array()
         .map(|a| {
@@ -263,7 +308,11 @@ pub fn delete(id: &str) -> Result<(), String> {
     let mut req = sf_license::owner_auth().ok_or("Sign in to delete share links.")?;
     req["action"] = "delete".into();
     req["id"] = id.into();
-    sf_license::call_backend("share", req).map(|_| ())
+    match sf_license::call_backend_status("share", req) {
+        // already gone: what the user wanted
+        Ok(_) | Err((404, _)) => Ok(()),
+        Err((_, e)) => Err(e),
+    }
 }
 
 fn setting_file() -> Option<PathBuf> {

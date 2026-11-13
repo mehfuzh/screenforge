@@ -83,6 +83,12 @@ pub fn call_backend_within(name: &str, body: serde_json::Value, secs: u64) -> Re
     request_within(name, body, secs).map_err(|(code, msg)| if code == 404 { format!("the {name} service is not available yet") } else { msg })
 }
 
+/// [`call_backend`] keeping the HTTP status of a refusal (0: no answer), for callers that tell
+/// a 404 from the function apart from a missing function.
+pub fn call_backend_status(name: &str, body: serde_json::Value) -> Result<serde_json::Value, (u16, String)> {
+    request(name, body)
+}
+
 /// Check in with the backend for the key saved on this computer, without emailing anything:
 /// a renewed key is saved, and when the license was moved to another computer the saved key is
 /// removed (`Ok(Some(false))`). `Ok(None)`: no key or no email saved, nothing to check. A
