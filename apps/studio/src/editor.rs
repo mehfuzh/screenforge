@@ -1693,13 +1693,18 @@ impl Editor {
             }
             let pal = theme::p();
             let frame = egui::Frame::NONE.fill(pal.bg).stroke(egui::Stroke::new(1.0, pal.border)).corner_radius(theme::RADIUS).inner_margin(egui::Margin::symmetric(22, 18)).shadow(ctx.global_style().visuals.window_shadow);
-            // progress gets its own (smaller) modal: an egui area keeps its last size per id
+            // settings and progress share one box of one width, pinned by its top edge: a
+            // second modal (or centring) would blink or jump a frame each time its height
+            // changes, as the export steps come and go
             let busy = ex.is_busy();
-            let id = egui::Id::new(if busy { "export_progress" } else { "export_dialog" });
-            let resp = egui::Modal::new(id).frame(frame).show(ctx, |ui| {
+            let id = egui::Id::new("export_dialog");
+            let top = (ctx.content_rect().height() * 0.12).clamp(24.0, 120.0);
+            let area = egui::Modal::default_area(id).anchor(egui::Align2::CENTER_TOP, egui::vec2(0.0, top));
+            let preview = self.texture_id.map(|t| (t, self.preview_size.width as f32 / self.preview_size.height.max(1) as f32));
+            let resp = egui::Modal::new(id).area(area).frame(frame).show(ctx, |ui| {
                 if busy {
-                    ui.set_width(crate::export::PROGRESS_W);
-                    ex.compact_ui(ui);
+                    ui.set_width(crate::export::DIALOG_W);
+                    ex.compact_ui(ui, preview);
                 } else {
                     ui.set_width(crate::export::DIALOG_W);
                     ex.settings_ui(self, ui);

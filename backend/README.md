@@ -184,11 +184,14 @@ offers **Switch account**, **Sign out** and, for Pro, **Manage subscription**:
 
 ## Cloud share links (Pro)
 
-When a recording stops on a Pro computer, the app renders it (1080p, 30 fps, H.264) in the
-background, uploads it and puts a `https://screenforge.studio/s/<id>` link on the clipboard
-with a desktop notification. Export → Get share link does the same at the dialog's settings,
-and Export → Share link → Your links lists, copies and deletes them. The on-stop upload can be
-turned off there (`share-on-stop` in the app's config folder).
+With Export → "Make a share link too" checked (Pro; remembered in `share-with-export` in the
+app's config folder), each export is uploaded once it is written and a
+`https://screenforge.studio/s/<id>` link goes on the clipboard with a desktop notification. An
+H.264 MP4 export goes up as it is; a GIF, ProRes or VP9 one is rendered again as MP4 for the link.
+A project has one link (`share_links.project`, the project file's id): exporting it again
+replaces the video behind the same URL, and the page keeps the old one until the new upload is
+complete (`pending_bytes`; `rev` adds `?v=` to the media URLs so the CDN serves the new file).
+Export → Share link → Your links lists, copies and deletes the links.
 
 ```
  app ──{ device, key, bytes, poster }──▶ share (create) ──▶ presigned PUT URLs (R2, 6 h)

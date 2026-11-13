@@ -5,9 +5,11 @@
 // (see `verifyKey`), and the computer must still be the license's active one. A device id alone
 // is not enough, since device ids are not secret.
 //
-//   { action: "create", device, key, title, bytes, poster?, width?, height?, duration_ms? }
+//   { action: "create", device, key, project?, title, bytes, poster?, width?, height?, duration_ms? }
 //       Pro only → { id, url, upload: { video, poster? } }: presigned PUT URLs (video/mp4, and
 //       image/jpeg for the poster) the app uploads to, signed for exactly `bytes` / `poster` bytes.
+//       A project has one link: sharing it again uploads over the same link (same URL), whose
+//       page keeps the old video until the new one is complete.
 //   { action: "complete", device, key, id }  → { id, url } once the upload is in R2 at its size
 //   { action: "allowed", device, key }       → { allowed }: may make links (Pro or staff)
 //   { action: "list", device, key }          → { links: [...] } newest first (also after Pro ends)
@@ -30,6 +32,7 @@ const MAX_POSTER_BYTES = 2 * 1024 * 1024;
 
 const fail = (error: string, status: number, code?: string) => json({ error, ...(code ? { code } : {}) }, status);
 const isId = (v: unknown): v is string => typeof v === "string" && /^[A-Za-z0-9]{12}$/.test(v);
+const isProject = (v: unknown): v is string => typeof v === "string" && /^[A-Za-z0-9_-]{1,64}$/.test(v);
 const urlFor = (id: string) => PAGE_URL + id;
 
 /** 12 characters of base62 from the CSPRNG (about 71 bits: links are unlisted, not guessable). */
@@ -70,11 +73,13 @@ serve(async (req) => {
     switch (body.action) {
       case "get": {
         if (!isId(body.id)) return fail("not found", 404);
-        const { data } = await client.from("share_links").select("id, title, width, height, duration_ms, has_poster, views, created_at").eq("id", body.id).eq("status", "ready").maybeSingle();
+        const { data } = await client.from("share_links").select("id, title, width, height, duration_ms, has_poster, views, created_at, rev").eq("id", body.id).eq("status", "ready").maybeSingle();
         if (!data) return fail("not found", 404);
+        // ?v=: a replaced video gets a new address, past the CDN's cached copy of the old one
+        const v = data.rev ? `?v=${data.rev}` : "";
         return json({
-          id: data.id, title: data.title, url: urlFor(data.id), video: `${MEDIA_URL}/${videoKey(data.id)}`,
-          poster: data.has_poster ? `${MEDIA_URL}/${posterKey(data.id)}` : null,
+          id: data.id, title: data.title, url: urlFor(data.id), video: `${MEDIA_URL}/${videoKey(data.id)}${v}`,
+          poster: data.has_poster ? `${MEDIA_URL}/${posterKey(data.id)}${v}` : null,
           width: data.width, height: data.height, duration_ms: data.duration_ms, views: data.views, created_at: data.created_at,
         });
       }
@@ -100,16 +105,27 @@ serve(async (req) => {
         // uploads that never finished (the app quit mid-upload) are dropped after a day
         const { data: stale } = await client.from("share_links").select("id").eq("email", email).eq("status", "uploading").lt("created_at", new Date(Date.now() - 24 * 3600 * 1000).toISOString());
         for (const s of stale ?? []) await removeLink(client, s.id);
-        const { data: used } = await client.from("share_links").select("bytes").eq("email", email);
-        const total = (used ?? []).reduce((n, r) => n + Number(r.bytes), 0);
-        if (total + bytes > MAX_ACCOUNT_BYTES) return fail(`Your share links use ${(total / 1024 ** 3).toFixed(1)} GB of ${(MAX_ACCOUNT_BYTES / 1024 ** 3).toFixed(0)} GB. Delete some old links (Export → Share links) and try again.`, 413);
+        const project = isProject(body.project) ? body.project : null;
+        const { data: existing } = project
+          ? await client.from("share_links").select("id").eq("email", email).eq("project", project).maybeSingle()
+          : { data: null };
+        const { data: used } = await client.from("share_links").select("id, bytes").eq("email", email);
+        // a replaced video's old size no longer counts
+        const total = (used ?? []).filter((r) => r.id !== existing?.id).reduce((n, r) => n + Number(r.bytes), 0);
+        if (total + bytes > MAX_ACCOUNT_BYTES) return fail(`Your share links use ${(total / 1024 ** 3).toFixed(1)} GB of ${(MAX_ACCOUNT_BYTES / 1024 ** 3).toFixed(0)} GB. Delete some old links (Export → Share link → Your links) and try again.`, 413);
         const int = (v: unknown) => (Number.isInteger(v) && (v as number) > 0 && (v as number) < 2 ** 31 ? v as number : null);
-        const id = newId();
-        const { error } = await client.from("share_links").insert({
-          id, email, device_id: body.device, title: String(body.title ?? "").slice(0, 200), bytes,
-          width: int(body.width), height: int(body.height), duration_ms: int(body.duration_ms), has_poster: poster > 0,
-        });
-        if (error) throw new Error(error.message);
+        const fields = { device_id: body.device, title: String(body.title ?? "").slice(0, 200), width: int(body.width), height: int(body.height), duration_ms: int(body.duration_ms), pending_bytes: bytes, updated_at: new Date().toISOString() };
+        let id: string;
+        if (existing) {
+          // the page keeps playing the old video (status stays) until `complete`
+          id = existing.id;
+          const { error } = await client.from("share_links").update(fields).eq("id", id);
+          if (error) throw new Error(error.message);
+        } else {
+          id = newId();
+          const { error } = await client.from("share_links").insert({ id, email, project, bytes, has_poster: poster > 0, ...fields });
+          if (error) throw new Error(error.message);
+        }
         const upload: Record<string, string> = { video: await presignPut(videoKey(id), "video/mp4", bytes) };
         if (poster > 0) upload.poster = await presignPut(posterKey(id), "image/jpeg", poster);
         return json({ id, url: urlFor(id), upload });
@@ -118,19 +134,20 @@ serve(async (req) => {
         const email = await owner(client, body.device, body.key);
         if (email instanceof Response) return email;
         if (!isId(body.id)) return fail("not found", 404);
-        const { data: link } = await client.from("share_links").select("id, bytes, has_poster").eq("id", body.id).eq("email", email).maybeSingle();
+        const { data: link } = await client.from("share_links").select("id, bytes, pending_bytes, rev").eq("id", body.id).eq("email", email).maybeSingle();
         if (!link) return fail("not found", 404);
+        const expected = Number(link.pending_bytes ?? link.bytes);
         const size = await objectSize(videoKey(link.id));
-        if (size !== Number(link.bytes)) return fail("The upload did not arrive complete. Try sharing again.", 409);
-        const hasPoster = link.has_poster && (await objectSize(posterKey(link.id))) !== null;
-        const { error } = await client.from("share_links").update({ status: "ready", has_poster: hasPoster }).eq("id", link.id);
+        if (size !== expected) return fail("The upload did not arrive complete. Try sharing again.", 409);
+        const hasPoster = (await objectSize(posterKey(link.id))) !== null;
+        const { error } = await client.from("share_links").update({ status: "ready", bytes: expected, pending_bytes: null, has_poster: hasPoster, rev: Number(link.rev ?? 0) + 1, updated_at: new Date().toISOString() }).eq("id", link.id);
         if (error) throw new Error(error.message);
         return json({ id: link.id, url: urlFor(link.id) });
       }
       case "list": {
         const email = await owner(client, body.device, body.key);
         if (email instanceof Response) return email;
-        const { data, error } = await client.from("share_links").select("id, title, bytes, duration_ms, views, created_at").eq("email", email).eq("status", "ready").order("created_at", { ascending: false }).limit(200);
+        const { data, error } = await client.from("share_links").select("id, title, bytes, duration_ms, views, created_at, updated_at").eq("email", email).eq("status", "ready").order("updated_at", { ascending: false }).limit(200);
         if (error) throw new Error(error.message);
         return json({ links: (data ?? []).map((l) => ({ ...l, url: urlFor(l.id) })) });
       }

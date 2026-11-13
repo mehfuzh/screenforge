@@ -1,7 +1,7 @@
 //! Cloud share links (Pro): a project rendered to MP4 on a background thread, uploaded straight
 //! to the share storage (Cloudflare R2, through URLs the `share` backend function signs) and
-//! answered with a `screenforge.studio/s/<id>` link. When a recording stops, Pro computers do
-//! this by themselves (see [`on_stop_enabled`]); Export → Get share link does it on demand.
+//! answered with a `screenforge.studio/s/<id>` link. Export with "Make a share link too" uploads
+//! its file. A project has one link: sharing it again replaces the video behind the same URL.
 
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -21,9 +21,12 @@ pub struct ShareSettings {
     pub include_audio: bool,
 }
 
-impl ShareSettings {
-    /// What a recording is shared at when it stops: 1080p, 30 fps, the Social Media preset.
-    pub const ON_STOP: ShareSettings = ShareSettings { fps: 30.0, max_height: 1080, quality: 0.75, include_audio: true };
+/// What a share uploads: the project rendered for it, or a file Export just wrote (an H.264
+/// MP4, so it is not rendered twice).
+#[derive(Clone, Debug)]
+pub enum Source {
+    Render(ShareSettings),
+    File(PathBuf),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -49,12 +52,13 @@ pub struct ShareJob {
 }
 
 impl ShareJob {
-    /// Render `project` and upload it on a background thread. `repaint` wakes the UI as the
-    /// job moves on.
-    pub fn start(project: PathBuf, title: String, settings: ShareSettings, repaint: egui::Context) -> ShareJob {
+    /// Render `project` (or take the exported file) and upload it on a background thread.
+    /// `repaint` wakes the UI as the job moves on.
+    pub fn start(project: PathBuf, title: String, source: Source, repaint: egui::Context) -> ShareJob {
         let (tx, rx) = channel();
         let cancel = Arc::new(AtomicBool::new(false));
         let (path, name, stop) = (project.clone(), title.clone(), cancel.clone());
+        let first = if matches!(source, Source::File(_)) { Stage::Uploading(0.0) } else { Stage::Rendering(0.0) };
         std::thread::Builder::new()
             .name("share-link".into())
             .spawn(move || {
@@ -62,11 +66,11 @@ impl ShareJob {
                     let _ = tx.send(m);
                     repaint.request_repaint();
                 };
-                let r = run(&path, &name, settings, &stop, &|s| send(Msg::Stage(s)));
+                let r = run(&path, &name, source, &stop, &|s| send(Msg::Stage(s)));
                 send(Msg::Done(r));
             })
             .expect("spawn share job");
-        ShareJob { project, title, stage: Stage::Rendering(0.0), result: None, rx, cancel }
+        ShareJob { project, title, stage: first, result: None, rx, cancel }
     }
 
     /// Take the thread's news. True once, when the job has just finished.
@@ -100,11 +104,11 @@ impl ShareJob {
         }
     }
 
-    /// "Rendering 40%" / "Uploading 80%", for status lines.
+    /// What the job is doing now, shown under its progress bar.
     pub fn label(&self) -> String {
         match self.stage {
-            Stage::Rendering(f) => format!("Rendering share link {:.0}%", f * 100.0),
-            Stage::Uploading(f) => format!("Uploading share link {:.0}%", f * 100.0),
+            Stage::Rendering(_) => "Rendering the video…".to_string(),
+            Stage::Uploading(_) => "Uploading…".to_string(),
         }
     }
 }
@@ -117,23 +121,44 @@ fn call(req: serde_json::Value) -> Result<serde_json::Value, String> {
 }
 
 /// Whether this computer's account may make share links (Pro, or staff on any license), as
-/// the server last said, for the license generation it was asked about.
+/// the server last said, and the license generation it was asked about.
 static ALLOWED: std::sync::Mutex<Option<(u64, bool)>> = std::sync::Mutex::new(None);
 static ASKING: AtomicBool = AtomicBool::new(false);
 
 /// May this computer make share links? A Pro key says yes offline; otherwise the server's last
-/// answer for the current license (staff), asked for in the background when there is none yet.
+/// answer (staff). When the license changed since (a renewal re-saves the key), the last answer
+/// stands while the server is asked again in the background, so Export does not flip to the
+/// Pro offer and back; the answer is kept on disk for the next launch too.
 pub fn allowed() -> bool {
     if sf_license::saved_status().is_pro() {
         return true;
     }
     let generation = sf_license::license_generation();
-    match *ALLOWED.lock().unwrap_or_else(|e| e.into_inner()) {
-        Some((g, ok)) if g == generation => return ok,
-        _ => {}
+    let mut last = ALLOWED.lock().unwrap_or_else(|e| e.into_inner());
+    if last.is_none() {
+        // u64::MAX: from disk, never the current generation, so it is asked again once
+        *last = allowed_file().and_then(|f| std::fs::read_to_string(f).ok()).map(|s| (u64::MAX, s.trim() == "yes"));
     }
-    ask_allowed(generation);
-    false
+    match *last {
+        Some((g, ok)) if g == generation => ok,
+        stale => {
+            drop(last);
+            ask_allowed(generation);
+            stale.is_some_and(|(_, ok)| ok)
+        }
+    }
+}
+
+fn allowed_file() -> Option<PathBuf> {
+    setting_file().map(|f| f.with_file_name("share-allowed"))
+}
+
+fn remember_allowed(generation: u64, ok: bool) {
+    *ALLOWED.lock().unwrap_or_else(|e| e.into_inner()) = Some((generation, ok));
+    if let Some(f) = allowed_file() {
+        let _ = std::fs::create_dir_all(f.parent().unwrap());
+        let _ = std::fs::write(f, if ok { "yes" } else { "no" });
+    }
 }
 
 fn ask_allowed(generation: u64) {
@@ -147,8 +172,8 @@ fn ask_allowed(generation: u64) {
         });
         match answer {
             // not signed in: no links
-            None => *ALLOWED.lock().unwrap_or_else(|e| e.into_inner()) = Some((generation, false)),
-            Some(Some(ok)) => *ALLOWED.lock().unwrap_or_else(|e| e.into_inner()) = Some((generation, ok)),
+            None => remember_allowed(generation, false),
+            Some(Some(ok)) => remember_allowed(generation, ok),
             // offline or a server error: asked again next time
             Some(None) => {}
         }
@@ -156,8 +181,18 @@ fn ask_allowed(generation: u64) {
     });
 }
 
-fn run(project: &Path, title: &str, s: ShareSettings, cancel: &AtomicBool, stage: &dyn Fn(Stage)) -> Result<String, String> {
+fn run(project: &Path, title: &str, source: Source, cancel: &AtomicBool, stage: &dyn Fn(Stage)) -> Result<String, String> {
     let auth = sf_license::owner_auth().ok_or("Sign in to ScreenForge Pro on this computer to share links (Export → Sign in).")?;
+    let s = match source {
+        Source::File(video) => {
+            // the exported file stays where the user saved it
+            let info = sf_media::probe::probe(&video).map_err(|e| format!("Could not read the exported video: {e:#}"))?;
+            let v = info.video();
+            let dims = (v.and_then(|v| v.width).unwrap_or(0), v.and_then(|v| v.height).unwrap_or(0), info.duration_ms().unwrap_or(0.0).max(0.0) as u64);
+            return upload(project, &video, title, dims, auth, cancel, &|f| stage(Stage::Uploading(f)));
+        }
+        Source::Render(s) => s,
+    };
     let dir = directories::ProjectDirs::from("dev", "screenforge", "ScreenForge").map(|d| d.cache_dir().join("shares")).ok_or("no cache folder")?;
     std::fs::create_dir_all(&dir).map_err(|e| format!("Could not create {}: {e}", dir.display()))?;
     let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
@@ -214,6 +249,10 @@ fn upload(project: &Path, video: &Path, title: &str, (width, height, duration_ms
     let poster = poster_jpeg(project);
     let mut req = auth.clone();
     req["action"] = "create".into();
+    // the project's one link (the server reuses it)
+    if let Ok(pkg) = sf_project::ProjectPackage::open(project) {
+        req["project"] = pkg.project.id.into();
+    }
     req["title"] = title.into();
     req["bytes"] = bytes.into();
     req["width"] = width.into();
@@ -315,16 +354,17 @@ pub fn delete(id: &str) -> Result<(), String> {
     }
 }
 
+/// Where "Make a share link too" is remembered (`allowed_file` sits next to it).
 fn setting_file() -> Option<PathBuf> {
-    directories::ProjectDirs::from("dev", "screenforge", "ScreenForge").map(|d| d.config_dir().join("share-on-stop"))
+    directories::ProjectDirs::from("dev", "screenforge", "ScreenForge").map(|d| d.config_dir().join("share-with-export"))
 }
 
-/// Make a share link by itself whenever a recording stops (Pro). On unless turned off.
-pub fn on_stop_enabled() -> bool {
-    setting_file().and_then(|f| std::fs::read_to_string(f).ok()).is_none_or(|s| s.trim() != "off")
+/// Make a share link of every file Export writes (Pro). Off unless turned on.
+pub fn with_export_enabled() -> bool {
+    setting_file().and_then(|f| std::fs::read_to_string(f).ok()).is_some_and(|s| s.trim() == "on")
 }
 
-pub fn set_on_stop(on: bool) {
+pub fn set_with_export(on: bool) {
     if let Some(f) = setting_file() {
         let _ = std::fs::create_dir_all(f.parent().unwrap());
         let _ = std::fs::write(f, if on { "on" } else { "off" });
@@ -380,5 +420,41 @@ mod tests {
         assert!((job.fraction() - 0.3).abs() < 1e-6);
         job.stage = Stage::Uploading(1.0);
         assert!((job.fraction() - 1.0).abs() < 1e-6);
+    }
+
+    /// Against the live backend with this computer's license: one project, one link.
+    /// `cargo test -p studio share_again_keeps_the_link -- --ignored`
+    #[test]
+    #[ignore]
+    fn share_again_keeps_the_link() {
+        let auth = sf_license::owner_auth().expect("signed in");
+        let project = format!("e2e-{}", std::process::id());
+        let put = |bytes: &[u8]| {
+            let mut req = auth.clone();
+            req["action"] = "create".into();
+            req["project"] = project.clone().into();
+            req["title"] = "e2e replace".into();
+            req["bytes"] = bytes.len().into();
+            let c = call(req).unwrap();
+            ureq::put(c["upload"]["video"].as_str().unwrap()).set("Content-Type", "video/mp4").send_bytes(bytes).unwrap();
+            let mut req = auth.clone();
+            req["action"] = "complete".into();
+            req["id"] = c["id"].clone();
+            call(req).unwrap();
+            c["id"].as_str().unwrap().to_string()
+        };
+        let first = put(&[1u8; 1000]);
+        let get = |id: &str| call(serde_json::json!({ "action": "get", "id": id })).unwrap();
+        let v1 = get(&first)["video"].as_str().unwrap().to_string();
+        let second = put(&[2u8; 2000]);
+        let v2 = get(&second)["video"].as_str().unwrap().to_string();
+        let served = ureq::get(&v2).call().ok().and_then(|r| r.header("content-length").map(str::to_string));
+        let mut req = auth.clone();
+        req["action"] = "delete".into();
+        req["id"] = first.clone().into();
+        call(req).unwrap();
+        assert_eq!(first, second, "same link");
+        assert_ne!(v1, v2, "new video address");
+        assert_eq!(served.as_deref(), Some("2000"), "the new video is served");
     }
 }

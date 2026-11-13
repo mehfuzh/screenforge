@@ -345,6 +345,32 @@ pub fn text_field(ui: &mut Ui, text: &mut String, hint: &str) -> Response {
     field(ui, text, hint)
 }
 
+/// A link in a read-only text box (selectable), with copy and open-in-browser buttons inside.
+pub fn link_field(ui: &mut Ui, url: &str) {
+    let pal = theme::p();
+    egui::Frame::NONE
+        .fill(pal.bg)
+        .stroke(Stroke::new(1.0, pal.border))
+        .corner_radius(CornerRadius::same(BUTTON_RADIUS))
+        .inner_margin(egui::Margin { left: 10, right: 4, top: 0, bottom: 0 })
+        .show(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 2.0;
+                let buttons = 2.0 * 25.0 + 2.0 * 2.0;
+                let mut text = url;
+                ui.add_sized(
+                    vec2((ui.available_width() - buttons).max(40.0), 32.0),
+                    egui::TextEdit::singleline(&mut text).font(egui::FontId::proportional(13.0)).text_color(pal.text).frame(egui::Frame::NONE).margin(egui::Margin::ZERO),
+                )
+                .on_hover_text(url);
+                copy_button(ui, url, "Copy link");
+                if icon_button(ui, Icon::OpenExternal, 13.0, "Open in the browser").clicked() {
+                    crate::os::open(url);
+                }
+            });
+        });
+}
+
 fn field(ui: &mut Ui, text: &mut String, hint: &str) -> Response {
     let pal = theme::p();
     let id = ui.next_auto_id().with("text_field");
@@ -482,6 +508,8 @@ pub enum Icon {
     Media,
     /// Two overlapping frames (a transition between clips).
     Transition,
+    /// Two overlapping pages (copy to the clipboard).
+    Copy,
 }
 
 /// Live level as an equalizer: the most recent `levels` (0..1, oldest first) as bars that
@@ -649,6 +677,16 @@ pub fn paint_icon(p: &egui::Painter, rect: Rect, icon: Icon, color: Color32) {
             line((-0.1, 0.1), (0.85, -0.85));
             line((0.85, -0.85), (0.3, -0.85));
             line((0.85, -0.85), (0.85, -0.3));
+        }
+        Icon::Copy => {
+            // front page at the lower right; the back page's top and left edges show above
+            // and to its left, up to the gap around the front page
+            p.rect_stroke(rr(-0.25, -0.25, 0.85, 0.85), 2.0, s, egui::StrokeKind::Middle);
+            line((-0.85, 0.25), (-0.85, -0.6));
+            line((-0.85, -0.6), (-0.6, -0.85));
+            line((-0.6, -0.85), (0.25, -0.85));
+            line((0.25, -0.85), (0.25, -0.45));
+            line((-0.85, 0.25), (-0.45, 0.25));
         }
         Icon::Check => {
             line((-0.75, 0.05), (-0.25, 0.55));
@@ -875,6 +913,34 @@ pub fn menu_item(ui: &mut Ui, selected: bool, text: impl AsRef<str>) -> Response
 /// Icon-only button (quiet).
 pub fn icon_button(ui: &mut Ui, icon: Icon, size: f32, tooltip: &str) -> Response {
     icon_button_tinted(ui, icon, size, tooltip, theme::p().text)
+}
+
+/// Copy `text` to the clipboard: a copy icon that turns into a check for a moment once
+/// clicked, so the click is seen to have worked.
+pub fn copy_button(ui: &mut Ui, text: &str, tooltip: &str) -> Response {
+    let id = ui.id().with(("copy-button", text));
+    let now = ui.input(|i| i.time);
+    let copied = ui.data(|d| d.get_temp::<f64>(id)).is_some_and(|t| now - t < 1.5);
+    let resp = if copied {
+        // the check stays in the accent colour (not only on hover)
+        let pal = theme::p();
+        let (rect, resp) = ui.allocate_exact_size(vec2(25.0, 21.0), Sense::click());
+        if resp.hovered() {
+            ui.painter().rect_filled(rect, CornerRadius::same(7), pal.card_2);
+        }
+        paint_icon(ui.painter(), Rect::from_center_size(rect.center(), vec2(13.0, 13.0)), Icon::Check, pal.accent);
+        resp.on_hover_text("Copied")
+    } else {
+        icon_button(ui, Icon::Copy, 13.0, tooltip)
+    };
+    if copied {
+        ui.ctx().request_repaint_after(std::time::Duration::from_millis(250));
+    }
+    if resp.clicked() {
+        ui.ctx().copy_text(text.to_string());
+        ui.data_mut(|d| d.insert_temp(id, now));
+    }
+    resp
 }
 
 /// [`icon_button`] whose icon turns `hover` while the pointer is over it (the accent for

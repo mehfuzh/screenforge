@@ -412,19 +412,25 @@ impl App {
 
     /// Render and upload `project` for a share link in the background (one job per project:
     /// a newer request replaces a running one).
-    fn start_share(&mut self, project: PathBuf, settings: crate::share::ShareSettings, ctx: &egui::Context) {
+    fn start_share(&mut self, project: PathBuf, source: crate::share::Source, ctx: &egui::Context) {
         for job in self.shares.iter().filter(|j| j.project == project) {
             job.cancel();
         }
         self.shares.retain(|j| j.project != project);
         let title = ed_name(&project);
-        self.shares.push(crate::share::ShareJob::start(project, title, settings, ctx.clone()));
+        self.shares.push(crate::share::ShareJob::start(project, title, source, ctx.clone()));
     }
 
     /// Follow the share jobs: a finished one copies its link and says so in a notification
     /// (the app may be in the background by then), and in the editor's status line.
     fn poll_shares(&mut self, ctx: &egui::Context) {
         if let Screen::Editor(ed) = &mut self.screen {
+            // Cancel in the export dialog
+            if std::mem::take(&mut ed.export.share_cancel) {
+                for job in self.shares.iter().filter(|j| j.project == ed.path) {
+                    job.cancel();
+                }
+            }
             if let Some(s) = ed.export.share_request.take() {
                 let path = ed.path.clone();
                 ed.save();
@@ -447,7 +453,6 @@ impl App {
         for job in &self.shares {
             let mine = editor_path.as_ref() == Some(&job.project);
             match &job.result {
-                None if mine => status = Some(job.label()),
                 Some(Ok(url)) if finished.contains(&job.project) => {
                     ctx.copy_text(url.clone());
                     crate::os::notify("Your share link is ready", &format!("“{}” is uploaded. The link is on your clipboard: {url}", job.title));
@@ -467,7 +472,7 @@ impl App {
             }
         }
         if let Some(ed) = editor {
-            ed.export.share_running = self.shares.iter().find(|j| Some(&j.project) == editor_path.as_ref() && j.is_running()).map(|j| j.fraction());
+            ed.export.share_running = self.shares.iter().find(|j| Some(&j.project) == editor_path.as_ref() && j.is_running()).map(|j| (j.fraction(), j.label()));
             if let Some(l) = last_link {
                 ed.export.last_link = Some(l);
             }
@@ -1123,10 +1128,6 @@ impl eframe::App for App {
         }
         match outcome {
             Some(RecordingOutcome::Finished(p)) => {
-                // Pro: the recording gets its share link by itself, while the editor opens
-                if crate::share::on_stop_enabled() && crate::share::allowed() {
-                    self.start_share(p.clone(), crate::share::ShareSettings::ON_STOP, ctx);
-                }
                 self.fresh_open = Some(p.clone());
                 open_request = Some(p);
             }
