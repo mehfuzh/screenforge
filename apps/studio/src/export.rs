@@ -303,8 +303,10 @@ impl ExportDialog {
                     if let Ok(link) = r {
                         // a link made before ids were derived from the project counts as
                         // nothing uploaded: the next share moves the project to its own link
-                        let own = crate::share::link_url(self.project_link_for.as_deref().unwrap_or_default());
+                        let asked = self.project_link_for.clone().unwrap_or_default();
+                        let own = crate::share::link_url(&asked);
                         self.project_link = link.filter(|l| *l == own);
+                        crate::share::remember_uploaded(&asked, self.project_link.is_some());
                         self.project_link_known = true;
                     }
                 }
@@ -640,14 +642,17 @@ impl ExportDialog {
         self.last_link.clone().and_then(Result::ok)
     }
 
-    /// Whether a video is behind the link (None: not known yet).
+    /// Whether a video is behind the link: the server's answer, or until it comes what this
+    /// computer last knew (so the dialog does not change as it opens).
     fn uploaded(&self) -> Option<bool> {
         if matches!(self.last_link, Some(Ok(_))) || self.project_link.is_some() {
             Some(true)
         } else if self.project_link_known {
             Some(false)
-        } else {
+        } else if self.project_id.is_empty() {
             None
+        } else {
+            Some(crate::share::known_uploaded(&self.project_id))
         }
     }
 

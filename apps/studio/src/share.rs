@@ -250,8 +250,9 @@ fn upload(project: &Path, video: &Path, title: &str, (width, height, duration_ms
     let mut req = auth.clone();
     req["action"] = "create".into();
     // the project's one link (the server reuses it)
-    if let Ok(pkg) = sf_project::ProjectPackage::open(project) {
-        req["project"] = pkg.project.id.into();
+    let project_id = sf_project::ProjectPackage::open(project).ok().map(|pkg| pkg.project.id);
+    if let Some(id) = &project_id {
+        req["project"] = id.clone().into();
     }
     req["title"] = title.into();
     req["bytes"] = bytes.into();
@@ -281,7 +282,44 @@ fn upload(project: &Path, video: &Path, title: &str, (width, height, duration_ms
     req["action"] = "complete".into();
     req["id"] = id.into();
     let done = call(req)?;
-    done["url"].as_str().map(String::from).ok_or_else(|| "The share server sent no link.".into())
+    let url = done["url"].as_str().map(String::from).ok_or("The share server sent no link.")?;
+    if let Some(id) = &project_id {
+        remember_uploaded(id, true);
+    }
+    Ok(url)
+}
+
+/// Projects this computer knows have a video behind their link, so Export says so as it opens
+/// instead of after asking the server (which corrects it in the background). Kept on disk.
+static UPLOADED: std::sync::Mutex<Option<std::collections::HashSet<String>>> = std::sync::Mutex::new(None);
+
+fn uploaded_file() -> Option<PathBuf> {
+    setting_file().map(|f| f.with_file_name("shared-projects"))
+}
+
+/// Whether this project's link has a video, as last known on this computer.
+pub fn known_uploaded(project: &str) -> bool {
+    let mut set = UPLOADED.lock().unwrap_or_else(|e| e.into_inner());
+    set.get_or_insert_with(|| uploaded_file().and_then(|f| std::fs::read_to_string(f).ok()).map(|s| s.lines().map(str::to_string).collect()).unwrap_or_default()).contains(project)
+}
+
+pub fn remember_uploaded(project: &str, uploaded: bool) {
+    if known_uploaded(project) == uploaded {
+        return;
+    }
+    let mut guard = UPLOADED.lock().unwrap_or_else(|e| e.into_inner());
+    let set = guard.get_or_insert_with(Default::default);
+    if uploaded {
+        set.insert(project.to_string());
+    } else {
+        set.remove(project);
+    }
+    if let Some(f) = uploaded_file() {
+        let _ = std::fs::create_dir_all(f.parent().unwrap());
+        let mut lines: Vec<&str> = set.iter().map(String::as_str).collect();
+        lines.sort();
+        let _ = std::fs::write(f, lines.join("\n"));
+    }
 }
 
 /// The video file as the upload body, reporting progress and stopping when cancelled.
