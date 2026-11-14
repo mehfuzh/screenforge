@@ -38,17 +38,13 @@ footer{margin-top:auto;padding-top:40px;padding-bottom:28px;color:var(--dim);fon
 footer a{color:var(--fg)}
 .gone{text-align:center;padding:18vh 0}
 .gone h1{font-size:26px}
-.side{display:flex;gap:16px;align-items:flex-start;margin-top:18px}
-.side .actions{margin-top:0}
+.btn svg{width:15px;height:15px;margin-right:7px;flex:none}
 .qr{display:block;background:#fff;border-radius:2px}
 .qr svg{display:block;width:100%;height:100%}
-.qr-mini{width:92px;height:92px;padding:0;border:1px solid var(--line);border-radius:2px;background:#fff;cursor:zoom-in}
-.qr-mini .qr{width:100%;height:100%}
 #qr-view{position:fixed;inset:0;z-index:10;display:none;flex-direction:column;align-items:center;justify-content:center;gap:18px;padding:16px;background:rgba(10,10,14,.9);cursor:zoom-out}
 #qr-view.open{display:flex}
 #qr-view .qr{width:min(72vmin,460px);height:min(72vmin,460px)}
 #qr-view p{color:#f8f8f2;font-size:clamp(16px,2.8vmin,24px);text-align:center;overflow-wrap:anywhere}
-@media (max-width:640px){.qr-mini{display:none}}
 `;
 
 function page({ title, head = "", body }) {
@@ -118,24 +114,23 @@ async function render(id) {
   const body = `<main>
 <div class="player"><video controls playsinline preload="metadata"${aspect}${s.poster ? ` poster="${esc(s.poster)}"` : ""} src="${esc(s.video)}"></video></div>
 <div class="row"><div><h1>${esc(title)}</h1><p class="meta">${[date, duration(s.duration_ms), views].filter(Boolean).map(esc).join("<span>·</span>")}</p></div>
-<div class="side"><div class="actions"><button class="btn" id="copy" type="button">Copy link</button><button class="btn" id="qr" type="button">QR code</button><a class="btn" href="${esc(s.video)}" download>Download</a></div>
-<button class="qr-mini" id="qr-mini" type="button" title="Show the QR code large" aria-label="Show the QR code large"><span class="qr" id="qr-small"></span></button></div></div>
+<div class="actions"><button class="btn" id="copy" type="button">Copy link</button><button class="btn" id="qr" type="button" title="Show a QR code to scan"><svg viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="1.5" y="1.5" width="5" height="5"/><rect x="9.5" y="1.5" width="5" height="5"/><rect x="1.5" y="9.5" width="5" height="5"/><path d="M9.5 9.5h2.5v2.5h-2.5zM12.5 12.5h2v2h-2z" fill="currentColor" stroke="none"/></svg>QR code</button><a class="btn" href="${esc(s.video)}" download>Download</a></div></div>
 </main>
 <div id="qr-view" role="dialog" aria-modal="true" aria-label="QR code for this video"><span class="qr" id="qr-big"></span><p>${esc(String(s.url).replace(/^https?:\/\//, ""))}</p><button class="btn" id="qr-close" type="button">Close</button></div>
 <script src="https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.min.js" integrity="sha384-lQXOAyZwHXE55JFyrOMB7nY2Wv+m5ZWNtJcHrd1rceRQXAYNLak8ukN5TjBTcIwz" crossorigin="anonymous"></script>
 <script>
 (function(){
-  // the link as a QR code (SVG, black on white with its quiet zone), small beside the actions
-  // and large over the page, for a room to scan off a projector
+  // the link as a QR code (SVG, black on white with its quiet zone), large over the page from
+  // the QR code button, for a room to scan off a projector
   var view=document.getElementById("qr-view");
-  if(typeof qrcode!=="function"){document.getElementById("qr").style.display="none";document.getElementById("qr-mini").style.display="none";return}
+  if(typeof qrcode!=="function"){document.getElementById("qr").style.display="none";return}
   var q=qrcode(0,"M");q.addData(${JSON.stringify(s.url)});q.make();
   var n=q.getModuleCount(),z=4,d="";
   for(var y=0;y<n;y++)for(var x=0;x<n;x++)if(q.isDark(y,x))d+="M"+(x+z)+" "+(y+z)+"h1v1h-1z";
   var svg='<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 '+(n+2*z)+" "+(n+2*z)+'" shape-rendering="crispEdges" role="img" aria-label="QR code"><path fill="#000" d="'+d+'"/></svg>';
-  document.getElementById("qr-small").innerHTML=svg;document.getElementById("qr-big").innerHTML=svg;
+  document.getElementById("qr-big").innerHTML=svg;
   function open(){view.classList.add("open")}function close(){view.classList.remove("open")}
-  document.getElementById("qr").onclick=open;document.getElementById("qr-mini").onclick=open;
+  document.getElementById("qr").onclick=open;
   view.onclick=close;document.addEventListener("keydown",function(e){if(e.key==="Escape")close()});
 })();
 document.getElementById("copy").onclick=function(){var b=this;navigator.clipboard.writeText(${JSON.stringify(s.url)}).then(function(){b.textContent="Copied";setTimeout(function(){b.textContent="Copy link"},1500)})};
