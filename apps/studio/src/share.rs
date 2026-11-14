@@ -250,8 +250,9 @@ fn upload(project: &Path, video: &Path, title: &str, (width, height, duration_ms
     let mut req = auth.clone();
     req["action"] = "create".into();
     // the project's one link (the server reuses it)
-    if let Ok(pkg) = sf_project::ProjectPackage::open(project) {
-        req["project"] = pkg.project.id.into();
+    let project_id = sf_project::ProjectPackage::open(project).ok().map(|pkg| pkg.project.id);
+    if let Some(id) = &project_id {
+        req["project"] = id.clone().into();
     }
     req["title"] = title.into();
     req["bytes"] = bytes.into();
@@ -281,7 +282,8 @@ fn upload(project: &Path, video: &Path, title: &str, (width, height, duration_ms
     req["action"] = "complete".into();
     req["id"] = id.into();
     let done = call(req)?;
-    done["url"].as_str().map(String::from).ok_or_else(|| "The share server sent no link.".into())
+    let url = done["url"].as_str().map(String::from).ok_or("The share server sent no link.")?;
+    Ok(url)
 }
 
 /// The video file as the upload body, reporting progress and stopping when cancelled.
@@ -309,34 +311,6 @@ impl Read for Counting<'_> {
     }
 }
 
-/// A link of this account, as `share` lists them.
-#[derive(Clone, Debug)]
-pub struct Link {
-    pub url: String,
-    /// The project (file id) the link belongs to: one link per project.
-    pub project: Option<String>,
-}
-
-/// This account's links, newest first.
-pub fn list() -> Result<Vec<Link>, String> {
-    let mut req = sf_license::owner_auth().ok_or("Sign in to see your share links.")?;
-    req["action"] = "list".into();
-    let r = call(req)?;
-    Ok(r["links"]
-        .as_array()
-        .map(|a| {
-            a.iter()
-                .filter_map(|l| {
-                    Some(Link {
-                        url: l["url"].as_str()?.into(),
-                        project: l["project"].as_str().map(str::to_string),
-                    })
-                })
-                .collect()
-        })
-        .unwrap_or_default())
-}
-
 /// The page a link id opens.
 pub const PAGE_URL: &str = "https://screenforge.studio/s/";
 
@@ -354,11 +328,6 @@ pub fn link_id(project: &str) -> String {
 
 pub fn link_url(project: &str) -> String {
     format!("{PAGE_URL}{}", link_id(project))
-}
-
-/// The link of the project with this id, if it has one.
-pub fn project_link(project: &str) -> Result<Option<String>, String> {
-    Ok(list()?.into_iter().find(|l| l.project.as_deref() == Some(project)).map(|l| l.url))
 }
 
 /// Where "Make a share link too" is remembered (`allowed_file` sits next to it).
@@ -435,16 +404,6 @@ mod tests {
         assert_eq!(link_id("iv5Pww9n2l"), "v3BwvryVLJ5B");
         assert_eq!(link_id("abc"), "LyVS9w6Jh3S9");
         assert_eq!(link_url("abc"), "https://screenforge.studio/s/LyVS9w6Jh3S9");
-    }
-
-    /// Against the live backend: the account's links, with the project each belongs to.
-    /// `cargo test -p studio list_shows_projects -- --ignored --nocapture`
-    #[test]
-    #[ignore]
-    fn list_shows_projects() {
-        for l in list().unwrap() {
-            println!("{} {:?}", l.url, l.project);
-        }
     }
 
     /// Against the live backend with this computer's license: one project, one link.
