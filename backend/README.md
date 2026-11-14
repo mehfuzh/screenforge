@@ -191,7 +191,10 @@ H.264 MP4 export goes up as it is; a GIF, ProRes or VP9 one is rendered again as
 A project has one link (`share_links.project`, the project file's id): exporting it again
 replaces the video behind the same URL, and the page keeps the old one until the new upload is
 complete (`pending_bytes`; `rev` adds `?v=` to the media URLs so the CDN serves the new file).
-Export → Share link → Your links lists, copies and deletes the links.
+A link's id is derived from the project id (`share::link_id` / `linkIdFor`), so the app shows
+the project's link before anything is uploaded; the share page shows its QR code. A project's
+link made before that (random id) is deleted on its next share, for the derived one. The app no longer lists or deletes links (`delete` stays on
+the server).
 
 ```
  app ──{ device, key, bytes, poster }──▶ share (create) ──▶ presigned PUT URLs (R2, 6 h)

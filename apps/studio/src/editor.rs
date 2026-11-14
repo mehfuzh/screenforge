@@ -1685,6 +1685,9 @@ impl Editor {
     /// progress and result of the running export in the same dialog.
     fn export_modal(&mut self, ctx: &egui::Context) {
         let mut ex = std::mem::take(&mut self.export);
+        if ex.project_id != self.session.pkg.project.id {
+            ex.project_id = self.session.pkg.project.id.clone();
+        }
         ex.poll(ctx);
         if ex.open || ex.is_busy() {
             // opening the dialog (button or ⌘E) stops playback behind it

@@ -87,11 +87,18 @@ pub struct ExportDialog {
     share_with_export: bool,
     /// The running or finished export makes a link too: step 2 of the progress dialog.
     export_shared: bool,
-    /// "Your links": the account's links once loaded, and the list being fetched or a delete
-    /// running.
-    links_open: bool,
-    links: Option<Result<Vec<crate::share::Link>, String>>,
-    links_rx: Option<Receiver<Result<Vec<crate::share::Link>, String>>>,
+    /// This project's link as the server has it (one per project), shown whenever the dialog
+    /// is open; asked again each time it opens. `project_link_for`: the project asked about.
+    project_link: Option<String>,
+    /// Whether the server has answered for this project (so "nothing uploaded yet" is known).
+    project_link_known: bool,
+    project_link_for: Option<String>,
+    /// The editor's project id (set by the editor every frame): its link is known without
+    /// asking the server (`share::link_url`).
+    pub project_id: String,
+    /// The QR code under the link is showing.
+    qr_open: bool,
+    project_link_rx: Option<Receiver<Result<Option<String>, String>>>,
 }
 
 /// An empty dialog: no file reads, no network. `std::mem::take` puts one in place every frame
@@ -99,7 +106,7 @@ pub struct ExportDialog {
 /// that loads the license and talks to the backend.
 impl Default for ExportDialog {
     fn default() -> Self {
-        ExportDialog { open: false, license: sf_license::Status::Invalid("no key".into()), email: String::new(), activation: None, check_in: None, activation_msg: None, code_sent_to: None, code: String::new(), signing_in: false, promo: String::new(), promo_open: false, checkout: None, claim_until: None, next_claim: None, claim: None, free_left: None, free_rx: None, was_open: false, license_seen: 0, free_job: false, format: Format::Mp4, fps: 60.0, height: 1080, quality: QualityPreset::SocialMedia, codec: VideoCodec::H264, audio: true, job: None, progress: None, result: None, started: None, share_request: None, share_running: None, share_cancel: false, last_link: None, share_with_export: false, export_shared: false, links_open: false, links: None, links_rx: None }
+        ExportDialog { open: false, license: sf_license::Status::Invalid("no key".into()), email: String::new(), activation: None, check_in: None, activation_msg: None, code_sent_to: None, code: String::new(), signing_in: false, promo: String::new(), promo_open: false, checkout: None, claim_until: None, next_claim: None, claim: None, free_left: None, free_rx: None, was_open: false, license_seen: 0, free_job: false, format: Format::Mp4, fps: 60.0, height: 1080, quality: QualityPreset::SocialMedia, codec: VideoCodec::H264, audio: true, job: None, progress: None, result: None, started: None, share_request: None, share_running: None, share_cancel: false, last_link: None, share_with_export: false, export_shared: false, project_link: None, project_link_known: false, project_link_for: None, project_id: String::new(), qr_open: false, project_link_rx: None }
     }
 }
 
@@ -282,15 +289,27 @@ impl ExportDialog {
             self.license = sf_license::load_saved().map(|k| sf_license::verify(&k)).unwrap_or_else(|| sf_license::Status::Invalid("no key".into()));
         }
         self.poll_checkout(ctx);
+        if self.open && !self.was_open {
+            // asked again (the link may have been made or deleted elsewhere); the last answer
+            // shows meanwhile
+            self.project_link_for = None;
+        }
         self.poll_free_exports(ctx);
-        if let Some(rx) = &self.links_rx {
+        if let Some(rx) = &self.project_link_rx {
             match rx.try_recv() {
                 Ok(r) => {
-                    self.links = Some(r);
-                    self.links_rx = None;
+                    self.project_link_rx = None;
+                    // offline or a server error: keep what was shown
+                    if let Ok(link) = r {
+                        // a link made before ids were derived from the project counts as
+                        // nothing uploaded: the next share moves the project to its own link
+                        let own = crate::share::link_url(self.project_link_for.as_deref().unwrap_or_default());
+                        self.project_link = link.filter(|l| *l == own);
+                        self.project_link_known = true;
+                    }
                 }
                 Err(std::sync::mpsc::TryRecvError::Empty) => ctx.request_repaint_after(std::time::Duration::from_millis(200)),
-                Err(std::sync::mpsc::TryRecvError::Disconnected) => self.links_rx = None,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => self.project_link_rx = None,
             }
         }
         if let Some(rx) = &self.check_in {
@@ -434,7 +453,7 @@ impl ExportDialog {
         let p = self.progress;
         let frac = p.map(|p| p.frame as f32 / p.total_frames.max(1) as f32).unwrap_or(0.0);
         step_header(ui, 1, "Video", if exporting { StepState::Active } else { StepState::Done }, exporting.then(|| format!("{:.0}%", frac * 100.0)));
-        ui.indent("export-step-video", |ui| {
+        step_body(ui, |ui| {
             if exporting {
                 progress_bar(ui, frac);
                 ui.add_space(2.0);
@@ -464,10 +483,12 @@ impl ExportDialog {
             }
         });
 
-        // 2. its share link
-        if sharing {
+        // 2. its share link: made by this export, or the project's link from before (shown
+        // so it is always at hand, with its QR code)
+        if sharing || (crate::share::allowed() && self.uploaded() == Some(true)) {
             ui.add_space(10.0);
             let state = match (&self.share_running, &self.last_link) {
+                _ if !sharing => StepState::Done,
                 _ if exporting => StepState::Waiting,
                 (Some(_), _) => StepState::Active,
                 (None, Some(Err(_))) => StepState::Failed,
@@ -475,11 +496,19 @@ impl ExportDialog {
             };
             let pct = self.share_running.as_ref().map(|(f, _)| format!("{:.0}%", f * 100.0));
             step_header(ui, 2, "Share link", state, pct);
-            ui.indent("export-step-link", |ui| {
-                if exporting {
+            step_body(ui, |ui| {
+                if sharing && exporting {
+                    // the link is known already: it can be copied (or scanned) while this runs
+                    if let Some(url) = self.shown_link() {
+                        widgets::link_field_qr(ui, &url, &mut self.qr_open);
+                        ui.add_space(6.0);
+                    }
                     widgets::hint(ui, "Uploads when the video is ready.");
                 } else {
                     self.link_status_ui(ui);
+                    if !sharing {
+                        widgets::hint(ui, "Plays the last video shared from this project: export with \u{201c}Make a share link too\u{201d} to update it.");
+                    }
                 }
             });
         }
@@ -555,42 +584,70 @@ impl ExportDialog {
         crate::share::ShareSettings { fps, max_height, quality, include_audio: self.audio }
     }
 
-    fn load_links(&mut self, delete: Option<String>) {
+    /// Ask the server for this project's link, once per open of the dialog.
+    fn ask_project_link(&mut self, project: &str) {
+        if self.project_link_for.as_deref() == Some(project) {
+            return;
+        }
+        if self.project_link_for.as_deref().is_some_and(|p| p != project) {
+            // another project's link must not show while this one's is asked for
+            self.project_link = None;
+            self.project_link_known = false;
+        }
+        self.project_link_for = Some(project.to_string());
         let (tx, rx) = channel();
+        let id = project.to_string();
         std::thread::spawn(move || {
-            let r = match delete {
-                Some(id) => crate::share::delete(&id).and_then(|_| crate::share::list()),
-                None => crate::share::list(),
-            };
-            let _ = tx.send(r);
+            let _ = tx.send(crate::share::project_link(&id));
         });
-        self.links_rx = Some(rx);
+        self.project_link_rx = Some(rx);
     }
+
 
     /// The share being made (progress bar and Cancel), or the project's link in a text box
     /// (copy, open), or why it failed.
     fn link_status_ui(&mut self, ui: &mut egui::Ui) {
         let pal = theme::p();
+        if let Some(url) = self.shown_link() {
+            widgets::link_field_qr(ui, &url, &mut self.qr_open);
+            ui.add_space(6.0);
+        }
         if let Some((frac, label)) = self.share_running.clone() {
             progress_bar(ui, frac);
             ui.add_space(2.0);
             ui.horizontal(|ui| {
                 widgets::hint(ui, &label);
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.link(RichText::new("Cancel").size(13.0).color(pal.text_dim)).on_hover_text("Stop making this link").clicked() {
+                    if ui.link(RichText::new("Cancel").size(13.0).color(pal.text_dim)).on_hover_text("Stop uploading; the link keeps what it had").clicked() {
                         self.share_cancel = true;
                     }
                 });
             });
-            widgets::hint(ui, "Done closes this; a notification says when the link is on your clipboard.");
+            widgets::hint(ui, if self.uploaded() == Some(true) { "The link plays the previous video until this upload finishes." } else { "Copy the link now: it plays the video once the upload finishes." });
+        } else if let Some(Err(e)) = self.last_link.clone() {
+            ui.add(egui::Label::new(RichText::new(format!("The upload failed: {e}")).size(13.0).color(pal.danger)).wrap());
+        } else if self.uploaded() == Some(false) {
+            widgets::hint(ui, "Nothing is uploaded yet: export with \u{201c}Make a share link too\u{201d} to put this video behind the link.");
+        }
+    }
+
+    /// This project's link: derived from its id, so it is the same every time (the server
+    /// gives the project this id; `share::link_id`).
+    fn shown_link(&self) -> Option<String> {
+        if !self.project_id.is_empty() {
+            return Some(crate::share::link_url(&self.project_id));
+        }
+        self.last_link.clone().and_then(Result::ok)
+    }
+
+    /// Whether a video is behind the link (None: not known yet).
+    fn uploaded(&self) -> Option<bool> {
+        if matches!(self.last_link, Some(Ok(_))) || self.project_link.is_some() {
+            Some(true)
+        } else if self.project_link_known {
+            Some(false)
         } else {
-            match self.last_link.clone() {
-                Some(Ok(url)) => widgets::link_field(ui, &url),
-                Some(Err(e)) => {
-                    ui.add(egui::Label::new(RichText::new(format!("The last link failed: {e}")).size(13.0).color(pal.danger)).wrap());
-                }
-                None => {}
-            }
+            None
         }
     }
 
@@ -610,51 +667,14 @@ impl ExportDialog {
             ui.separator();
             return;
         }
-        if self.share_running.is_none() && self.last_link.is_none() {
-            widgets::hint(ui, "With \u{201c}Make a share link too\u{201d}, Export uploads the video and copies a link anyone can watch in a browser. Each project keeps one link; exporting again updates it.");
-        } else {
-            self.link_status_ui(ui);
+        // the project's one link, always: exporting with the box ticked puts the video behind it
+        self.link_status_ui(ui);
+        if self.share_running.is_none() && self.uploaded() == Some(true) && !matches!(self.last_link, Some(Err(_))) {
+            widgets::hint(ui, "This project's link. Export with \u{201c}Make a share link too\u{201d} to update its video.");
         }
         ui.add_space(2.0);
         if ui.checkbox(&mut self.share_with_export, "Make a share link too").on_hover_text("Export uploads the video it writes and copies a link anyone can watch").changed() {
             crate::share::set_with_export(self.share_with_export);
-        }
-        let label = if self.links_open { "Hide your links" } else { "Your links" };
-        if ui.link(RichText::new(label).color(pal.text_dim)).clicked() {
-            self.links_open = !self.links_open;
-            if self.links_open && self.links_rx.is_none() {
-                self.load_links(None);
-            }
-        }
-        if self.links_open {
-            let busy = self.links_rx.is_some();
-            match &self.links {
-                _ if busy && self.links.is_none() => widgets::hint(ui, "Loading…"),
-                Some(Err(e)) => {
-                    ui.add(egui::Label::new(RichText::new(e).size(13.0).color(pal.danger)).wrap());
-                }
-                Some(Ok(links)) if links.is_empty() => widgets::hint(ui, "No links yet."),
-                Some(Ok(links)) => {
-                    let mut delete: Option<String> = None;
-                    for l in links.clone() {
-                        ui.horizontal(|ui| {
-                            let title = if l.title.is_empty() { "Untitled".to_string() } else { l.title.clone() };
-                            ui.label(RichText::new(title).size(13.0).color(pal.text)).on_hover_text(&l.url);
-                            widgets::hint(ui, &format!("{} · {} view{}", l.created, l.views, if l.views == 1 { "" } else { "s" }));
-                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                if ui.add_enabled_ui(!busy, |ui| widgets::icon_button_tinted(ui, widgets::Icon::Trash, 13.0, "Delete this link and its video", pal.danger)).inner.clicked() {
-                                    delete = Some(l.id.clone());
-                                }
-                                widgets::copy_button(ui, &l.url, "Copy link");
-                            });
-                        });
-                    }
-                    if let Some(id) = delete {
-                        self.load_links(Some(id));
-                    }
-                }
-                None => {}
-            }
         }
         ui.add_space(4.0);
         ui.separator();
@@ -750,6 +770,9 @@ impl ExportDialog {
                     ui.separator();
                 }
                 if self.license.is_valid() {
+                    if crate::share::allowed() {
+                        self.ask_project_link(&ed.session.pkg.project.id);
+                    }
                     self.share_ui(ui);
                 }
                 widgets::title(ui, "Format");
@@ -917,6 +940,16 @@ fn step_header(ui: &mut egui::Ui, n: u32, name: &str, state: StepState, right: O
         }
     });
     ui.add_space(4.0);
+}
+
+/// What a step shows under its header, lined up with the step's name (past the 18 px marker)
+/// and as wide as the box from there.
+fn step_body(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui)) {
+    let left = 18.0 + ui.spacing().item_spacing.x;
+    egui::Frame::NONE.inner_margin(egui::Margin { left: left as i8, right: 0, top: 0, bottom: 0 }).show(ui, |ui| {
+        ui.set_width(ui.available_width());
+        add(ui);
+    });
 }
 
 /// A full-width bar painted by hand (egui's ProgressBar shrinks to its label in these dialogs).
