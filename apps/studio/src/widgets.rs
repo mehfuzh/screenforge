@@ -345,30 +345,71 @@ pub fn text_field(ui: &mut Ui, text: &mut String, hint: &str) -> Response {
     field(ui, text, hint)
 }
 
-/// A link in a read-only text box (selectable), with copy and open-in-browser buttons inside.
-pub fn link_field(ui: &mut Ui, url: &str) {
+/// A link in a read-only box with copy, QR and open buttons: `qr` toggles a large code under
+/// the field, for a room to scan off a projector.
+pub fn link_field_qr(ui: &mut Ui, url: &str, qr: &mut bool) {
+    let mut qr = Some(qr);
     let pal = theme::p();
     egui::Frame::NONE
         .fill(pal.bg)
         .stroke(Stroke::new(1.0, pal.border))
         .corner_radius(CornerRadius::same(BUTTON_RADIUS))
-        .inner_margin(egui::Margin { left: 10, right: 4, top: 0, bottom: 0 })
+        .inner_margin(egui::Margin { left: 10, right: 6, top: 0, bottom: 0 })
         .show(ui, |ui| {
-            ui.horizontal(|ui| {
+            // text and buttons centred in one 32 px row
+            ui.allocate_ui_with_layout(vec2(ui.available_width(), 32.0), egui::Layout::left_to_right(egui::Align::Center), |ui| {
                 ui.spacing_mut().item_spacing.x = 2.0;
-                let buttons = 2.0 * 25.0 + 2.0 * 2.0;
+                let n = if qr.is_some() { 3.0 } else { 2.0 };
+                let buttons = n * 25.0 + n * 2.0;
                 let mut text = url;
                 ui.add_sized(
                     vec2((ui.available_width() - buttons).max(40.0), 32.0),
-                    egui::TextEdit::singleline(&mut text).font(egui::FontId::proportional(13.0)).text_color(pal.text).frame(egui::Frame::NONE).margin(egui::Margin::ZERO),
+                    egui::TextEdit::singleline(&mut text).font(egui::FontId::proportional(13.0)).text_color(pal.text).frame(egui::Frame::NONE).vertical_align(egui::Align::Center).margin(egui::Margin::ZERO).min_size(vec2(0.0, 32.0)),
                 )
                 .on_hover_text(url);
                 copy_button(ui, url, "Copy link");
+                if let Some(open) = qr.as_deref_mut() {
+                    let tint = if *open { theme::p().accent } else { theme::p().text };
+                    if icon_button_tinted(ui, Icon::Qr, 13.0, if *open { "Hide the QR code" } else { "Show a QR code to scan" }, tint).clicked() {
+                        *open = !*open;
+                    }
+                }
                 if icon_button(ui, Icon::OpenExternal, 13.0, "Open in the browser").clicked() {
                     crate::os::open(url);
                 }
             });
         });
+    if qr.is_some_and(|o| *o) {
+        ui.add_space(8.0);
+        qr_code(ui, url, 168.0);
+    }
+}
+
+/// `text` as a QR code, `side` points square with its quiet zone, centred in the row: dark
+/// modules on white whatever the theme, so phone cameras read it.
+pub fn qr_code(ui: &mut Ui, text: &str, side: f32) {
+    let Ok(code) = qrcode::QrCode::with_error_correction_level(text.as_bytes(), qrcode::EcLevel::M) else { return };
+    let n = code.width();
+    let colors = code.to_colors();
+    ui.vertical_centered(|ui| {
+        let (rect, _) = ui.allocate_exact_size(vec2(side, side), Sense::hover());
+        let p = ui.painter();
+        // the white square is part of the code (its quiet zone), not UI chrome
+        let (paper, ink) = (theme::QR_PAPER, theme::QR_INK);
+        p.rect_filled(rect, CornerRadius::same(2), paper);
+        let quiet = 4.0;
+        let m = side / (n as f32 + 2.0 * quiet);
+        let origin = rect.min + vec2(quiet * m, quiet * m);
+        for y in 0..n {
+            for x in 0..n {
+                if colors[y * n + x] == qrcode::Color::Dark {
+                    let min = origin + vec2(x as f32 * m, y as f32 * m);
+                    // a hair wider than a module so neighbours join without seams
+                    p.rect_filled(Rect::from_min_size(min, vec2(m + 0.3, m + 0.3)), 0.0, ink);
+                }
+            }
+        }
+    });
 }
 
 fn field(ui: &mut Ui, text: &mut String, hint: &str) -> Response {
@@ -494,6 +535,8 @@ pub enum Icon {
     Plus,
     /// Arrow leaving a box (open a page in the browser).
     OpenExternal,
+    /// Three corner squares and a few modules (show a link's QR code).
+    Qr,
     /// Magnifying glass (search).
     Search,
     /// Heart outline (not a favourite yet).
@@ -666,6 +709,14 @@ pub fn paint_icon(p: &egui::Painter, rect: Rect, icon: Icon, color: Color32) {
                 p.add(egui::Shape::mesh(mesh));
             }
             p.add(egui::Shape::closed_line(pts, s));
+        }
+        Icon::Qr => {
+            // the finder squares at three corners, a few modules at the fourth
+            for (x, y) in [(-0.85, -0.85), (0.15, -0.85), (-0.85, 0.15)] {
+                p.rect_stroke(rr(x, y, x + 0.7, y + 0.7), 1.0, s, egui::StrokeKind::Middle);
+            }
+            p.rect_filled(rr(0.15, 0.15, 0.45, 0.45), 0.0, color);
+            p.rect_filled(rr(0.55, 0.55, 0.85, 0.85), 0.0, color);
         }
         Icon::OpenExternal => {
             // box open at its top-right corner

@@ -312,11 +312,9 @@ impl Read for Counting<'_> {
 /// A link of this account, as `share` lists them.
 #[derive(Clone, Debug)]
 pub struct Link {
-    pub id: String,
     pub url: String,
-    pub title: String,
-    pub views: u64,
-    pub created: String,
+    /// The project (file id) the link belongs to: one link per project.
+    pub project: Option<String>,
 }
 
 /// This account's links, newest first.
@@ -330,11 +328,8 @@ pub fn list() -> Result<Vec<Link>, String> {
             a.iter()
                 .filter_map(|l| {
                     Some(Link {
-                        id: l["id"].as_str()?.into(),
                         url: l["url"].as_str()?.into(),
-                        title: l["title"].as_str().unwrap_or("").into(),
-                        views: l["views"].as_u64().unwrap_or(0),
-                        created: l["created_at"].as_str().unwrap_or("").get(..10).unwrap_or("").into(),
+                        project: l["project"].as_str().map(str::to_string),
                     })
                 })
                 .collect()
@@ -342,16 +337,28 @@ pub fn list() -> Result<Vec<Link>, String> {
         .unwrap_or_default())
 }
 
-/// Delete a link and its video for good.
-pub fn delete(id: &str) -> Result<(), String> {
-    let mut req = sf_license::owner_auth().ok_or("Sign in to delete share links.")?;
-    req["action"] = "delete".into();
-    req["id"] = id.into();
-    match sf_license::call_backend_status("share", req) {
-        // already gone: what the user wanted
-        Ok(_) | Err((404, _)) => Ok(()),
-        Err((_, e)) => Err(e),
-    }
+/// The page a link id opens.
+pub const PAGE_URL: &str = "https://screenforge.studio/s/";
+
+/// A project's link id, the same every time: 12 base62 characters of
+/// SHA-256("screenforge-share/" + project id). The app shows a project's link before anything
+/// is uploaded; the server gives a new link this id (`linkIdFor` in the share function), and
+/// links made before keep theirs. Unguessable as long as the project id is (10 random base62
+/// characters, kept in the project file).
+pub fn link_id(project: &str) -> String {
+    use sha2::Digest;
+    const ABC: &[u8] = b"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+    let d = sha2::Sha256::digest(format!("screenforge-share/{project}"));
+    d[..12].iter().map(|b| ABC[*b as usize % 62] as char).collect()
+}
+
+pub fn link_url(project: &str) -> String {
+    format!("{PAGE_URL}{}", link_id(project))
+}
+
+/// The link of the project with this id, if it has one.
+pub fn project_link(project: &str) -> Result<Option<String>, String> {
+    Ok(list()?.into_iter().find(|l| l.project.as_deref() == Some(project)).map(|l| l.url))
 }
 
 /// Where "Make a share link too" is remembered (`allowed_file` sits next to it).
@@ -422,6 +429,24 @@ mod tests {
         assert!((job.fraction() - 1.0).abs() < 1e-6);
     }
 
+    #[test]
+    fn link_id_is_the_servers() {
+        // the same values as `linkIdFor` in backend/supabase/functions/share/index.ts
+        assert_eq!(link_id("iv5Pww9n2l"), "v3BwvryVLJ5B");
+        assert_eq!(link_id("abc"), "LyVS9w6Jh3S9");
+        assert_eq!(link_url("abc"), "https://screenforge.studio/s/LyVS9w6Jh3S9");
+    }
+
+    /// Against the live backend: the account's links, with the project each belongs to.
+    /// `cargo test -p studio list_shows_projects -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn list_shows_projects() {
+        for l in list().unwrap() {
+            println!("{} {:?}", l.url, l.project);
+        }
+    }
+
     /// Against the live backend with this computer's license: one project, one link.
     /// `cargo test -p studio share_again_keeps_the_link -- --ignored`
     #[test]
@@ -454,6 +479,7 @@ mod tests {
         req["id"] = first.clone().into();
         call(req).unwrap();
         assert_eq!(first, second, "same link");
+        assert_eq!(first, link_id(&project), "the project's derived id");
         assert_ne!(v1, v2, "new video address");
         assert_eq!(served.as_deref(), Some("2000"), "the new video is served");
     }

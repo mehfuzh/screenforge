@@ -38,6 +38,17 @@ footer{margin-top:auto;padding-top:40px;padding-bottom:28px;color:var(--dim);fon
 footer a{color:var(--fg)}
 .gone{text-align:center;padding:18vh 0}
 .gone h1{font-size:26px}
+.side{display:flex;gap:16px;align-items:flex-start;margin-top:18px}
+.side .actions{margin-top:0}
+.qr{display:block;background:#fff;border-radius:2px}
+.qr svg{display:block;width:100%;height:100%}
+.qr-mini{width:92px;height:92px;padding:0;border:1px solid var(--line);border-radius:2px;background:#fff;cursor:zoom-in}
+.qr-mini .qr{width:100%;height:100%}
+#qr-view{position:fixed;inset:0;z-index:10;display:none;flex-direction:column;align-items:center;justify-content:center;gap:18px;padding:16px;background:rgba(10,10,14,.9);cursor:zoom-out}
+#qr-view.open{display:flex}
+#qr-view .qr{width:min(72vmin,460px);height:min(72vmin,460px)}
+#qr-view p{color:#f8f8f2;font-size:clamp(16px,2.8vmin,24px);text-align:center;overflow-wrap:anywhere}
+@media (max-width:640px){.qr-mini{display:none}}
 `;
 
 function page({ title, head = "", body }) {
@@ -52,13 +63,27 @@ ${body}
 }
 
 function notFound() {
-  const body = `<main class="gone"><h1>This video is not available</h1><p class="meta" style="justify-content:center;margin-top:8px">The link may have been deleted by its owner, or mistyped.</p></main>`;
+  const body = `<main class="gone"><h1>This video is not available</h1><p class="meta" style="justify-content:center;margin-top:8px">Its video may not be uploaded yet, or the link was deleted or mistyped.</p></main>`;
   return new Response(page({ title: "Video not available · ScreenForge", head: `<meta name="robots" content="noindex">`, body }), { status: 404, headers: { "content-type": "text/html; charset=utf-8", "cache-control": "public, max-age=30" } });
 }
 
-export async function onRequestGet({ params }) {
+// Pages Functions are not cached by Cloudflare on their own: the rendered page is kept in the
+// edge cache for this long, so a visit does not wait on Supabase each time. A replaced video
+// (new `rev`) shows within this time.
+const PAGE_TTL = 30;
+
+export async function onRequestGet({ params, request, waitUntil }) {
   const id = String(params.id ?? "");
   if (!/^[A-Za-z0-9]{12}$/.test(id)) return notFound();
+  const key = new Request(new URL(`/s/${id}`, request.url).toString());
+  const cached = await caches.default.match(key);
+  if (cached) return cached;
+  const res = await render(id);
+  if (res.status === 200) waitUntil(caches.default.put(key, res.clone()));
+  return res;
+}
+
+async function render(id) {
   let s;
   try {
     const r = await fetch(`${SUPABASE_URL}/functions/v1/share`, {
@@ -93,13 +118,30 @@ export async function onRequestGet({ params }) {
   const body = `<main>
 <div class="player"><video controls playsinline preload="metadata"${aspect}${s.poster ? ` poster="${esc(s.poster)}"` : ""} src="${esc(s.video)}"></video></div>
 <div class="row"><div><h1>${esc(title)}</h1><p class="meta">${[date, duration(s.duration_ms), views].filter(Boolean).map(esc).join("<span>·</span>")}</p></div>
-<div class="actions"><button class="btn" id="copy" type="button">Copy link</button><a class="btn" href="${esc(s.video)}" download>Download</a></div></div>
+<div class="side"><div class="actions"><button class="btn" id="copy" type="button">Copy link</button><button class="btn" id="qr" type="button">QR code</button><a class="btn" href="${esc(s.video)}" download>Download</a></div>
+<button class="qr-mini" id="qr-mini" type="button" title="Show the QR code large" aria-label="Show the QR code large"><span class="qr" id="qr-small"></span></button></div></div>
 </main>
+<div id="qr-view" role="dialog" aria-modal="true" aria-label="QR code for this video"><span class="qr" id="qr-big"></span><p>${esc(String(s.url).replace(/^https?:\/\//, ""))}</p><button class="btn" id="qr-close" type="button">Close</button></div>
+<script src="https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.min.js" integrity="sha384-lQXOAyZwHXE55JFyrOMB7nY2Wv+m5ZWNtJcHrd1rceRQXAYNLak8ukN5TjBTcIwz" crossorigin="anonymous"></script>
 <script>
+(function(){
+  // the link as a QR code (SVG, black on white with its quiet zone), small beside the actions
+  // and large over the page, for a room to scan off a projector
+  var view=document.getElementById("qr-view");
+  if(typeof qrcode!=="function"){document.getElementById("qr").style.display="none";document.getElementById("qr-mini").style.display="none";return}
+  var q=qrcode(0,"M");q.addData(${JSON.stringify(s.url)});q.make();
+  var n=q.getModuleCount(),z=4,d="";
+  for(var y=0;y<n;y++)for(var x=0;x<n;x++)if(q.isDark(y,x))d+="M"+(x+z)+" "+(y+z)+"h1v1h-1z";
+  var svg='<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 '+(n+2*z)+" "+(n+2*z)+'" shape-rendering="crispEdges" role="img" aria-label="QR code"><path fill="#000" d="'+d+'"/></svg>';
+  document.getElementById("qr-small").innerHTML=svg;document.getElementById("qr-big").innerHTML=svg;
+  function open(){view.classList.add("open")}function close(){view.classList.remove("open")}
+  document.getElementById("qr").onclick=open;document.getElementById("qr-mini").onclick=open;
+  view.onclick=close;document.addEventListener("keydown",function(e){if(e.key==="Escape")close()});
+})();
 document.getElementById("copy").onclick=function(){var b=this;navigator.clipboard.writeText(${JSON.stringify(s.url)}).then(function(){b.textContent="Copied";setTimeout(function(){b.textContent="Copy link"},1500)})};
 try{fetch(${JSON.stringify(`${SUPABASE_URL}/functions/v1/share`)},{method:"POST",keepalive:true,headers:{apikey:${JSON.stringify(SUPABASE_ANON_KEY)},Authorization:"Bearer "+${JSON.stringify(SUPABASE_ANON_KEY)},"Content-Type":"application/json"},body:JSON.stringify({action:"view",id:${JSON.stringify(id)}})})}catch(e){}
 </script>`;
   return new Response(page({ title: `${title} · ScreenForge`, head: og, body }), {
-    headers: { "content-type": "text/html; charset=utf-8", "cache-control": "public, max-age=60" },
+    headers: { "content-type": "text/html; charset=utf-8", "cache-control": `public, max-age=${PAGE_TTL}` },
   });
 }

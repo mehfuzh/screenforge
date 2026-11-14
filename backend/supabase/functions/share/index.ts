@@ -47,6 +47,17 @@ function newId(): string {
   return out;
 }
 
+/**
+ * A project's link id, the same every time: 12 base62 characters of
+ * SHA-256("screenforge-share/" + project). The app shows it before anything is uploaded
+ * (`share::link_id`; "iv5Pww9n2l" → "v3BwvryVLJ5B", "abc" → "LyVS9w6Jh3S9").
+ */
+async function linkIdFor(project: string): Promise<string> {
+  const abc = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+  const d = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(`screenforge-share/${project}`)));
+  return Array.from(d.slice(0, 12), (b) => abc[b % 62]).join("");
+}
+
 /** The license email of the computer making the request, or an error reply. */
 async function owner(client: SupabaseClient, device: unknown, key: unknown): Promise<string | Response> {
   if (!isDevice(device)) return fail("device required", 400);
@@ -106,13 +117,20 @@ serve(async (req) => {
         const { data: stale } = await client.from("share_links").select("id").eq("email", email).eq("status", "uploading").lt("created_at", new Date(Date.now() - 24 * 3600 * 1000).toISOString());
         for (const s of stale ?? []) await removeLink(client, s.id);
         const project = isProject(body.project) ? body.project : null;
-        const { data: existing } = project
+        // the project's link id is derived from the project (the link the app shows); one
+        // made before that, with a random id, is dropped for it: the project keeps one link
+        const own = project ? await linkIdFor(project) : null;
+        let { data: existing } = project
           ? await client.from("share_links").select("id").eq("email", email).eq("project", project).maybeSingle()
           : { data: null };
+        if (existing && own && existing.id !== own) {
+          await removeLink(client, existing.id);
+          existing = null;
+        }
         const { data: used } = await client.from("share_links").select("id, bytes").eq("email", email);
         // a replaced video's old size no longer counts
         const total = (used ?? []).filter((r) => r.id !== existing?.id).reduce((n, r) => n + Number(r.bytes), 0);
-        if (total + bytes > MAX_ACCOUNT_BYTES) return fail(`Your share links use ${(total / 1024 ** 3).toFixed(1)} GB of ${(MAX_ACCOUNT_BYTES / 1024 ** 3).toFixed(0)} GB. Delete some old links (Export → Share link → Your links) and try again.`, 413);
+        if (total + bytes > MAX_ACCOUNT_BYTES) return fail(`Your share links use ${(total / 1024 ** 3).toFixed(1)} GB of ${(MAX_ACCOUNT_BYTES / 1024 ** 3).toFixed(0)} GB. Contact ScreenForge support to remove old links, then try again.`, 413);
         const int = (v: unknown) => (Number.isInteger(v) && (v as number) > 0 && (v as number) < 2 ** 31 ? v as number : null);
         const fields = { device_id: body.device, title: String(body.title ?? "").slice(0, 200), width: int(body.width), height: int(body.height), duration_ms: int(body.duration_ms), pending_bytes: bytes, updated_at: new Date().toISOString() };
         let id: string;
@@ -122,7 +140,9 @@ serve(async (req) => {
           const { error } = await client.from("share_links").update(fields).eq("id", id);
           if (error) throw new Error(error.message);
         } else {
-          id = newId();
+          // the project's own id, unless another account holds it (a copied project file)
+          const { data: taken } = own ? await client.from("share_links").select("id").eq("id", own).maybeSingle() : { data: null };
+          id = own && !taken ? own : newId();
           const { error } = await client.from("share_links").insert({ id, email, project, bytes, has_poster: poster > 0, ...fields });
           if (error) throw new Error(error.message);
         }
@@ -147,7 +167,7 @@ serve(async (req) => {
       case "list": {
         const email = await owner(client, body.device, body.key);
         if (email instanceof Response) return email;
-        const { data, error } = await client.from("share_links").select("id, title, bytes, duration_ms, views, created_at, updated_at").eq("email", email).eq("status", "ready").order("updated_at", { ascending: false }).limit(200);
+        const { data, error } = await client.from("share_links").select("id, project, title, bytes, duration_ms, views, created_at, updated_at").eq("email", email).eq("status", "ready").order("updated_at", { ascending: false }).limit(200);
         if (error) throw new Error(error.message);
         return json({ links: (data ?? []).map((l) => ({ ...l, url: urlFor(l.id) })) });
       }

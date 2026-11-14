@@ -50,6 +50,10 @@ pub struct Palette {
     pub thumb_empty: Color32,
 }
 
+/// A QR code's modules and paper: black on white in every theme, so phone cameras read it.
+pub const QR_INK: Color32 = Color32::BLACK;
+pub const QR_PAPER: Color32 = Color32::WHITE;
+
 pub const DARK: Palette = Palette {
     dark: true,
     // Catppuccin Mocha
